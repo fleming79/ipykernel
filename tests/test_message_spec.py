@@ -5,32 +5,17 @@
 
 import re
 import sys
-import time
 from queue import Empty
 
+import anyio
 import pytest
 from jupyter_client._version import version_info
-from jupyter_client.blocking.client import BlockingKernelClient
+from jupyter_client.asynchronous.client import AsyncKernelClient
 from packaging.version import Version as V
 from traitlets import Bool, Dict, Enum, HasTraits, Integer, List, TraitError, Unicode, observe
 
-from .utils import TIMEOUT, execute, flush_channels, get_reply, start_global_kernel
-
-# -----------------------------------------------------------------------------
-# Globals
-# -----------------------------------------------------------------------------
-KC: BlockingKernelClient = None  # type:ignore
-
-
-@pytest.fixture(autouse=True)
-def _setup_env():
-    global KC
-    KC = start_global_kernel()
-
-
-# -----------------------------------------------------------------------------
-# Message Spec References
-# -----------------------------------------------------------------------------
+from tests import utils
+from tests.utils import execute, get_reply
 
 
 class Reference(HasTraits):
@@ -44,17 +29,22 @@ class Reference(HasTraits):
 
     """
 
+    def __str__(self):
+        return str(self.__class__)
+
     def check(self, d):
         """validate a dict against our traits"""
         for key in self.trait_names():
-            assert key in d
+            if key not in d:
+                raise KeyError(f"{key=} is missing for {self} in {d=}")
             # FIXME: always allow None, probably not a good idea
             if d[key] is None:
                 continue
             try:
                 setattr(self, key, d[key])
             except TraitError as e:
-                raise AssertionError(str(e)) from None
+                e.add_note(f"Validation failed for {key=} with  value:{d[key]}")
+                raise
 
 
 class Version(Unicode):
@@ -118,29 +108,31 @@ class ExecuteReply(Reply):
     execution_count = Integer()
 
     def check(self, d):
-        Reference.check(self, d)
+        super().check(d)
         if d["status"] == "ok":
             ExecuteReplyOkay().check(d)
         elif d["status"] == "error":
             ExecuteReplyError().check(d)
         elif d["status"] == "aborted":
+            "Deprectated"
+            raise NotImplementedError
             ExecuteReplyAborted().check(d)
 
 
 class ExecuteReplyOkay(Reply):
-    status = Enum(("ok",))
+    status = Enum("ok")
     user_expressions = Dict()
 
 
 class ExecuteReplyError(Reply):
-    status = Enum(("error",))
+    status = Enum("error")
     ename = Unicode()
     evalue = Unicode()
     traceback = List(Unicode())
 
 
 class ExecuteReplyAborted(Reply):
-    status = Enum(("aborted",))
+    status = Enum("aborted")
 
 
 class InspectReply(Reply, MimeBundle):
@@ -178,7 +170,7 @@ class KernelInfoReply(Reply):
     banner = Unicode()
 
     def check(self, d):
-        Reference.check(self, d)
+        super().check(d)
         LanguageInfo().check(d["language_info"])
 
 
@@ -198,7 +190,7 @@ class IsCompleteReply(Reference):
     status = Enum(("complete", "incomplete", "invalid", "unknown"), default_value="complete")
 
     def check(self, d):
-        Reference.check(self, d)
+        super().check(d)
         if d["status"] == "incomplete":
             IsCompleteReplyIncomplete().check(d)
 
@@ -289,13 +281,47 @@ def validate_message(msg, msg_type=None, parent=None):
     are compared with the given values.
     """
     RMessage().check(msg)
-    if msg_type:
-        assert msg["msg_type"] == msg_type
-    if parent:
-        assert msg["parent_header"]["msg_id"] == parent
+    if msg_type and msg["msg_type"] != msg_type:
+        msg_ = f"Expected {msg_type=} but got '{msg['msg_type']}'  for {msg=}"
+        raise ValueError(msg_)
+    if parent and msg["parent_header"]["msg_id"] != parent:
+        raise RuntimeError(f"This parent 'msg_id' does not match {msg=} {parent=}")
     content = msg["content"]
     ref = references[msg["msg_type"]]
-    ref.check(content)
+    try:
+        ref.check(content)
+    except Exception as e:
+        e.add_note(f"\n{msg_type=}\n{parent=}\n{content=}")
+        raise e
+
+
+async def flush_channels(kc):
+    """flush any messages waiting on the queue"""
+    from tests.test_message_spec import validate_message
+
+    while True:
+        for get_msg in (kc.get_shell_msg, kc.get_iopub_msg):
+            msg = None
+            with anyio.move_on_after(0.01):
+                msg = await get_msg()
+                validate_message(msg)
+            if not msg:
+                return
+
+
+async def check_pub_message(client: AsyncKernelClient, msg_id: str, *, msg_type="status", **content_checks):
+    msg = await client.get_iopub_msg()
+    validate_message(msg, msg_type, msg_id)
+    content = msg["content"]
+    for k, v in content_checks.items():
+        assert content[k] == v
+    return msg
+
+
+async def get_shell_message(client: AsyncKernelClient, msg_id: str, msg_type: str):
+    msg = await client.get_shell_msg()
+    validate_message(msg, msg_type, msg_id)
+    return msg["content"]
 
 
 # -----------------------------------------------------------------------------
@@ -305,122 +331,107 @@ def validate_message(msg, msg_type=None, parent=None):
 # Shell channel
 
 
-def test_execute():
-    flush_channels()
-
-    msg_id = KC.execute(code="x=1")
-    reply = get_reply(KC, msg_id, TIMEOUT)
+async def test_execute(client, kernel):
+    msg_id = client.execute(code="x=1")
+    reply = await get_reply(client, msg_id)
     validate_message(reply, "execute_reply", msg_id)
+    assert kernel.user_ns["x"] == 1
 
 
-def test_execute_silent():
-    flush_channels()
-    msg_id, reply = execute(code="x=1", silent=True)
-
-    # flush status=idle
-    status = KC.get_iopub_msg(timeout=TIMEOUT)
-    validate_message(status, "status", msg_id)
-    assert status["content"]["execution_state"] == "idle"
-
-    with pytest.raises(Empty):
-        KC.get_iopub_msg(timeout=0.1)
-
+async def test_execute_silent(client):
+    msg_id, reply = await execute(client, code="x=1", silent=True)
     count = reply["execution_count"]
-
-    msg_id, reply = execute(code="x=2", silent=True)
-
-    # flush status=idle
-    status = KC.get_iopub_msg(timeout=TIMEOUT)
-    validate_message(status, "status", msg_id)
-    assert status["content"]["execution_state"] == "idle"
-
+    await check_pub_message(client, msg_id, execution_state="busy")
+    await check_pub_message(client, msg_id, execution_state="idle")
     with pytest.raises(Empty):
-        KC.get_iopub_msg(timeout=0.1)
+        await client.get_iopub_msg(timeout=0.1)
 
+    # Do a second execution
+    msg_id, reply = await execute(client, code="x=2", silent=True)
+    await check_pub_message(client, msg_id, execution_state="busy")
+    await check_pub_message(client, msg_id, execution_state="idle")
+    with pytest.raises(Empty):
+        await client.get_iopub_msg(timeout=0.1)
     count_2 = reply["execution_count"]
-    assert count_2 == count
+
+    assert count_2 == count, "count should not increment when silent"
 
 
-def test_execute_error():
-    flush_channels()
-
-    msg_id, reply = execute(code="1/0")
+async def test_execute_error(client):
+    msg_id, reply = await execute(client, code="1/0")
     assert reply["status"] == "error"
     assert reply["ename"] == "ZeroDivisionError"
 
-    error = KC.get_iopub_msg(timeout=TIMEOUT)
-    validate_message(error, "error", msg_id)
+    await check_pub_message(client, msg_id, execution_state="busy")
+    await check_pub_message(client, msg_id, msg_type="execute_input")
+    await check_pub_message(client, msg_id, msg_type="error")
 
 
-def test_execute_inc():
+async def test_execute_inc(client):
     """execute request should increment execution_count"""
-    flush_channels()
 
-    _, reply = execute(code="x=1")
+    _, reply = await execute(client, code="x=1")
     count = reply["execution_count"]
 
-    flush_channels()
-
-    _, reply = execute(code="x=2")
+    _, reply = await execute(client, code="x=2")
     count_2 = reply["execution_count"]
     assert count_2 == count + 1
 
 
-def test_execute_stop_on_error():
+async def test_execute_stop_on_error(client):
     """execute request should not abort execution queue with stop_on_error False"""
-    flush_channels()
 
-    fail = "\n".join(
-        [
-            # sleep to ensure subsequent message is waiting in the queue to be aborted
-            # async sleep to ensure coroutines are processing while this happens
-            "import asyncio",
-            "await asyncio.sleep(1)",
-            "raise ValueError()",
-        ]
-    )
-    KC.execute(code=fail)
-    KC.execute(code='print("Hello")')
-    KC.execute(code='print("world")')
-    reply = KC.get_shell_msg(timeout=TIMEOUT)
-    reply = KC.get_shell_msg(timeout=TIMEOUT)
-    assert reply["content"]["status"] == "aborted"
-    # second message, too
-    reply = KC.get_shell_msg(timeout=TIMEOUT)
-    assert reply["content"]["status"] == "aborted"
+    bad_code = "\n".join([
+        # sleep to ensure subsequent message is waiting in the queue to be aborted
+        # async sleep to ensure coroutines are processing while this happens
+        "import anyio",
+        "await anyio.sleep(1)",
+        "raise ValueError()",
+    ])
 
-    flush_channels()
+    msg_id_bad_code = client.execute(bad_code)
+    msg_id_1 = client.execute('print("Hello")')
+    msg_id_2 = client.execute('print("world")')
+    content = await get_shell_message(client, msg_id_bad_code, "execute_reply")
+    assert content.get("status") == "error"
+    assert content.get("traceback")
 
-    KC.execute(code=fail, stop_on_error=False)
-    KC.execute(code='print("Hello")')
-    KC.get_shell_msg(timeout=TIMEOUT)
-    reply = KC.get_shell_msg(timeout=TIMEOUT)
-    assert reply["content"]["status"] == "ok"
+    content = await get_shell_message(client, msg_id_1, "execute_reply")
+    assert content["status"] == "error"
+
+    content = await get_shell_message(client, msg_id_2, "execute_reply")
+    assert content["status"] == "error"
+
+    #  Test stop_on_error=False
+    msg_id_3 = client.execute(bad_code, stop_on_error=False)
+    msg_id_4 = client.execute('print("Hello")')
+    content = await get_shell_message(client, msg_id_3, "execute_reply")
+    content = await get_shell_message(client, msg_id_4, "execute_reply")
+    assert content["status"] == "ok"
 
 
-def test_non_execute_stop_on_error():
+async def test_non_execute_stop_on_error(client):
     """test that non-execute_request's are not aborted after an error"""
-    flush_channels()
 
-    KC.execute(code="raise ValueError")
-    reply = KC.get_shell_msg(timeout=TIMEOUT)  # execute
-    assert reply["content"]["status"] == "error"
-    KC.kernel_info()
-    KC.comm_info()
-    KC.inspect(code="print")
-    reply = KC.get_shell_msg(timeout=TIMEOUT)  # kernel_info
-    assert reply["content"]["status"] == "ok"
-    reply = KC.get_shell_msg(timeout=TIMEOUT)  # comm_info
-    assert reply["content"]["status"] == "ok"
-    reply = KC.get_shell_msg(timeout=TIMEOUT)  # inspect
-    assert reply["content"]["status"] == "ok"
+    execute_id = client.execute("raise ValueError")
+    content = await get_shell_message(client, execute_id, "execute_reply")
+    assert content.get("status") == "error"
+
+    kernel_info_id = client.kernel_info()
+    comm_info_id = client.comm_info()
+    inspect_id = client.inspect(code="print")
+
+    content = await get_shell_message(client, kernel_info_id, "kernel_info_reply")
+    assert content.get("status") == "ok"
+    content = await get_shell_message(client, comm_info_id, "comm_info_reply")
+    assert content.get("status") == "ok"
+    content = await get_shell_message(client, inspect_id, "inspect_reply")
+    assert content.get("status") == "ok"
 
 
-def test_user_expressions():
-    flush_channels()
-
-    msg_id = KC.execute(code="x=1", user_expressions=dict(foo="x+1"))
-    reply = get_reply(KC, msg_id, TIMEOUT)  # execute
+async def test_user_expressions(client):
+    msg_id = client.execute(code="x=1", user_expressions=dict(foo="x+1"))
+    reply = await get_reply(client, msg_id)  # execute
     user_expressions = reply["content"]["user_expressions"]
     assert user_expressions == {
         "foo": {
@@ -431,31 +442,25 @@ def test_user_expressions():
     }
 
 
-def test_user_expressions_fail():
-    flush_channels()
-
-    msg_id, reply = execute(code="x=0", user_expressions=dict(foo="nosuchname"))
+async def test_user_expressions_fail(client):
+    msg_id, reply = await execute(client, code="x=0", user_expressions=dict(foo="nosuchname"))
     user_expressions = reply["user_expressions"]
     foo = user_expressions["foo"]
     assert foo["status"] == "error"
     assert foo["ename"] == "NameError"
 
 
-def test_oinfo():
-    flush_channels()
-
-    msg_id = KC.inspect("a")
-    reply = get_reply(KC, msg_id, TIMEOUT)
+async def test_oinfo(client):
+    msg_id = client.inspect("a")
+    reply = await get_reply(client, msg_id)
     validate_message(reply, "inspect_reply", msg_id)
 
 
-def test_oinfo_found():
-    flush_channels()
+async def test_oinfo_found(client):
+    msg_id, reply = await execute(client, code="a=5")
 
-    msg_id, reply = execute(code="a=5")
-
-    msg_id = KC.inspect("a")
-    reply = get_reply(KC, msg_id, TIMEOUT)
+    msg_id = client.inspect("a")
+    reply = await get_reply(client, msg_id)
     validate_message(reply, "inspect_reply", msg_id)
     content = reply["content"]
     assert content["found"]
@@ -464,13 +469,11 @@ def test_oinfo_found():
     assert "Docstring:" in text
 
 
-def test_oinfo_detail():
-    flush_channels()
+async def test_oinfo_detail(client):
+    msg_id, reply = await execute(client, code="ip=get_ipython()")
 
-    msg_id, reply = execute(code="ip=get_ipython()")
-
-    msg_id = KC.inspect("ip.object_inspect", cursor_pos=10, detail_level=1)
-    reply = get_reply(KC, msg_id, TIMEOUT)
+    msg_id = client.inspect("ip.object_inspect", cursor_pos=10, detail_level=1)
+    reply = await get_reply(client, msg_id)
     validate_message(reply, "inspect_reply", msg_id)
     content = reply["content"]
     assert content["found"]
@@ -479,68 +482,59 @@ def test_oinfo_detail():
     assert "Source:" in text
 
 
-def test_oinfo_not_found():
-    flush_channels()
-
-    msg_id = KC.inspect("does_not_exist")
-    reply = get_reply(KC, msg_id, TIMEOUT)
+async def test_oinfo_not_found(client):
+    msg_id = client.inspect("does_not_exist")
+    reply = await get_reply(client, msg_id)
     validate_message(reply, "inspect_reply", msg_id)
     content = reply["content"]
     assert not content["found"]
 
 
-def test_complete():
-    flush_channels()
+async def test_complete(client):
+    msg_id, reply = await execute(client, code="alpha = albert = 5")
 
-    msg_id, reply = execute(code="alpha = albert = 5")
-
-    msg_id = KC.complete("al", 2)
-    reply = get_reply(KC, msg_id, TIMEOUT)
+    msg_id = client.complete("al", 2)
+    reply = await get_reply(client, msg_id)
     validate_message(reply, "complete_reply", msg_id)
     matches = reply["content"]["matches"]
     for name in ("alpha", "albert"):
         assert name in matches
 
 
-def test_kernel_info_request():
-    flush_channels()
-
-    msg_id = KC.kernel_info()
-    reply = get_reply(KC, msg_id, TIMEOUT)
+async def test_kernel_info_request(client):
+    msg_id = client.kernel_info()
+    reply = await get_reply(client, msg_id)
     validate_message(reply, "kernel_info_reply", msg_id)
     assert "supported_features" in reply["content"]
     assert "kernel subshells" in reply["content"]["supported_features"]
 
 
-def test_connect_request():
-    flush_channels()
-    msg = KC.session.msg("connect_request")
-    KC.shell_channel.send(msg)
+async def test_connect_request(client):
+    msg = client.session.msg("connect_request")
+    client.shell_channel.send(msg)
     msg_id = msg["header"]["msg_id"]
-    reply = get_reply(KC, msg_id, TIMEOUT)
+    reply = await get_reply(client, msg_id)
     validate_message(reply, "connect_reply", msg_id)
 
 
-def test_subshell():
-    flush_channels()
-
-    msg = KC.session.msg("create_subshell_request")
-    KC.control_channel.send(msg)
+async def test_subshell(client):
+    msg = client.session.msg("create_subshell_request")
+    client.control_channel.send(msg)
     msg_id = msg["header"]["msg_id"]
-    reply = get_reply(KC, msg_id, TIMEOUT, channel="control")
+    reply = await get_reply(client, msg_id, channel="control")
     validate_message(reply, "create_subshell_reply", msg_id)
     subshell_id = reply["content"]["subshell_id"]
 
-    msg = KC.session.msg("list_subshell_request")
-    KC.control_channel.send(msg)
+    msg = client.session.msg("list_subshell_request")
+    client.control_channel.send(msg)
     msg_id = msg["header"]["msg_id"]
-    reply = get_reply(KC, msg_id, TIMEOUT, channel="control")
+    reply = await get_reply(client, msg_id, channel="control")
     validate_message(reply, "list_subshell_reply", msg_id)
 
-    msg = KC.session.msg("delete_subshell_request", {"subshell_id": subshell_id})
-    KC.control_channel.send(msg)
+    msg = client.session.msg("delete_subshell_request", {"subshell_id": subshell_id})
+    client.control_channel.send(msg)
     msg_id = msg["header"]["msg_id"]
-    reply = get_reply(KC, msg_id, TIMEOUT, channel="control")
+    reply = await get_reply(client, msg_id, channel="control")
     validate_message(reply, "delete_subshell_reply", msg_id)
 
 
@@ -548,14 +542,13 @@ def test_subshell():
     version_info < (5, 0),
     reason="earlier Jupyter Client don't have comm_info",
 )
-def test_comm_info_request():
-    flush_channels()
-    msg_id = KC.comm_info()
-    reply = get_reply(KC, msg_id, TIMEOUT)
+async def test_comm_info_request(client):
+    msg_id = client.comm_info()
+    reply = await get_reply(client, msg_id)
     validate_message(reply, "comm_info_reply", msg_id)
 
 
-def test_single_payload():
+async def test_single_payload(client):
     """
     We want to test the set_next_input is not triggered several time per cell.
     This is (was ?) mostly due to the fact that `?` in a loop would trigger
@@ -565,59 +558,45 @@ def test_single_payload():
     set_next_input (that's users' choice). But that `?` itself (and ?'s
     transform) should avoid setting multiple set_next_input).
     """
-    flush_channels()
-    msg_id, reply = execute(
-        code="ip = get_ipython()\nfor i in range(3):\n   ip.set_next_input('Hello There')\n"
+
+    msg_id, reply = await execute(
+        client, code="ip = get_ipython()\nfor i in range(3):\n   ip.set_next_input('Hello There')\n"
     )
     payload = reply["payload"]
     next_input_pls = [pl for pl in payload if pl["source"] == "set_next_input"]
     assert len(next_input_pls) == 1
 
 
-def test_is_complete():
-    flush_channels()
-
-    msg_id = KC.is_complete("a = 1")
-    reply = get_reply(KC, msg_id, TIMEOUT)
+async def test_is_complete(client):
+    msg_id = client.is_complete("a = 1")
+    reply = await get_reply(client, msg_id)
     validate_message(reply, "is_complete_reply", msg_id)
 
 
-def test_history_range():
-    flush_channels()
-
-    KC.execute(code="x=1", store_history=True)
-    KC.get_shell_msg(timeout=TIMEOUT)
-
-    msg_id = KC.history(hist_access_type="range", raw=True, output=True, start=1, stop=2, session=0)
-    reply = get_reply(KC, msg_id, TIMEOUT)
+async def test_history_range(client):
+    await execute(client, code="x=1", store_history=True)
+    msg_id = client.history(hist_access_type="range", raw=True, output=True, start=1, stop=2, session=0)
+    reply = await get_reply(client, msg_id)
     validate_message(reply, "history_reply", msg_id)
     content = reply["content"]
     assert len(content["history"]) == 1
 
 
-def test_history_tail():
-    flush_channels()
+async def test_history_tail(client):
+    await execute(client, code="x=1", store_history=True)
 
-    KC.execute(code="x=1", store_history=True)
-    KC.get_shell_msg(timeout=TIMEOUT)
-
-    msg_id = KC.history(hist_access_type="tail", raw=True, output=True, n=1, session=0)
-    reply = get_reply(KC, msg_id, TIMEOUT)
+    msg_id = client.history(hist_access_type="tail", raw=True, output=True, n=1, session=0)
+    reply = await get_reply(client, msg_id)
     validate_message(reply, "history_reply", msg_id)
     content = reply["content"]
     assert len(content["history"]) == 1
 
 
-def test_history_search():
-    flush_channels()
+async def test_history_search(client):
+    await execute(client, code="x=1", store_history=True)
 
-    KC.execute(code="x=1", store_history=True)
-    KC.get_shell_msg(timeout=TIMEOUT)
-
-    msg_id = KC.history(
-        hist_access_type="search", raw=True, output=True, n=1, pattern="*", session=0
-    )
-    reply = get_reply(KC, msg_id, TIMEOUT)
+    msg_id = client.history(hist_access_type="search", raw=True, output=True, n=1, pattern="*", session=0)
+    reply = await get_reply(client, msg_id)
     validate_message(reply, "history_reply", msg_id)
     content = reply["content"]
     assert len(content["history"]) == 1
@@ -626,30 +605,17 @@ def test_history_search():
 # IOPub channel
 
 
-def test_stream():
-    flush_channels()
+async def test_stream(client):
+    client.execute("print('hi')")
+    stdout, stderr = await utils.assemble_output(client)
+    assert stdout == "hi\n"
 
-    msg_id, reply = execute("print('hi')")
+async def test_display_data(client):
+    msg_id, reply = await execute(client, "from IPython.display import display; display(1)")
+    await check_pub_message(client, msg_id, execution_state="busy")
+    await check_pub_message(client, msg_id, msg_type="execute_input")
+    msg = await check_pub_message(client, msg_id, msg_type="display_data", execution_state="idle")
 
-    stream = ""
-    t0 = time.monotonic()
-    while True:
-        msg = KC.get_iopub_msg(timeout=TIMEOUT)
-        validate_message(msg, "stream", msg_id)
-        stream += msg["content"]["text"]
-        assert "hi\n".startswith(stream)
-        if stream == "hi\n":
-            break
-        if time.monotonic() - t0 > TIMEOUT:
-            raise TimeoutError()
-
-
-def test_display_data():
-    flush_channels()
-
-    msg_id, reply = execute("from IPython.display import display; display(1)")
-
-    display = KC.get_iopub_msg(timeout=TIMEOUT)
-    validate_message(display, "display_data", parent=msg_id)
-    data = display["content"]["data"]
+    validate_message(msg, "display_data", parent=msg_id)
+    data = msg["content"]["data"]
     assert data["text/plain"] == "1"

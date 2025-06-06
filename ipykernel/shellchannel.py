@@ -3,8 +3,8 @@
 import zmq
 import zmq_anyio
 
-from .subshell_manager import SubshellManager
-from .thread import SHELL_CHANNEL_THREAD_NAME, BaseThread
+from ipykernel.subshell_manager import SubshellManager
+from ipykernel.thread import SHELL_CHANNEL_THREAD_NAME, BaseThread
 
 
 class ShellChannelThread(BaseThread):

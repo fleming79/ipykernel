@@ -15,8 +15,8 @@ import zmq_anyio
 from anyio import create_memory_object_stream, create_task_group
 from anyio.abc import TaskGroup
 
-from .subshell import SubshellThread
-from .thread import SHELL_CHANNEL_THREAD_NAME, BaseThread
+from ipykernel.subshell import SubshellThread
+from ipykernel.thread import SHELL_CHANNEL_THREAD_NAME, BaseThread
 
 
 @dataclass
@@ -194,9 +194,7 @@ class SubshellManager:
             msg = f"Thread id {thread_id!r} does not correspond to a subshell of this kernel"
             raise RuntimeError(msg)
 
-    def _create_inproc_pair_socket(
-        self, name: str | None, shell_channel_end: bool
-    ) -> zmq_anyio.Socket:
+    def _create_inproc_pair_socket(self, name: str | None, shell_channel_end: bool) -> zmq_anyio.Socket:
         """Create and return a single ZMQ inproc pair socket."""
         address = self._get_inproc_socket_address(name)
         socket = zmq_anyio.Socket(self._context, zmq.PAIR)
@@ -257,9 +255,7 @@ class SubshellManager:
         with self._lock_cache:
             return subshell_id in self._cache
 
-    async def _listen_for_subshell_reply(
-        self, subshell_id: str | None, task_group: TaskGroup
-    ) -> None:
+    async def _listen_for_subshell_reply(self, subshell_id: str | None, task_group: TaskGroup) -> None:
         """Listen for reply messages on specified subshell inproc socket and
         resend to the client via the shell_socket.
 
@@ -282,9 +278,7 @@ class SubshellManager:
                 return
             raise
 
-    async def _process_control_request(
-        self, request: dict[str, t.Any], subshell_task: t.Any
-    ) -> dict[str, t.Any]:
+    async def _process_control_request(self, request: dict[str, t.Any], subshell_task: t.Any) -> dict[str, t.Any]:
         """Process a control request message received on the control inproc
         socket and return the reply.  Runs in the shell channel thread.
         """

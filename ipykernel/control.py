@@ -1,6 +1,6 @@
 """A thread for a control channel."""
 
-from .thread import CONTROL_THREAD_NAME, BaseThread
+from ipykernel.thread import CONTROL_THREAD_NAME, BaseThread
 
 
 class ControlThread(BaseThread):

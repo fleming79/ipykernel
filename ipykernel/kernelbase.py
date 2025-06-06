@@ -35,39 +35,25 @@ except ImportError:
     # jupyter_client < 5, use local now()
     now = datetime.now
 
+from typing import TYPE_CHECKING
+
 import psutil
 import zmq
 import zmq_anyio
-from anyio import (
-    TASK_STATUS_IGNORED,
-    Event,
-    create_memory_object_stream,
-    create_task_group,
-    sleep,
-    to_thread,
-)
+from anyio import TASK_STATUS_IGNORED, Event, create_memory_object_stream, create_task_group, sleep, to_thread
 from anyio.abc import TaskGroup, TaskStatus
 from anyio.from_thread import BlockingPortal
-from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from IPython.core.error import StdinNotImplementedError
 from jupyter_client.session import Session
 from traitlets.config.configurable import SingletonConfigurable
-from traitlets.traitlets import (
-    Any,
-    Bool,
-    Dict,
-    Float,
-    Instance,
-    Integer,
-    List,
-    Unicode,
-    default,
-)
+from traitlets.traitlets import Any, Bool, Dict, Float, Instance, Integer, List, Unicode, default
 
-from ipykernel.jsonutil import json_clean
+from ipykernel._version import kernel_protocol_version
 
-from ._version import kernel_protocol_version
-from .iostream import OutStream
+if TYPE_CHECKING:
+    from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
+
+    from ipykernel.iostream import OutStream
 
 _AWAITABLE_MESSAGE: str = (
     "For consistency across implementations, it is recommended that `{func_name}`"
@@ -85,8 +71,7 @@ def _accepts_parameters(meth, param_names):
     for param in param_names:
         param_spec = parameters.get(param)
         accepts[param] = (
-            param_spec
-            and param_spec.kind in [param_spec.KEYWORD_ONLY, param_spec.POSITIONAL_OR_KEYWORD]
+            param_spec and param_spec.kind in [param_spec.KEYWORD_ONLY, param_spec.POSITIONAL_OR_KEYWORD]
         ) or any(p.kind == p.VAR_KEYWORD for p in parameters.values())
 
     return accepts
@@ -106,9 +91,9 @@ class Kernel(SingletonConfigurable):
 
     processes: dict[str, psutil.Process] = {}
 
-    session = Instance(Session, allow_none=True)
+    session: Instance[Session | None] = Instance(Session, allow_none=True)  # type: ignore
     profile_dir = Instance("IPython.core.profiledir.ProfileDir", allow_none=True)
-    shell_socket = Instance(zmq_anyio.Socket, allow_none=True)
+    shell_socket: Instance[zmq_anyio.Socket | None] = Instance(zmq_anyio.Socket, allow_none=True)
 
     implementation: str
     implementation_version: str
@@ -262,9 +247,7 @@ class Kernel(SingletonConfigurable):
             self.control_handlers[msg_type] = getattr(self, msg_type)
 
         # Storing the accepted parameters for do_execute, used in execute_request
-        self._do_exec_accepted_params = _accepts_parameters(
-            self.do_execute, ["cell_meta", "cell_id"]
-        )
+        self._do_exec_accepted_params = _accepts_parameters(self.do_execute, ["cell_meta", "cell_id"])
 
     async def process_control(self):
         try:
@@ -389,9 +372,7 @@ class Kernel(SingletonConfigurable):
                         subshell_id = msg3["header"].get("subshell_id")
 
                         # Find inproc pair socket to use to send message to correct subshell.
-                        socket = self.shell_channel_thread.manager.get_shell_channel_socket(
-                            subshell_id
-                        )
+                        socket = self.shell_channel_thread.manager.get_shell_channel_socket(subshell_id)
                         assert socket is not None
                         if not socket.started.is_set():
                             await tg.start(socket.start)
@@ -459,7 +440,21 @@ class Kernel(SingletonConfigurable):
                 self._publish_status("busy", msg)
                 try:
                     if received_time < self._aborted_time:
-                        await self._send_abort_reply(socket, msg, idents)
+                        self.log.info("Aborting execute_request: %s", msg["header"]["msg_id"])
+                        if session := self.session:
+                            session.send(
+                                stream=socket,
+                                msg_or_type="execute_reply",
+                                content={
+                                    "status": "error",
+                                    "execution_count": self.execution_count,
+                                    "ename": "RuntimeError",
+                                    "evalue": "An exception occurred whilst this execute request was queued!",
+                                    "traceback": [],
+                                },
+                                parent=msg,
+                                ident=idents,
+                            )
                         continue
                     result = handler(socket, idents, msg)
                     if inspect.isawaitable(result):
@@ -622,18 +617,6 @@ class Kernel(SingletonConfigurable):
     # Kernel request handlers
     # ---------------------------------------------------------------------------
 
-    def _publish_execute_input(self, code, parent, execution_count):
-        """Publish the code request on the iopub stream."""
-        if not self.session:
-            return
-        self.session.send(
-            self.iopub_socket,
-            "execute_input",
-            {"code": code, "execution_count": execution_count},
-            parent=parent,
-            ident=self._topic("execute_input"),
-        )
-
     def _publish_status(self, status: str, parent):
         """send status (busy/idle) on IOPub"""
         if not self.session:
@@ -736,7 +719,13 @@ class Kernel(SingletonConfigurable):
         # start computing output
         if not silent:
             self.execution_count += 1
-            self._publish_execute_input(code, parent, self.execution_count)
+            self.session.send(
+                self.iopub_socket,
+                "execute_input",
+                {"code": code, "execution_count": self.execution_count},
+                parent=parent,
+                ident=self._topic("execute_input"),
+            )
 
         # Arguments based on the do_execute signature
         do_execute_args = {
@@ -776,8 +765,6 @@ class Kernel(SingletonConfigurable):
             time.sleep(self._execute_sleep)
 
         # Send the reply.
-        reply_content = json_clean(reply_content)
-
         reply_msg = self.session.send(
             socket,
             "execute_reply",
@@ -825,8 +812,6 @@ class Kernel(SingletonConfigurable):
                 PendingDeprecationWarning,
                 stacklevel=1,
             )
-
-        matches = json_clean(matches)
         self.session.send(socket, "complete_reply", matches, parent, ident)
 
     def do_complete(self, code, cursor_pos):
@@ -859,9 +844,6 @@ class Kernel(SingletonConfigurable):
                 PendingDeprecationWarning,
                 stacklevel=1,
             )
-
-        # Before we send this object over, we scrub it for JSON usage
-        reply_content = json_clean(reply_content)
         msg = self.session.send(socket, "inspect_reply", reply_content, parent, ident)
         self.log.debug("%s", msg)
 
@@ -884,8 +866,6 @@ class Kernel(SingletonConfigurable):
                 PendingDeprecationWarning,
                 stacklevel=1,
             )
-
-        reply_content = json_clean(reply_content)
         msg = self.session.send(socket, "history_reply", reply_content, parent, ident)
         self.log.debug("%s", msg)
 
@@ -915,7 +895,7 @@ class Kernel(SingletonConfigurable):
 
     @property
     def kernel_info(self):
-        from .debugger import _is_debugpy_available
+        from ipykernel.debugger import _is_debugpy_available
 
         supported_features: list[str] = []
         if self._supports_kernel_subshells:
@@ -1042,7 +1022,6 @@ class Kernel(SingletonConfigurable):
                 PendingDeprecationWarning,
                 stacklevel=1,
             )
-        reply_content = json_clean(reply_content)
         reply_msg = self.session.send(socket, "is_complete_reply", reply_content, parent, ident)
         self.log.debug("%s", reply_msg)
 
@@ -1060,13 +1039,10 @@ class Kernel(SingletonConfigurable):
             reply_content = await reply_content
         else:
             warnings.warn(
-                _AWAITABLE_MESSAGE.format(
-                    func_name="do_debug_request", target=self.do_debug_request
-                ),
+                _AWAITABLE_MESSAGE.format(func_name="do_debug_request", target=self.do_debug_request),
                 PendingDeprecationWarning,
                 stacklevel=1,
             )
-        reply_content = json_clean(reply_content)
         reply_msg = self.session.send(socket, "debug_reply", reply_content, parent, ident)
         self.log.debug("%s", reply_msg)
 
@@ -1096,19 +1072,14 @@ class Kernel(SingletonConfigurable):
             process.pid: self.processes.get(process.pid, process)  # type:ignore[misc,call-overload]
             for process in all_processes
         }
-        reply_content["kernel_cpu"] = sum(
-            [
-                self.get_process_metric_value(process, "cpu_percent", None)
-                for process in self.processes.values()
-            ]
-        )
+        reply_content["kernel_cpu"] = sum([
+            self.get_process_metric_value(process, "cpu_percent", None) for process in self.processes.values()
+        ])
         mem_info_type = "pss" if hasattr(current_process.memory_full_info(), "pss") else "rss"
-        reply_content["kernel_memory"] = sum(
-            [
-                self.get_process_metric_value(process, "memory_full_info", mem_info_type)
-                for process in self.processes.values()
-            ]
-        )
+        reply_content["kernel_memory"] = sum([
+            self.get_process_metric_value(process, "memory_full_info", mem_info_type)
+            for process in self.processes.values()
+        ])
         cpu_percent = psutil.cpu_percent()
         # https://psutil.readthedocs.io/en/latest/index.html?highlight=cpu#psutil.cpu_percent
         # The first time cpu_percent is called it will return a meaningless 0.0 value which you are supposed to ignore.
@@ -1135,9 +1106,7 @@ class Kernel(SingletonConfigurable):
 
         # This should only be called in the control thread if it exists.
         # Request is passed to shell channel thread to process.
-        other_socket = await self.shell_channel_thread.manager.get_control_other_socket(
-            self.control_thread
-        )
+        other_socket = await self.shell_channel_thread.manager.get_control_other_socket(self.control_thread)
         await other_socket.asend_json({"type": "create"}).wait()
         reply = await other_socket.arecv_json().wait()
 
@@ -1159,9 +1128,7 @@ class Kernel(SingletonConfigurable):
 
         # This should only be called in the control thread if it exists.
         # Request is passed to shell channel thread to process.
-        other_socket = await self.shell_channel_thread.manager.get_control_other_socket(
-            self.control_thread
-        )
+        other_socket = await self.shell_channel_thread.manager.get_control_other_socket(self.control_thread)
         await other_socket.asend_json({"type": "delete", "subshell_id": subshell_id}).wait()
         reply = await other_socket.arecv_json().wait()
 
@@ -1176,9 +1143,7 @@ class Kernel(SingletonConfigurable):
 
         # This should only be called in the control thread if it exists.
         # Request is passed to shell channel thread to process.
-        other_socket = await self.shell_channel_thread.manager.get_control_other_socket(
-            self.control_thread
-        )
+        other_socket = await self.shell_channel_thread.manager.get_control_other_socket(self.control_thread)
         await other_socket.asend_json({"type": "list"}).wait()
         reply = await other_socket.arecv_json().wait()
 
@@ -1191,23 +1156,6 @@ class Kernel(SingletonConfigurable):
     def _topic(self, topic):
         """prefixed topic for IOPub messages"""
         return (f"kernel.{self.ident}.{topic}").encode()
-
-    async def _send_abort_reply(self, socket, msg, idents):
-        """Send a reply to an aborted request"""
-        if not self.session:
-            return
-        self.log.info("Aborting %s: %s", msg["header"]["msg_id"], msg["header"]["msg_type"])
-        reply_type = msg["header"]["msg_type"].rsplit("_", 1)[0] + "_reply"
-        status = {"status": "aborted"}
-
-        assert self.session is not None
-        self.session.send(
-            socket,
-            reply_type,
-            content=status,
-            parent=msg,
-            ident=idents,
-        )
 
     def _no_raw_input(self):
         """Raise StdinNotImplementedError if active frontend doesn't support
@@ -1265,11 +1213,10 @@ class Kernel(SingletonConfigurable):
 
         # Send the input request.
         assert self.session is not None
-        content = json_clean(dict(prompt=prompt, password=password))
         self.session.send(
             self.stdin_socket,
             "input_request",
-            content,
+            content={"prompt": prompt, "password": password},
             parent=self.parent_msg,
             ident=self.parent_ident,
         )

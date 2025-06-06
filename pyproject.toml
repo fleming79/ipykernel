@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.4", "jupyter_client>=6"]
+requires = ["hatchling>=1.4", "jupyter_client>=8"]
 build-backend = "hatchling.build"
 
 [project]
@@ -17,7 +17,7 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
     "debugpy>=1.8.1",
     "ipython>=7.23.1",
@@ -25,15 +25,12 @@ dependencies = [
     "traitlets>=5.4.0",
     "jupyter_client>=8.0.0",
     "jupyter_core>=4.12,!=5.0.*",
-    # For tk event loop support only.
-    "nest_asyncio>=1.4",
-    "matplotlib-inline>=0.1",
-    'appnope>=0.1.2;platform_system=="Darwin"',
     "pyzmq>=26.0",
     "psutil>=5.7",
     "packaging>=22",
     "anyio>=4.8.0,<5.0.0",
     "zmq-anyio >=0.3.6",
+    "typing_extensions"
 ]
 
 [project.urls]
@@ -44,9 +41,7 @@ Tracker = "https://github.com/ipython/ipykernel/issues"
 
 [project.optional-dependencies]
 docs = [
-  # Sphinx pinned until `sphinx-autodoc-typehints` issue is resolved:
-  # https://github.com/tox-dev/sphinx-autodoc-typehints/issues/523
-  "sphinx<8.2.0",
+  "sphinx",
   "myst_parser",
   "pydata_sphinx_theme",
   "sphinxcontrib_github_alt",
@@ -60,6 +55,7 @@ test = [
     "pre-commit",
     "pytest-cov",
     "pytest-timeout",
+    "pytest-mock",
     "pytest>=7.0,<9",
     "trio",
 ]
@@ -70,8 +66,6 @@ cov = [
   "curio",
   "trio",
 ]
-pyqt5 = ["pyqt5"]
-pyside6 = ["pyside6"]
 
 [tool.hatch.version]
 path = "ipykernel/_version.py"
@@ -89,7 +83,7 @@ path = "ipykernel/_version.py"
 features = ["docs"]
 [tool.hatch.envs.docs.scripts]
 build = "make -C docs html SPHINXOPTS='-W'"
-api = "sphinx-apidoc -o docs/api -f -E ipykernel tests ipykernel/datapub.py ipykernel/pickleutil.py ipykernel/serialize.py ipykernel/gui ipykernel/pylab"
+api = "sphinx-apidoc -o docs/api -f -E ipykernel tests ipykernel/datapub.py ipykernel/pickleutil.py ipykernel/serialize.py ipykernel/gui"
 
 [tool.hatch.envs.test]
 features = ["test"]
@@ -116,8 +110,6 @@ matrix.qt.features = [
 [tool.hatch.envs.typing]
 dependencies = ["pre-commit"]
 detached = true
-[tool.hatch.envs.typing.scripts]
-test = "pre-commit run --all-files --hook-stage manual mypy"
 
 [tool.hatch.envs.lint]
 dependencies = ["pre-commit"]
@@ -128,74 +120,14 @@ build = [
   "pre-commit run --all-files ruff-format"
 ]
 
-[tool.mypy]
-files = "ipykernel"
-strict = true
-#disable_error_code = [ "import-not-found"]
-disable_error_code = ["no-untyped-def", "no-untyped-call", "import-not-found"]
-enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
-follow_imports = "normal"
-#pretty = true
-warn_unreachable = true
-
-[[tool.mypy.overrides]]
-module = [
-    "ipykernel._eventloop_macos",
-    "ipykernel.comm.comm",
-    "ipykernel.comm.manager",
-    "ipykernel.compiler",
-    "ipykernel.connect",
-    "ipykernel.control",
-    "ipykernel.datapub",
-    "ipykernel.debugger",
-    "ipykernel.displayhook",
-    "ipykernel.embed",
-    "ipykernel.eventloops",
-    "ipykernel.gui.gtk3embed",
-    "ipykernel.gui.gtkembed",
-    "ipykernel.heartbeat",
-    "ipykernel.inprocess.blocking",
-    "ipykernel.inprocess.channels",
-    "ipykernel.inprocess.client",
-    "ipykernel.inprocess.ipkernel",
-    "ipykernel.inprocess.manager",
-    "ipykernel.inprocess.session",
-    "ipykernel.inprocess.socket",
-    "ipykernel.iostream",
-    "ipykernel.ipkernel",
-    "ipykernel.jsonutil",
-    "ipykernel.kernelapp",
-    "ipykernel.kernelbase",
-    "ipykernel.log",
-    "ipykernel.parentpoller",
-    "ipykernel.pickleutil",
-    "ipykernel.serialize",
-    "ipykernel.shellchannel",
-    "ipykernel.subshell",
-    "ipykernel.subshell_manager",
-    "ipykernel.thread",
-    "ipykernel.trio_runner",
-    "ipykernel.zmqshell"
-]
-#check_untyped_defs = false
-#disallow_incomplete_defs = false
-#disallow_untyped_calls = false
-#disallow_untyped_decorators = false
-#disallow_untyped_defs = false
-#ignore_missing_imports = true
-#follow_untyped_imports = false
-
-
 
 [tool.pytest.ini_options]
 minversion = "6.0"
 xfail_strict = true
-log_cli_level = "info"
+log_cli_level =  "INFO"
 addopts = [
   "-raXs", "--durations=10", "--color=yes", "--doctest-modules",
    "--showlocals", "--strict-markers", "--strict-config",
-   "--ignore=ipykernel/pylab/backend_inline.py",
-   "--ignore=ipykernel/pylab/config.py",
    "--ignore=ipykernel/gui/gtk3embed.py",
    "--ignore=ipykernel/gui/gtkembed.py",
    "--ignore=ipykernel/datapub.py",
@@ -258,7 +190,6 @@ omit = [
   "tests/*",
   "ipykernel/datapub.py",
   "ipykernel/debugger.py",
-  "ipykernel/eventloops.py",
   "ipykernel/log.py",
   "ipykernel/pickleutil.py",
   "ipykernel/serialize.py",
@@ -267,7 +198,8 @@ omit = [
 ]
 
 [tool.ruff]
-line-length = 100
+line-length = 120
+target-version = "py311"
 
 [tool.ruff.lint]
 extend-select = [
@@ -293,6 +225,7 @@ extend-select = [
   "NPY",      # NumPy specific rules
   "PD",       # pandas-vet
   "PYI",      # flake8-pyi
+  "TC",       # flake8-type-checking
 ]
 ignore = [
   "PLR",    # Design related pylint codes
@@ -300,7 +233,6 @@ ignore = [
   "B027",
   "T201", # `print` found
   # Unnecessary `dict` call (rewrite as a literal)
-  "C408",
   "SIM105", # Use `contextlib.suppress(ValueError)` instead of try-except-pass
   # Mutable class attributes should be annotated with `typing.ClassVar`
   "RUF012",
@@ -310,7 +242,6 @@ ignore = [
   "ARG002",
   # `open()` should be replaced by `Path.open()`
   "PTH123",
-  "UP007", # use `X | Y` for type annotations, this does not works for dynamic getting type hints on older python
   "UP031", # Use format specifiers instead of percent format
   "PT023", # Use `@pytest.mark.skip` over `@pytest.mark.skip()`
   "PT001", # autofixable: Use `@pytest.fixture` over `@pytest.fixture()`

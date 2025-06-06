@@ -13,7 +13,7 @@ import zmq
 from ipykernel.heartbeat import Heartbeat
 
 
-def test_port_bind_failure_raises():
+async def test_port_bind_failure_raises(client, kernel):
     heart = Heartbeat(None)
     with patch.object(heart, "_try_bind_socket") as mock_try_bind:
         mock_try_bind.side_effect = zmq.ZMQError(-100, "fails for unknown error types")
@@ -22,7 +22,7 @@ def test_port_bind_failure_raises():
         assert mock_try_bind.call_count == 1
 
 
-def test_port_bind_success():
+async def test_port_bind_success(client, kernel):
     heart = Heartbeat(None)
     with patch.object(heart, "_try_bind_socket") as mock_try_bind:
         heart._bind_socket()
@@ -30,7 +30,7 @@ def test_port_bind_success():
 
 
 @no_type_check
-def test_port_bind_failure_recovery():
+async def test_port_bind_failure_recovery(client, kernel):
     try:
         errno.WSAEADDRINUSE
     except AttributeError:
@@ -52,7 +52,7 @@ def test_port_bind_failure_recovery():
             del errno.WSAEADDRINUSE
 
 
-def test_port_bind_failure_gives_up_retries():
+async def test_port_bind_failure_gives_up_retries(client, kernel):
     heart = Heartbeat(None)
     with patch.object(heart, "_try_bind_socket") as mock_try_bind:
         mock_try_bind.side_effect = zmq.ZMQError(errno.EADDRINUSE, "fails for non-bind")

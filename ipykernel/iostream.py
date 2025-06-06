@@ -15,16 +15,17 @@ import traceback
 import warnings
 from binascii import b2a_hex
 from collections import defaultdict, deque
+from collections.abc import Callable
 from io import StringIO, TextIOBase
 from threading import local
-from typing import Any, Callable
+from typing import Any
 
 import zmq
 import zmq_anyio
 from anyio import sleep
 from jupyter_client.session import extract_header
 
-from .thread import BaseThread
+from ipykernel.thread import BaseThread
 
 # -----------------------------------------------------------------------------
 # Globals
@@ -167,8 +168,7 @@ class IOPubThread:
             self._pipe_port = self._pipe_in1.bind_to_random_port("tcp://127.0.0.1")
         except zmq.ZMQError as e:
             warnings.warn(
-                "Couldn't bind IOPub Pipe to 127.0.0.1: %s" % e
-                + "\nsubprocess output will be unavailable.",
+                "Couldn't bind IOPub Pipe to 127.0.0.1: %s" % e + "\nsubprocess output will be unavailable.",
                 stacklevel=2,
             )
             self._pipe_flag = False
@@ -446,8 +446,7 @@ class OutStream(TextIOBase):
         if not isinstance(pub_thread, IOPubThread):
             # Backward-compat: given socket, not thread. Wrap in a thread.
             warnings.warn(
-                "Since IPykernel 4.3, OutStream should be created with "
-                "IOPubThread, not %r" % pub_thread,
+                "Since IPykernel 4.3, OutStream should be created with IOPubThread, not %r" % pub_thread,
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -457,9 +456,7 @@ class OutStream(TextIOBase):
         self.pub_thread = pub_thread
         self.name = name
         self.topic = b"stream." + name.encode()
-        self._parent_header: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
-            "parent_header"
-        )
+        self._parent_header: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("parent_header")
         self._parent_header.set({})
         self._thread_to_parent = {}
         self._thread_to_parent_header = {}
@@ -502,9 +499,7 @@ class OutStream(TextIOBase):
                     if echo_fd is not None and echo_fd == self._original_stdstream_fd:
                         # echo on the _copy_ we made during
                         # this is the actual terminal FD now
-                        echo = io.TextIOWrapper(
-                            io.FileIO(self._original_stdstream_copy, "w", closefd=False)
-                        )
+                        echo = io.TextIOWrapper(io.FileIO(self._original_stdstream_copy, "w", closefd=False))
                 self.echo = echo
             else:
                 msg = "echo argument must be a file-like object"

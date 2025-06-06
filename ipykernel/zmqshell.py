@@ -26,18 +26,18 @@ from IPython.core.displaypub import DisplayPublisher
 from IPython.core.error import UsageError
 from IPython.core.interactiveshell import InteractiveShell, InteractiveShellABC
 from IPython.core.magic import Magics, line_magic, magics_class
-from IPython.core.magics import CodeMagics, MacroToEdit  # type:ignore[attr-defined]
+from IPython.core.magics import CodeMagics, MacroToEdit
 from IPython.core.usage import default_banner
 from IPython.display import Javascript, display
 from IPython.utils import openpy
-from IPython.utils.process import arg_split, system  # type:ignore[attr-defined]
+from IPython.utils.process import system
 from jupyter_client.session import Session, extract_header
 from jupyter_core.paths import jupyter_runtime_dir
 from traitlets import Any, CBool, CBytes, Dict, Instance, Type, default, observe
+from typing_extensions import override
 
-from ipykernel import connect_qtconsole, get_connection_file, get_connection_info
+from ipykernel import get_connection_file, get_connection_info
 from ipykernel.displayhook import ZMQShellDisplayHook
-from ipykernel.jsonutil import encode_images, json_clean
 
 # -----------------------------------------------------------------------------
 # Functions and classes
@@ -111,7 +111,7 @@ class ZMQDisplayPublisher(DisplayPublisher):
             transient = {}
         self._validate_data(data, metadata)
         content = {}
-        content["data"] = encode_images(data)
+        content["data"] = data
         content["metadata"] = metadata
         content["transient"] = transient
 
@@ -121,7 +121,7 @@ class ZMQDisplayPublisher(DisplayPublisher):
         # in order to put it through the transform
         # hooks before potentially sending.
         assert self.session is not None
-        msg = self.session.msg(msg_type, json_clean(content), parent=self.parent_header)
+        msg = self.session.msg(msg_type, content, parent=self.parent_header)
 
         # Each transform either returns a new
         # message or None. If None is returned,
@@ -151,7 +151,7 @@ class ZMQDisplayPublisher(DisplayPublisher):
         content = dict(wait=wait)
         self._flush_streams()
         assert self.session is not None
-        msg = self.session.msg("clear_output", json_clean(content), parent=self.parent_header)
+        msg = self.session.msg("clear_output", content, parent=self.parent_header)
 
         # see publish() for details on how this works
         for hook in self._hooks:
@@ -396,19 +396,6 @@ class KernelMagics(Magics):
         )
 
     @line_magic
-    def qtconsole(self, arg_s):
-        """Open a qtconsole connected to this kernel.
-
-        Useful for connecting a qtconsole to running notebooks, for better
-        debugging.
-        """
-        try:
-            connect_qtconsole(argv=arg_split(arg_s, os.name == "posix"))
-        except Exception as e:
-            warnings.warn("Could not start qtconsole: %r" % e, stacklevel=2)
-            return
-
-    @line_magic
     def autosave(self, arg_s):
         """Set the autosave interval in the notebook (in seconds).
 
@@ -435,43 +422,11 @@ class KernelMagics(Magics):
         else:
             print("Autosave disabled")
 
-    @line_magic
-    def subshell(self, arg_s):
-        """
-        List all current subshells
-        """
-        from ipykernel.kernelapp import IPKernelApp
-
-        if not IPKernelApp.initialized():
-            msg = "Not in a running Kernel"
-            raise RuntimeError(msg)
-
-        app = IPKernelApp.instance()
-        kernel = app.kernel
-
-        if not getattr(kernel, "_supports_kernel_subshells", False):
-            print("Kernel does not support subshells")
-            return
-
-        thread_id = threading.current_thread().ident
-        manager = kernel.shell_channel_thread.manager
-        try:
-            subshell_id = manager.subshell_id_from_thread_id(thread_id)
-        except RuntimeError:
-            subshell_id = "unknown"
-        subshell_id_list = manager.list_subshell()
-
-        print(f"subshell id: {subshell_id}")
-        print(f"thread id: {thread_id}")
-        print(f"main thread id: {threading.main_thread().ident}")
-        print(f"pid: {os.getpid()}")
-        print(f"thread count: {threading.active_count()}")
-        print(f"subshell list: {subshell_id_list}")
-
 
 class ZMQInteractiveShell(InteractiveShell):
     """A subclass of InteractiveShell for ZMQ."""
 
+    @override
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -522,18 +477,6 @@ class ZMQInteractiveShell(InteractiveShell):
 
     keepkernel_on_exit = None
 
-    # Over ZeroMQ, GUI control isn't done with PyOS_InputHook as there is no
-    # interactive input being read; we provide event loop support in ipkernel
-    def enable_gui(self, gui=None):
-        """Enable a given guil."""
-        from .eventloops import enable_gui as real_enable_gui
-
-        try:
-            real_enable_gui(gui)
-            self.active_eventloop = gui
-        except ValueError as e:
-            raise UsageError("%s" % e) from e
-
     def init_environment(self):
         """Configure the user's environment."""
         env = os.environ
@@ -569,11 +512,7 @@ class ZMQInteractiveShell(InteractiveShell):
 
         data = strg if isinstance(strg, dict) else {"text/plain": strg}
 
-        payload = dict(
-            source="page",
-            data=data,
-            start=start,
-        )
+        payload = {"source": "page", "data": data, "start": start}
         assert self.payload_manager is not None
         self.payload_manager.write_payload(payload)
 
@@ -595,8 +534,8 @@ class ZMQInteractiveShell(InteractiveShell):
             )
 
             self._data_pub = self.data_pub_class(parent=self)  # type:ignore[has-type]
-            self._data_pub.session = self.display_pub.session  # type:ignore[attr-defined]
-            self._data_pub.pub_socket = self.display_pub.pub_socket  # type:ignore[attr-defined]
+            self._data_pub.session = self.display_pub.session
+            self._data_pub.pub_socket = self.display_pub.pub_socket
         return self._data_pub
 
     @data_pub.setter
@@ -606,10 +545,7 @@ class ZMQInteractiveShell(InteractiveShell):
     def ask_exit(self):
         """Engage the exit actions."""
         self.exit_now = not self.keepkernel_on_exit
-        payload = dict(
-            source="ask_exit",
-            keepkernel=self.keepkernel_on_exit,
-        )
+        payload = {"source": "ask_exit", "keepkernel": self.keepkernel_on_exit}
         self.payload_manager.write_payload(payload)  # type:ignore[union-attr]
 
     def run_cell(self, *args, **kwargs):
@@ -638,14 +574,14 @@ class ZMQInteractiveShell(InteractiveShell):
         # Send exception info over pub socket for other clients than the caller
         # to pick up
         topic = None
-        if dh.topic:  # type:ignore[attr-defined]
-            topic = dh.topic.replace(b"execute_result", b"error")  # type:ignore[attr-defined]
+        if dh.topic:
+            topic = dh.topic.replace(b"execute_result", b"error")
 
-        dh.session.send(  # type:ignore[attr-defined]
-            dh.pub_socket,  # type:ignore[attr-defined]
+        dh.session.send(
+            dh.pub_socket,
             "error",
-            json_clean(exc_content),
-            dh.parent_header,  # type:ignore[attr-defined]
+            exc_content,
+            dh.parent_header,
             ident=topic,
         )
 
@@ -656,18 +592,18 @@ class ZMQInteractiveShell(InteractiveShell):
     def set_next_input(self, text, replace=False):
         """Send the specified text to the frontend to be presented at the next
         input cell."""
-        payload = dict(
-            source="set_next_input",
-            text=text,
-            replace=replace,
-        )
+        payload = {
+            "source": "set_next_input",
+            "text": text,
+            "replace": replace,
+        }
         self.payload_manager.write_payload(payload)  # type:ignore[union-attr]
 
     def set_parent(self, parent):
         """Set the parent header for associating output with its triggering input"""
         self.parent_header = parent
-        self.displayhook.set_parent(parent)  # type:ignore[attr-defined]
-        self.display_pub.set_parent(parent)  # type:ignore[attr-defined]
+        self.displayhook.set_parent(parent)
+        self.display_pub.set_parent(parent)
         if hasattr(self, "_data_pub"):
             self.data_pub.set_parent(parent)
         if hasattr(sys.stdout, "set_parent"):

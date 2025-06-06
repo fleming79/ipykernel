@@ -5,7 +5,7 @@ from threading import current_thread
 import zmq
 import zmq_anyio
 
-from .thread import BaseThread
+from ipykernel.thread import BaseThread
 
 
 class SubshellThread(BaseThread):

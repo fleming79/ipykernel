@@ -10,35 +10,28 @@ import sys
 import threading
 import typing as t
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import comm
 import zmq_anyio
 from anyio import TASK_STATUS_IGNORED, create_task_group, to_thread
-from anyio.abc import TaskStatus
+from comm.base_comm import CommManager
 from IPython.core import release
 from IPython.utils.tokenutil import line_at_cursor, token_at_cursor
-from jupyter_client.session import extract_header
-from traitlets import (
-    Any,
-    Bool,
-    Dict,
-    HasTraits,
-    Instance,
-    List,
-    Type,
-    default,
-    observe,
-    observe_compat,
-)
+from traitlets import Any, Bool, Dict, Instance, List, Type, default, observe
+from typing_extensions import override
 
-from .comm.comm import BaseComm
-from .comm.manager import CommManager
-from .compiler import XCachingCompiler
-from .eventloops import _use_appnope
-from .iostream import OutStream
-from .kernelbase import Kernel as KernelBase
-from .kernelbase import _accepts_parameters
-from .zmqshell import ZMQInteractiveShell
+from ipykernel.compiler import XCachingCompiler
+from ipykernel.iostream import OutStream
+from ipykernel.kernelbase import Kernel as KernelBase
+from ipykernel.kernelbase import _accepts_parameters
+from ipykernel.zmqshell import ZMQInteractiveShell
+
+if TYPE_CHECKING:
+    from anyio.abc import TaskStatus
+    from IPython.core.payload import PayloadManager
+
+    from ipykernel.debugger import Debugger
 
 try:
     from IPython.core.completer import provisionalcompleter as _provisionalcompleter
@@ -49,38 +42,12 @@ except ImportError:
     _use_experimental_60_completion = False
 
 
-_EXPERIMENTAL_KEY_NAME = "_jupyter_types_experimental"
-
-
-def _create_comm(*args, **kwargs):
-    """Create a new Comm."""
-    return BaseComm(*args, **kwargs)
-
-
-# there can only be one comm manager in a ipykernel process
-_comm_lock = threading.Lock()
-_comm_manager: CommManager | None = None
-
-
-def _get_comm_manager(*args, **kwargs):
-    """Create a new CommManager."""
-    global _comm_manager  # noqa: PLW0603
-    if _comm_manager is None:
-        with _comm_lock:
-            if _comm_manager is None:
-                _comm_manager = CommManager(*args, **kwargs)
-    return _comm_manager
-
-
-comm.create_comm = _create_comm
-comm.get_comm_manager = _get_comm_manager
-
-
 class IPythonKernel(KernelBase):
     """The IPython Kernel class."""
 
-    shell = Instance("IPython.core.interactiveshell.InteractiveShellABC", allow_none=True)
+    shell = Instance(ZMQInteractiveShell)
     shell_class = Type(ZMQInteractiveShell)
+    comm_manager = Instance(CommManager)
 
     # use fully-qualified name to ensure lazy import and prevent the issue from
     # https://github.com/ipython/ipykernel/issues/1198
@@ -93,26 +60,24 @@ class IPythonKernel(KernelBase):
         help="Set this flag to False to deactivate the use of experimental IPython completion APIs.",
     ).tag(config=True)
 
-    debugpy_socket = Instance(zmq_anyio.Socket, allow_none=True)
+    debugpy_socket = Instance(zmq_anyio.Socket)
 
     user_module = Any()
 
     @observe("user_module")
-    @observe_compat
     def _user_module_changed(self, change):
         if self.shell is not None:
             self.shell.user_module = change["new"]
 
-    user_ns = Dict(allow_none=True)
+    user_ns = Dict()
 
-    @default("user_ns")
-    def _default_user_ns(self):
-        return dict()
+    @default("comm_manager")
+    def _default_comm_manager(self):
+        return comm.get_comm_manager()
 
     @observe("user_ns")
-    @observe_compat
     def _user_ns_changed(self, change):
-        if self.shell is not None:
+        if self.trait_has_value("shell"):
             self.shell.user_ns = change["new"]
             self.shell.init_user_ns()
 
@@ -125,13 +90,11 @@ class IPythonKernel(KernelBase):
         """Initialize the kernel."""
         super().__init__(**kwargs)
 
-        self.executing_blocking_code_in_main_shell = False
-
-        from .debugger import _is_debugpy_available
+        from ipykernel.debugger import _is_debugpy_available
 
         # Initialize the Debugger
         if _is_debugpy_available:
-            self.debugger = self.debugger_class(
+            self.debugger: Debugger = self.debugger_class(
                 self.log,
                 self.debugpy_socket,
                 self._publish_debug_event,
@@ -149,31 +112,19 @@ class IPythonKernel(KernelBase):
             kernel=self,
             compiler_class=self.compiler_class,
         )
-        self.shell.displayhook.session = self.session  # type:ignore[attr-defined]
+        self.shell.displayhook.session = self.session
 
         jupyter_session_name = os.environ.get("JPY_SESSION_NAME")
         if jupyter_session_name:
             self.shell.user_ns["__session__"] = jupyter_session_name
 
-        self.shell.displayhook.pub_socket = self.iopub_socket  # type:ignore[attr-defined]
-        self.shell.displayhook.topic = self._topic("execute_result")  # type:ignore[attr-defined]
-        self.shell.display_pub.session = self.session  # type:ignore[attr-defined]
-        self.shell.display_pub.pub_socket = self.iopub_socket  # type:ignore[attr-defined]
-
-        self.comm_manager = comm.get_comm_manager()
-
-        assert isinstance(self.comm_manager, HasTraits)
+        self.shell.displayhook.pub_socket = self.iopub_socket
+        self.shell.displayhook.topic = self._topic("execute_result")
+        self.shell.display_pub.session = self.session
+        self.shell.display_pub.pub_socket = self.iopub_socket
         self.shell.configurables.append(self.comm_manager)  # type:ignore[arg-type]
-        comm_msg_types = ["comm_open", "comm_msg", "comm_close"]
-        for msg_type in comm_msg_types:
+        for msg_type in ["comm_open", "comm_msg", "comm_close"]:
             self.shell_handlers[msg_type] = getattr(self.comm_manager, msg_type)
-
-        if _use_appnope() and self._darwin_app_nap:
-            # Disable app-nap as the kernel is not a gui but can have guis
-            import appnope  # type:ignore[import-untyped]
-
-            appnope.nope()
-
         self._new_threads_parent_header = {}
         self._initialize_thread_hooks()
 
@@ -182,38 +133,36 @@ class IPythonKernel(KernelBase):
             # implement it even as of 3.9.
             gc.callbacks.append(self._clean_thread_parent_frames)
 
-    help_links = List(
-        [
-            {
-                "text": "Python Reference",
-                "url": "https://docs.python.org/%i.%i" % sys.version_info[:2],
-            },
-            {
-                "text": "IPython Reference",
-                "url": "https://ipython.org/documentation.html",
-            },
-            {
-                "text": "NumPy Reference",
-                "url": "https://docs.scipy.org/doc/numpy/reference/",
-            },
-            {
-                "text": "SciPy Reference",
-                "url": "https://docs.scipy.org/doc/scipy/reference/",
-            },
-            {
-                "text": "Matplotlib Reference",
-                "url": "https://matplotlib.org/contents.html",
-            },
-            {
-                "text": "SymPy Reference",
-                "url": "http://docs.sympy.org/latest/index.html",
-            },
-            {
-                "text": "pandas Reference",
-                "url": "https://pandas.pydata.org/pandas-docs/stable/",
-            },
-        ]
-    ).tag(config=True)
+    help_links = List([
+        {
+            "text": "Python Reference",
+            "url": "https://docs.python.org/%i.%i" % sys.version_info[:2],
+        },
+        {
+            "text": "IPython Reference",
+            "url": "https://ipython.org/documentation.html",
+        },
+        {
+            "text": "NumPy Reference",
+            "url": "https://docs.scipy.org/doc/numpy/reference/",
+        },
+        {
+            "text": "SciPy Reference",
+            "url": "https://docs.scipy.org/doc/scipy/reference/",
+        },
+        {
+            "text": "Matplotlib Reference",
+            "url": "https://matplotlib.org/contents.html",
+        },
+        {
+            "text": "SymPy Reference",
+            "url": "http://docs.sympy.org/latest/index.html",
+        },
+        {
+            "text": "pandas Reference",
+            "url": "https://pandas.pydata.org/pandas-docs/stable/",
+        },
+    ]).tag(config=True)
 
     # Kernel info fields
     implementation = "ipython"
@@ -229,7 +178,6 @@ class IPythonKernel(KernelBase):
     }
 
     async def process_debugpy(self):
-        assert self.debugpy_socket is not None
         async with self.debug_shell_socket, self.debugpy_socket, create_task_group() as tg:
             tg.start_soon(self.receive_debugpy_messages)
             tg.start_soon(self.poll_stopped_queue)
@@ -237,7 +185,7 @@ class IPythonKernel(KernelBase):
             tg.cancel_scope.cancel()
 
     async def receive_debugpy_messages(self):
-        from .debugger import _is_debugpy_available
+        from ipykernel.debugger import _is_debugpy_available
 
         if not _is_debugpy_available:
             return
@@ -246,7 +194,7 @@ class IPythonKernel(KernelBase):
             await self.receive_debugpy_message()
 
     async def receive_debugpy_message(self, msg=None):
-        from .debugger import _is_debugpy_available
+        from ipykernel.debugger import _is_debugpy_available
 
         if not _is_debugpy_available:
             return
@@ -255,9 +203,10 @@ class IPythonKernel(KernelBase):
             assert self.debugpy_socket is not None
             msg = await self.debugpy_socket.arecv_multipart().wait()
         # The first frame is the socket id, we can drop it
-        frame = msg[1].decode("utf-8")
-        self.log.debug("Debugpy received: %s", frame)
-        self.debugger.tcp_client.receive_dap_frame(frame)
+        if msg and isinstance(data := msg[1], bytes):
+            frame = data.decode("utf-8")
+            self.log.debug("Debugpy received: %s", frame)
+            self.debugger.tcp_client.receive_dap_frame(frame)
 
     @property
     def banner(self):
@@ -288,8 +237,7 @@ class IPythonKernel(KernelBase):
 
     def _set_parent_ident(self, parent, ident):
         super()._set_parent_ident(parent, ident)
-        if self.shell:
-            self.shell.set_parent(parent)
+        self.shell.set_parent(parent)
 
     def _forward_input(self, allow_stdin=False):
         """Forward raw_input and getpass to the current frontend.
@@ -322,12 +270,13 @@ class IPythonKernel(KernelBase):
         # execution counter.
         pass
 
-    async def execute_request(self, stream, ident, parent):
-        """Override for cell output - cell reconciliation."""
-        parent_header = extract_header(parent)
-        self._associate_new_top_level_threads_with(parent_header)
-        await super().execute_request(stream, ident, parent)
+    # async def execute_request(self, stream, ident, parent):
+    #     """Override for cell output - cell reconciliation."""
+    #     parent_header = extract_header(parent)
+    #     # self._associate_new_top_level_threads_with(parent_header)
+    #     await super().execute_request(stream, ident, parent)
 
+    @override
     async def do_execute(
         self,
         code,
@@ -438,13 +387,11 @@ class IPythonKernel(KernelBase):
         else:
             reply_content["status"] = "error"
 
-            reply_content.update(
-                {
-                    "traceback": shell._last_traceback or [],
-                    "ename": str(type(err).__name__),
-                    "evalue": str(err),
-                }
-            )
+            reply_content.update({
+                "traceback": shell._last_traceback or [],
+                "ename": str(type(err).__name__),
+                "evalue": str(err),
+            })
 
         # Return the execution counter so clients can display prompts
         reply_content["execution_count"] = shell.execution_count - 1
@@ -497,7 +444,7 @@ class IPythonKernel(KernelBase):
 
     async def do_debug_request(self, msg):
         """Handle a debug request."""
-        from .debugger import _is_debugpy_available
+        from ipykernel.debugger import _is_debugpy_available
 
         if _is_debugpy_available:
             return await self.debugger.process_request(msg)
@@ -516,15 +463,13 @@ class IPythonKernel(KernelBase):
 
             comps = []
             for comp in completions:
-                comps.append(
-                    dict(
-                        start=comp.start,
-                        end=comp.end,
-                        text=comp.text,
-                        type=comp.type,
-                        signature=comp.signature,
-                    )
-                )
+                comps.append({
+                    "start": comp.start,
+                    "end": comp.end,
+                    "text": comp.text,
+                    "type": comp.type,
+                    "signature": comp.signature,
+                })
 
         if completions:
             s = completions[0].start
@@ -539,7 +484,7 @@ class IPythonKernel(KernelBase):
             "matches": matches,
             "cursor_end": e,
             "cursor_start": s,
-            "metadata": {_EXPERIMENTAL_KEY_NAME: comps},
+            "metadata": {"_jupyter_types_experimental": comps},
             "status": "ok",
         }
 
@@ -552,16 +497,7 @@ class IPythonKernel(KernelBase):
         reply_content["metadata"] = {}
         assert self.shell is not None
         try:
-            if release.version_info >= (8,):
-                # `omit_sections` keyword will be available in IPython 8, see
-                # https://github.com/ipython/ipython/pull/13343
-                bundle = self.shell.object_inspect_mime(
-                    name,
-                    detail_level=detail_level,
-                    omit_sections=omit_sections,
-                )
-            else:
-                bundle = self.shell.object_inspect_mime(name, detail_level=detail_level)
+            bundle = self.shell.object_inspect_mime(name, detail_level=detail_level, omit_sections=omit_sections)
             reply_content["data"].update(bundle)
             if not self.shell.enable_html_pager:
                 reply_content["data"].pop("text/html")
@@ -585,20 +521,16 @@ class IPythonKernel(KernelBase):
     ):
         """Handle code history."""
         assert self.shell is not None
+        history_manager = self.shell.history_manager
+        assert history_manager
         if hist_access_type == "tail":
-            hist = self.shell.history_manager.get_tail(
-                n, raw=raw, output=output, include_latest=True
-            )
+            hist = history_manager.get_tail(n, raw=raw, output=output, include_latest=True)
 
         elif hist_access_type == "range":
-            hist = self.shell.history_manager.get_range(
-                session, start, stop, raw=raw, output=output
-            )
+            hist = history_manager.get_range(session, start, stop, raw=raw, output=output)
 
         elif hist_access_type == "search":
-            hist = self.shell.history_manager.search(
-                pattern, raw=raw, output=output, n=n, unique=unique
-            )
+            hist = history_manager.search(pattern, raw=raw, output=output, n=n, unique=unique)
         else:
             hist = []
 
@@ -611,7 +543,7 @@ class IPythonKernel(KernelBase):
         """Handle kernel shutdown."""
         if self.shell:
             self.shell.exit_now = True
-        return dict(status="ok", restart=restart)
+        return {"status": "ok", "restart": restart}
 
     def do_is_complete(self, code):
         """Handle an is_complete request."""
@@ -630,11 +562,11 @@ class IPythonKernel(KernelBase):
         """Clear the kernel."""
         if self.shell:
             self.shell.reset(False)
-        return dict(status="ok")
+        return {"status": "ok"}
 
-    def _associate_new_top_level_threads_with(self, parent_header):
-        """Store the parent header to associate it with new top-level threads"""
-        self._new_threads_parent_header = parent_header
+    # def _associate_new_top_level_threads_with(self, parent_header):
+    #     """Store the parent header to associate it with new top-level threads"""
+    #     self._new_threads_parent_header = parent_header
 
     def _initialize_thread_hooks(self):
         """Store thread hierarchy and thread-parent_header associations."""
@@ -656,29 +588,25 @@ class IPythonKernel(KernelBase):
             """
 
             try:
-                parent = self._ipykernel_parent_thread_ident  # type:ignore[attr-defined]
+                parent = self._ipykernel_parent_thread_ident
             except AttributeError:
                 return
             for stream in [stdout, stderr]:
                 if isinstance(stream, OutStream):
                     if parent == kernel_thread_ident:
-                        stream._thread_to_parent_header[self.ident] = (
-                            kernel._new_threads_parent_header
-                        )
+                        stream._thread_to_parent_header[self.ident] = kernel._new_threads_parent_header
                     else:
                         stream._thread_to_parent[self.ident] = parent
             _threading_Thread_run(self)
 
         def init_closure(self: threading.Thread, *args, **kwargs):
             _threading_Thread__init__(self, *args, **kwargs)
-            self._ipykernel_parent_thread_ident = threading.get_ident()  # type:ignore[attr-defined]
+            self._ipykernel_parent_thread_ident = threading.get_ident()
 
         threading.Thread.__init__ = init_closure  # type:ignore[method-assign]
         threading.Thread.run = run_closure  # type:ignore[method-assign]
 
-    def _clean_thread_parent_frames(
-        self, phase: t.Literal["start", "stop"], info: dict[str, t.Any]
-    ):
+    def _clean_thread_parent_frames(self, phase: t.Literal["start", "stop"], info: dict[str, t.Any]):
         """Clean parent frames of threads which are no longer running.
         This is meant to be invoked by garbage collector callback hook.
 
@@ -708,21 +636,3 @@ class IPythonKernel(KernelBase):
                             del thread_to_parent[identity]
                         except KeyError:
                             pass
-
-
-# This exists only for backwards compatibility - use IPythonKernel instead
-
-
-class Kernel(IPythonKernel):
-    """DEPRECATED.  An alias for the IPython kernel class."""
-
-    def __init__(self, *args, **kwargs):  # pragma: no cover
-        """DEPRECATED."""
-        import warnings
-
-        warnings.warn(
-            "Kernel is a deprecated alias of ipykernel.ipkernel.IPythonKernel",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        super().__init__(*args, **kwargs)

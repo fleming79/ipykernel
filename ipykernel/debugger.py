@@ -13,12 +13,7 @@ from IPython.core.getipython import get_ipython
 from IPython.core.inputtransformer2 import leading_empty_lines
 from zmq.utils import jsonapi
 
-try:
-    from jupyter_client.jsonutil import json_default
-except ImportError:
-    from jupyter_client.jsonutil import date_default as json_default
-
-from .compiler import get_file_name, get_tmp_directory, get_tmp_hash_seed
+from ipykernel.compiler import get_file_name, get_tmp_directory, get_tmp_hash_seed
 
 try:
     # This import is required to have the next ones working...
@@ -118,9 +113,7 @@ class DebugpyMessageQueue:
         self.tcp_buffer = ""
         self._reset_tcp_pos()
         self.event_callback = event_callback
-        self.message_send_stream, self.message_receive_stream = create_memory_object_stream[dict](
-            max_buffer_size=inf
-        )
+        self.message_send_stream, self.message_receive_stream = create_memory_object_stream[dict](max_buffer_size=inf)
         self.log = log
 
     def _reset_tcp_pos(self):
@@ -131,7 +124,7 @@ class DebugpyMessageQueue:
 
     def _put_message(self, raw_msg):
         self.log.debug("QUEUE - _put_message:")
-        msg = t.cast(dict[str, t.Any], jsonapi.loads(raw_msg))
+        msg = t.cast("dict[str, t.Any]", jsonapi.loads(raw_msg))
         if msg["type"] == "event":
             self.log.debug("QUEUE - received event:")
             self.log.debug(msg)
@@ -175,9 +168,7 @@ class DebugpyMessageQueue:
             if len(self.tcp_buffer) - self.message_pos < self.message_size:
                 return
 
-            self._put_message(
-                self.tcp_buffer[self.message_pos : self.message_pos + self.message_size]
-            )
+            self._put_message(self.tcp_buffer[self.message_pos : self.message_pos + self.message_size])
             if len(self.tcp_buffer) - self.message_pos == self.message_size:
                 self.log.debug("QUEUE - resetting tcp_buffer")
                 self.tcp_buffer = ""
@@ -230,14 +221,11 @@ class DebugpyClient:
             self.routing_id = self.debugpy_socket.getsockopt(ROUTING_ID)
         content = jsonapi.dumps(
             msg,
-            default=json_default,
             ensure_ascii=False,
             allow_nan=False,
         )
         content_length = str(len(content))
-        buf = (DebugpyMessageQueue.HEADER + content_length + DebugpyMessageQueue.SEPARATOR).encode(
-            "ascii"
-        )
+        buf = (DebugpyMessageQueue.HEADER + content_length + DebugpyMessageQueue.SEPARATOR).encode("ascii")
         buf += content
         self.log.debug("DEBUGPYCLIENT:")
         self.log.debug(self.routing_id)
@@ -332,9 +320,7 @@ class Debugger:
         "copyToGlobals",
     ]
 
-    def __init__(
-        self, log, debugpy_socket, event_callback, shell_socket, session, just_my_code=True
-    ):
+    def __init__(self, log, debugpy_socket, event_callback, shell_socket, session, just_my_code=True):
         """Initialize the debugger."""
         self.log = log
         self.debugpy_client = DebugpyClient(log, debugpy_socket, self._handle_event)
@@ -343,9 +329,7 @@ class Debugger:
         self.is_started = False
         self.event_callback = event_callback
         self.just_my_code = just_my_code
-        self.stopped_send_stream, self.stopped_receive_stream = create_memory_object_stream[dict](
-            max_buffer_size=inf
-        )
+        self.stopped_send_stream, self.stopped_receive_stream = create_memory_object_stream[dict](max_buffer_size=inf)
 
         self.started_debug_handlers = {}
         for msg_type in Debugger.started_debug_msg_types:
@@ -490,8 +474,7 @@ class Debugger:
         # so we want to record the breakpoints that were actually added
         if message_response.get("success"):
             self.breakpoint_list[source] = [
-                {"line": breakpoint["line"]}
-                for breakpoint in message_response["body"]["breakpoints"]
+                {"line": breakpoint["line"]} for breakpoint in message_response["body"]["breakpoints"]
             ]
         return message_response
 
@@ -565,16 +548,12 @@ class Debugger:
         """Handle a variables message."""
         reply = {}
         if not self.stopped_threads:
-            variables = self.variable_explorer.get_children_variables(
-                message["arguments"]["variablesReference"]
-            )
+            variables = self.variable_explorer.get_children_variables(message["arguments"]["variablesReference"])
             return self._build_variables_response(message, variables)
 
         reply = await self._forward_message(message)
         # TODO : check start and count arguments work as expected in debugpy
-        reply["body"]["variables"] = [
-            var for var in reply["body"]["variables"] if self.accept_variable(var["name"])
-        ]
+        reply["body"]["variables"] = [var for var in reply["body"]["variables"] if self.accept_variable(var["name"])]
         return reply
 
     async def attach(self, message):

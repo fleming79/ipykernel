@@ -12,8 +12,6 @@ from IPython.core.displayhook import DisplayHook
 from jupyter_client.session import Session, extract_header
 from traitlets import Any, Dict, Instance
 
-from ipykernel.jsonutil import encode_images, json_clean
-
 
 class ZMQDisplayHook:
     """A simple displayhook that publishes the object's repr over a ZeroMQ
@@ -36,7 +34,7 @@ class ZMQDisplayHook:
         if obj is None:
             return
 
-        builtins._ = obj  # type:ignore[attr-defined]
+        builtins._ = obj
         sys.stdout.flush()
         sys.stderr.flush()
         contents = {
@@ -44,9 +42,7 @@ class ZMQDisplayHook:
             "data": {"text/plain": repr(obj)},
             "metadata": {},
         }
-        self.session.send(
-            self.pub_socket, "execute_result", contents, parent=self.parent_header, ident=self.topic
-        )
+        self.session.send(self.pub_socket, "execute_result", contents, parent=self.parent_header, ident=self.topic)
 
     def set_parent(self, parent):
         """Set the parent header."""
@@ -89,7 +85,7 @@ class ZMQShellDisplayHook(DisplayHook):
     def write_format_data(self, format_dict, md_dict=None):
         """Write format data to the message."""
         if self.msg:
-            self.msg["content"]["data"] = json_clean(encode_images(format_dict))
+            self.msg["content"]["data"] = format_dict
             self.msg["content"]["metadata"] = md_dict
 
     def finish_displayhook(self):

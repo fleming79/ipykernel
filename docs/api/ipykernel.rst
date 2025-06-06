@@ -49,13 +49,6 @@ Submodules
    :undoc-members:
    :show-inheritance:
 
-
-.. automodule:: ipykernel.eventloops
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-
 .. automodule:: ipykernel.heartbeat
    :members:
    :undoc-members:
@@ -72,13 +65,6 @@ Submodules
    :members:
    :undoc-members:
    :show-inheritance:
-
-
-.. automodule:: ipykernel.jsonutil
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 
 .. automodule:: ipykernel.kernelapp
    :members:
@@ -102,13 +88,6 @@ Submodules
    :members:
    :undoc-members:
    :show-inheritance:
-
-
-.. automodule:: ipykernel.parentpoller
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 
 .. automodule:: ipykernel.shellchannel
    :members:

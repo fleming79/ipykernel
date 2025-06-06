@@ -26,7 +26,7 @@ pjoin = os.path.join
 is_cpython = platform.python_implementation() == "CPython"
 
 
-def test_make_ipkernel_cmd():
+async def test_make_ipkernel_cmd(client, kernel):
     cmd = make_ipkernel_cmd()
     assert cmd == [sys.executable, "-m", "ipykernel_launcher", "-f", "{connection_file}"]
 
@@ -37,7 +37,7 @@ def assert_kernel_dict(d):
     assert d["language"] == "python"
 
 
-def test_get_kernel_dict():
+async def test_get_kernel_dict(client, kernel):
     d = get_kernel_dict()
     assert_kernel_dict(d)
 
@@ -48,7 +48,7 @@ def assert_kernel_dict_with_profile(d):
     assert d["language"] == "python"
 
 
-def test_get_kernel_dict_with_profile():
+async def test_get_kernel_dict_with_profile(client, kernel):
     d = get_kernel_dict(["--profile", "test"])
     assert_kernel_dict_with_profile(d)
 
@@ -63,13 +63,13 @@ def assert_is_spec(path):
         json.load(f)
 
 
-def test_write_kernel_spec():
+async def test_write_kernel_spec(client, kernel):
     path = write_kernel_spec()
     assert_is_spec(path)
     shutil.rmtree(path)
 
 
-def test_write_kernel_spec_path():
+async def test_write_kernel_spec_path(client, kernel):
     path = os.path.join(tempfile.mkdtemp(), KERNEL_NAME)
     path2 = write_kernel_spec(path)
     assert path == path2
@@ -77,7 +77,7 @@ def test_write_kernel_spec_path():
     shutil.rmtree(path)
 
 
-def test_install_kernelspec():
+async def test_install_kernelspec(client, kernel):
     path = tempfile.mkdtemp()
     try:
         InstallIPythonKernelSpecApp.launch_instance(argv=["--prefix", path])
@@ -86,7 +86,7 @@ def test_install_kernelspec():
         shutil.rmtree(path)
 
 
-def test_install_user():
+async def test_install_user(client, kernel):
     tmp = tempfile.mkdtemp()
 
     with mock.patch.dict(os.environ, {"HOME": tmp}):
@@ -96,7 +96,7 @@ def test_install_user():
     assert_is_spec(os.path.join(data_dir, "kernels", KERNEL_NAME))
 
 
-def test_install():
+async def test_install(client, kernel):
     system_jupyter_dir = tempfile.mkdtemp()
 
     with mock.patch("jupyter_client.kernelspec.SYSTEM_JUPYTER_PATH", [system_jupyter_dir]):
@@ -105,7 +105,7 @@ def test_install():
     assert_is_spec(os.path.join(system_jupyter_dir, "kernels", KERNEL_NAME))
 
 
-def test_install_profile():
+async def test_install_profile(client, kernel):
     system_jupyter_dir = tempfile.mkdtemp()
 
     with mock.patch("jupyter_client.kernelspec.SYSTEM_JUPYTER_PATH", [system_jupyter_dir]):
@@ -118,7 +118,7 @@ def test_install_profile():
     assert spec["argv"][-2:] == ["--profile", "Test"]
 
 
-def test_install_display_name_overrides_profile():
+async def test_install_display_name_overrides_profile(client, kernel):
     system_jupyter_dir = tempfile.mkdtemp()
 
     with mock.patch("jupyter_client.kernelspec.SYSTEM_JUPYTER_PATH", [system_jupyter_dir]):
@@ -149,7 +149,7 @@ def test_install_env(tmp_path, env):
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11) or not is_cpython, reason="requires cPython 3.11")
-def test_install_frozen_modules_on():
+async def test_install_frozen_modules_on(client, kernel):
     system_jupyter_dir = tempfile.mkdtemp()
 
     with mock.patch("jupyter_client.kernelspec.SYSTEM_JUPYTER_PATH", [system_jupyter_dir]):
@@ -163,7 +163,7 @@ def test_install_frozen_modules_on():
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11) or not is_cpython, reason="requires cPython 3.11")
-def test_install_frozen_modules_off():
+async def test_install_frozen_modules_off(client, kernel):
     system_jupyter_dir = tempfile.mkdtemp()
 
     with mock.patch("jupyter_client.kernelspec.SYSTEM_JUPYTER_PATH", [system_jupyter_dir]):
@@ -180,7 +180,7 @@ def test_install_frozen_modules_off():
     sys.version_info >= (3, 11) or is_cpython,
     reason="checks versions older than 3.11 and other Python implementations",
 )
-def test_install_frozen_modules_no_op():
+async def test_install_frozen_modules_no_op(client, kernel):
     # ensure we do not add add Xfrozen_modules on older Python versions
     # (although cPython does not error out on unknown X options as of 3.8)
     system_jupyter_dir = tempfile.mkdtemp()

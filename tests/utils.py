@@ -4,222 +4,147 @@
 # Distributed under the terms of the Modified BSD License.
 from __future__ import annotations
 
-import atexit
-import os
 import sys
-from contextlib import contextmanager
-from queue import Empty
-from subprocess import STDOUT
-from tempfile import TemporaryDirectory
-from time import time
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, Unpack
 
-from jupyter_client import manager
-from jupyter_client.blocking.client import BlockingKernelClient
+import anyio
+from jupyter_client.asynchronous.client import AsyncKernelClient
+
+if TYPE_CHECKING:
+    from ipykernel.ipkernel import IPythonKernel
+    from ipykernel.kernelapp import IPKernelApp
+
+    OwnerType = AsyncKernelClient | tuple[IPKernelApp, AsyncKernelClient]
+
 
 STARTUP_TIMEOUT = 60 if "debugpy" not in sys.modules else 1e6
 TIMEOUT = 100 if "debugpy" not in sys.modules else 1e6
 
-KM: manager.KernelManager = None  # type:ignore
-KC: BlockingKernelClient = None  # type:ignore
+
+class ContentType(TypedDict):
+    code: NotRequired[str]
+    silent: NotRequired[bool]
+    store_history: NotRequired[bool]
+    user_expressions: NotRequired[dict[str, str]]
+    allow_stdin: NotRequired[bool]
+    stop_on_error: NotRequired[bool]
 
 
-def start_new_kernel(**kwargs):
-    """start a new kernel, and return its Manager and Client
-
-    Integrates with our output capturing for tests.
-    """
-    kwargs["stderr"] = STDOUT
-    return manager.start_new_kernel(startup_timeout=STARTUP_TIMEOUT, **kwargs)
+def ka_kc_kernel(
+    kc, kernel: tuple[IPKernelApp, AsyncKernelClient]
+) -> tuple[IPKernelApp, AsyncKernelClient, IPythonKernel]:
+    ka, kc = kc, kernel
+    return ka, kc, ka.kernel
 
 
-def flush_channels(kc=None):
-    """flush any messages waiting on the queue"""
-    from .test_message_spec import validate_message
+async def get_reply(
+    owner: AsyncKernelClient, msg_id: str, *, channel: Literal["shell", "control"] = "shell", timeout=TIMEOUT
+):
+    kc = owner[1] if isinstance(owner, tuple) else owner
 
-    if kc is None:
-        kc = KC
-    for get_msg in (kc.get_shell_msg, kc.get_iopub_msg):
-        while True:
-            try:
-                msg = get_msg(timeout=0.1)
-            except Empty:
-                break
-            else:
-                validate_message(msg)
-
-
-def get_reply(kc, msg_id, timeout=TIMEOUT, channel="shell"):
-    t0 = time()
     while True:
-        get_msg = getattr(kc, f"get_{channel}_msg")
-        reply = get_msg(timeout=timeout)
-        if reply["parent_header"]["msg_id"] == msg_id:
-            break
+        with anyio.fail_after(timeout):
+            match channel:
+                case "shell":
+                    reply = await kc.get_shell_msg(timeout=timeout)
+                case "control":
+                    reply = await kc.get_control_msg(timeout=timeout)
+            if reply["parent_header"]["msg_id"] == msg_id:
+                break
         # Allow debugging ignored replies
         print(f"Ignoring reply not to {msg_id}: {reply}")
-        t1 = time()
-        timeout -= t1 - t0
-        t0 = t1
     return reply
 
 
-def get_replies(kc, msg_ids: list[str], timeout=TIMEOUT, channel="shell"):
-    # Get replies which may arrive in any order as they may be running on different subshells.
-    # Replies are returned in the same order as the msg_ids, not in the order of arrival.
-    t0 = time()
-    count = 0
-    replies = [None] * len(msg_ids)
-    while count < len(msg_ids):
-        get_msg = getattr(kc, f"get_{channel}_msg")
-        reply = get_msg(timeout=timeout)
-        try:
-            msg_id = reply["parent_header"]["msg_id"]
-            replies[msg_ids.index(msg_id)] = reply
-            count += 1
-        except ValueError:
-            # Allow debugging ignored replies
-            print(f"Ignoring reply not to any of {msg_ids}: {reply}")
-        t1 = time()
-        timeout -= t1 - t0
-        t0 = t1
-    return replies
-
-
-def execute(code="", kc=None, **kwargs):
+async def execute(client: AsyncKernelClient, /, code="", **kwargs):
     """wrapper for doing common steps for validating an execution request"""
-    from .test_message_spec import validate_message
+    from tests.test_message_spec import validate_message
 
-    if kc is None:
-        kc = KC
-    msg_id = kc.execute(code=code, **kwargs)
-    reply = get_reply(kc, msg_id, TIMEOUT)
-    validate_message(reply, "execute_reply", msg_id)
-    busy = kc.get_iopub_msg(timeout=TIMEOUT)
-    validate_message(busy, "status", msg_id)
-    assert busy["content"]["execution_state"] == "busy"
+    assert isinstance(client, AsyncKernelClient)
 
-    if not kwargs.get("silent"):
-        execute_input = kc.get_iopub_msg(timeout=TIMEOUT)
-        validate_message(execute_input, "execute_input", msg_id)
-        assert execute_input["content"]["code"] == code
+    with anyio.fail_after(TIMEOUT):
+        msg_id = client.execute(code=code, **kwargs)
+        reply = await get_reply(client, msg_id)
+        validate_message(reply, "execute_reply", msg_id)
+        busy = await client.get_iopub_msg()
+        validate_message(busy, "status", msg_id)
+        assert busy["content"]["execution_state"] == "busy"
 
-    # show tracebacks if present for debugging
-    if reply["content"].get("traceback"):
-        print("\n".join(reply["content"]["traceback"]), file=sys.stderr)
+        if not kwargs.get("silent"):
+            execute_input = await client.get_iopub_msg()
+            validate_message(execute_input, "execute_input", msg_id)
+            assert execute_input["content"]["code"] == code
+
+        # show tracebacks if present for debugging
+        if reply["content"].get("traceback"):
+            print("\n".join(reply["content"]["traceback"]), file=sys.stderr)
 
     return msg_id, reply["content"]
 
 
-def start_global_kernel():
-    """start the global kernel (if it isn't running) and return its client"""
-    global KM, KC
-    if KM is None:
-        KM, KC = start_new_kernel()
-        atexit.register(stop_global_kernel)
-    else:
-        flush_channels(KC)
-    return KC
-
-
-@contextmanager
-def kernel():
-    """Context manager for the global kernel instance
-
-    Should be used for most kernel tests
-
-    Returns
-    -------
-    kernel_client: connected KernelClient instance
-    """
-    yield start_global_kernel()
-
-
-def uses_kernel(test_f):
-    """Decorator for tests that use the global kernel"""
-
-    def wrapped_test():
-        with kernel() as kc:
-            test_f(kc)
-
-    wrapped_test.__doc__ = test_f.__doc__
-    wrapped_test.__name__ = test_f.__name__
-    return wrapped_test
-
-
-def stop_global_kernel():
-    """Stop the global shared kernel instance, if it exists"""
-    global KM, KC
-    KC.stop_channels()
-    KC = None  # type:ignore
-    if KM is None:
-        return
-    KM.shutdown_kernel(now=True)
-    KM = None  # type:ignore
-
-
-def new_kernel(argv=None):
-    """Context manager for a new kernel in a subprocess
-
-    Should only be used for tests where the kernel must not be reused.
-
-    Returns
-    -------
-    kernel_client: connected KernelClient instance
-    """
-    kwargs = {"stderr": STDOUT}
-    if argv is not None:
-        kwargs["extra_arguments"] = argv
-    return manager.run_kernel(**kwargs)
-
-
-def assemble_output(get_msg):
-    """assemble stdout/err from an execution"""
+async def assemble_output(owner: OwnerType, *, timeout=1.0):
+    """Assemble stdout/err from an execution"""
+    kc = owner[1] if isinstance(owner, tuple) else owner
     stdout = ""
     stderr = ""
-    while True:
-        msg = get_msg(timeout=1)
-        msg_type = msg["msg_type"]
-        content = msg["content"]
-        if msg_type == "status" and content["execution_state"] == "idle":
-            # idle message signals end of output
-            break
-        elif msg["msg_type"] == "stream":
-            if content["name"] == "stdout":
-                stdout += content["text"]
-            elif content["name"] == "stderr":
-                stderr += content["text"]
-            else:
-                raise KeyError("bad stream: %r" % content["name"])
-        else:
-            # other output, ignored
-            pass
+    with anyio.move_on_after(timeout):
+        while True:
+            msg = await kc.get_iopub_msg()
+            msg_type = msg["msg_type"]
+            content = msg["content"]
+            if msg_type == "status" and content["execution_state"] == "idle":
+                # idle message signals end of output
+                break
+            elif msg["msg_type"] == "stream":
+                if content["name"] == "stdout":
+                    stdout += content["text"]
+                elif content["name"] == "stderr":
+                    stderr += content["text"]
+                else:
+                    raise KeyError("bad stream: %r" % content["name"])
     return stdout, stderr
 
 
-def wait_for_idle(kc):
-    while True:
-        msg = kc.get_iopub_msg(timeout=1)
-        msg_type = msg["msg_type"]
-        content = msg["content"]
-        if msg_type == "status" and content["execution_state"] == "idle":
-            break
+async def wait_for_idle(kc: AsyncKernelClient, *, wait=1):
+    with anyio.fail_after(wait):
+        while True:
+            msg = await kc.get_iopub_msg()
+            msg_type = msg["msg_type"]
+            content = msg["content"]
+            if msg_type == "status" and content["execution_state"] == "idle":
+                break
 
 
-class TemporaryWorkingDirectory(TemporaryDirectory):
-    """
-    Creates a temporary directory and sets the cwd to that directory.
-    Automatically reverts to previous cwd upon cleanup.
-    Usage example:
+async def do_debug_request(kernel: IPythonKernel, msg: str):
+    return {}
 
-        with TemporaryWorkingDirectory() as tmpdir:
-            ...
-    """
 
-    def __enter__(self):
-        self.old_wd = os.getcwd()
-        os.chdir(self.name)
-        return super().__enter__()
+def _prep_msg(kernel: IPythonKernel, *, msg_type: str, **content: Unpack[ContentType]):
+    assert kernel.session
+    msg = kernel.session.msg(msg_type, content)  # type: ignore
+    return kernel.session.serialize(msg)
 
-    def __exit__(self, exc, value, tb):
-        os.chdir(self.old_wd)
-        return super().__exit__(exc, value, tb)
+
+async def _test_message(
+    kc,
+    kernel: tuple[IPKernelApp, AsyncKernelClient],
+    channel: Literal["shell", "control"],
+    /,
+    msg_type: str,
+    **kwargs,
+):
+    ka, kc = kc, kernel
+    kernel = ka.kernel
+    msg_list = _prep_msg(kernel, msg_type=msg_type, **kwargs)
+    await kernel.process_control_message(msg_list)
+    msg_id = msg_list
+    kc.control_channel.send()
+    return await get_reply(kc, msg_id, channel="control")
+
+
+async def shell_message(kc, kernel: tuple[IPKernelApp, AsyncKernelClient], msg_type: str, **kwargs):
+    return await _test_message(kc, kernel, "shell", msg_type=msg_type, **kwargs)
+
+
+async def test_control_message(kc, kernel: tuple[IPKernelApp, AsyncKernelClient], msg_type: str, **kwargs):
+    return await _test_message(kc, kernel, "control", msg_type=msg_type, **kwargs)
