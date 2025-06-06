@@ -308,45 +308,6 @@ class Kernel(SingletonConfigurable):
         """
         return True
 
-    async def enter_eventloop(self):
-        """enter eventloop"""
-        self.log.info("Entering eventloop %s", self.eventloop)
-        # record handle, so we can check when this changes
-        eventloop = self.eventloop
-        if eventloop is None:
-            # Do not warn if shutting down.
-            if not (hasattr(self, "shell") and self.shell.exit_now):
-                self.log.info("Exiting as there is no eventloop")
-            return
-
-        async def advance_eventloop():
-            # check if eventloop changed:
-            if self.eventloop is not eventloop:
-                self.log.info("exiting eventloop %s", eventloop)
-                return
-            self.log.debug("Advancing eventloop %s", eventloop)
-            try:
-                eventloop(self)
-            except KeyboardInterrupt:
-                # Ctrl-C shouldn't crash the kernel
-                self.log.error("KeyboardInterrupt caught in kernel")
-
-        # begin polling the eventloop
-        while self.eventloop is eventloop:
-            # flush the eventloop every so often,
-            # giving us a chance to handle messages in the meantime
-            self.log.debug("Scheduling eventloop advance")
-            await sleep(0.001)
-            await advance_eventloop()
-
-    _message_counter = Any(
-        help="""Monotonic counter of messages
-        """,
-    )
-
-    @default("_message_counter")
-    def _message_counter_default(self):
-        return itertools.count()
 
     async def shell_channel_thread_main(self):
         """Main loop for shell channel thread.
