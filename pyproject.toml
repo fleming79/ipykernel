@@ -128,6 +128,7 @@ log_cli_level =  "INFO"
 addopts = [
   "-raXs", "--durations=10", "--color=yes", "--doctest-modules",
    "--showlocals", "--strict-markers", "--strict-config",
+  "-s",
    "--ignore=ipykernel/gui/gtk3embed.py",
    "--ignore=ipykernel/gui/gtkembed.py",
    "--ignore=ipykernel/datapub.py",
