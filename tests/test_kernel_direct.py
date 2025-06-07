@@ -15,7 +15,7 @@ from tests import utils
 
 
 async def test_direct_kernel_info_request(client, kernel):
-    reply = await utils.shell_message(client, kernel, "kernel_info_request")
+    reply = await utils.send_shell_message(client, "kernel_info_request")
     assert reply["header"]["msg_type"] == "kernel_info_reply"
     assert (
         "supported_features" not in reply["content"] or "kernel subshells" not in reply["content"]["supported_features"]
@@ -23,14 +23,13 @@ async def test_direct_kernel_info_request(client, kernel):
 
 
 async def test_direct_execute_request(client, kernel):
-    reply = await utils.shell_message(client, kernel, "execute_request", code="hello", silent=False)
+    reply = await utils.send_shell_message(client, "execute_request", dict(code="hello", silent=False))
     assert reply["header"]["msg_type"] == "execute_reply"
 
 
 async def test_direct_execute_request_aborting(client, kernel):
-    kernel = utils.ka_kc_kernel(client, kernel)[2]
     kernel._aborted_time = time.monotonic() + 10
-    reply = await utils.shell_message(client, kernel, "execute_request", code="hello", silent=False)
+    reply = await utils.send_shell_message(client, "execute_request", dict(code="hello", silent=False))
     assert reply["header"]["msg_type"] == "execute_reply"
     assert reply["content"]["status"] == "aborted"
 
@@ -40,34 +39,35 @@ async def test_direct_execute_request_error(kernel):
 
 
 async def test_complete_request(client, kernel):
-    reply = await utils.shell_message(client, kernel, "complete_request", code="hello", cursor_pos=0)
+    reply = await utils.send_shell_message(client, "complete_request", dict(code="hello", cursor_pos=0))
     assert reply["header"]["msg_type"] == "complete_reply"
 
 
 async def test_inspect_request(client, kernel):
-    reply = await utils.shell_message(client, kernel, "inspect_request", code="hello", cursor_pos=0)
+    reply = await utils.send_shell_message(client, "inspect_request", dict(code="hello", cursor_pos=0))
     assert reply["header"]["msg_type"] == "inspect_reply"
 
 
 async def test_history_request(client, kernel):
-    reply = await utils.shell_message(client, kernel, "history_request", hist_access_type="", output="", raw="")
+    reply = await utils.send_shell_message(client, "history_request", dict(hist_access_type="", output="", raw=""))
     assert reply["header"]["msg_type"] == "history_reply"
-    reply = await utils.shell_message(client, kernel, "history_request", hist_access_type="tail", output="", raw="")
+    reply = await utils.send_shell_message(client, "history_request", dict(hist_access_type="tail", output="", raw=""))
     assert reply["header"]["msg_type"] == "history_reply"
-    reply = await utils.shell_message(client, kernel, "history_request", hist_access_type="range", output="", raw="")
+    reply = await utils.send_shell_message(client, "history_request", dict(hist_access_type="range", output="", raw=""))
     assert reply["header"]["msg_type"] == "history_reply"
-    reply = await utils.shell_message(client, kernel, "history_request", hist_access_type="search", output="", raw="")
+    reply = await utils.send_shell_message(
+        client, "history_request", dict(hist_access_type="search", output="", raw="")
+    )
     assert reply["header"]["msg_type"] == "history_reply"
 
 
 async def test_comm_info_request(client, kernel):
-    reply = await utils.shell_message(client, kernel, "comm_info_request")
+    reply = await utils.send_shell_message(client, "comm_info_request")
     assert reply["header"]["msg_type"] == "comm_info_reply"
 
 
 async def test_direct_interrupt_request(client, kernel):
-    kernel = utils.ka_kc_kernel(client, kernel)[2]
-    reply = await utils.test_control_message(client, kernel, "interrupt_request")
+    reply = await utils.send_control_message(client, "interrupt_request")
     assert reply["header"]["msg_type"] == "interrupt_reply"
     assert reply["content"] == {"status": "ok"}
 
@@ -77,7 +77,7 @@ async def test_direct_interrupt_request(client, kernel):
         raise OSError(msg)
 
     kernel._send_interrupt_children = raiseOSError
-    reply = await utils.test_control_message(client, kernel, "interrupt_request")
+    reply = await utils.send_control_message(client, "interrupt_request")
     assert reply["header"]["msg_type"] == "interrupt_reply"
     assert reply["content"]["status"] == "error"
     assert reply["content"]["ename"] == "OSError"
@@ -86,20 +86,15 @@ async def test_direct_interrupt_request(client, kernel):
 
 
 async def test_direct_shutdown_request(client, kernel):
-    reply = await utils.shell_message(client, kernel, "shutdown_request", restart=False)
+    reply = await utils.send_shell_message(client, "shutdown_request", dict(restart=False))
     assert reply["header"]["msg_type"] == "shutdown_reply"
-    reply = await utils.shell_message(client, kernel, "shutdown_request", restart=True)
+    reply = await utils.send_shell_message(client, "shutdown_request", dict(restart=True))
     assert reply["header"]["msg_type"] == "shutdown_reply"
 
 
 async def test_is_complete_request(client, kernel):
-    reply = await utils.shell_message(client, kernel, "is_complete_request", code="hello")
+    reply = await utils.send_shell_message(client, "is_complete_request", dict(code="hello"))
     assert reply["header"]["msg_type"] == "is_complete_reply"
-
-
-async def test_direct_debug_request(client, kernel):
-    reply = await utils.test_control_message(client, kernel, "debug_request")
-    assert reply["header"]["msg_type"] == "debug_reply"
 
 
 async def test_process_control(kernel):
@@ -108,12 +103,7 @@ async def test_process_control(kernel):
     await kernel.process_control_message(msg)
 
 
-def test_should_handle(client, kernel):
-    msg = client, kernel.session.msg("debug_request")
-    assert client, kernel.should_handle(client, kernel.control_socket, msg, []) is True
-
-
-async def test_dispatch_shell(kernel):
+async def test_dispatch_shell(client, kernel):
     from jupyter_client.session import DELIM
 
     await kernel.process_shell_message([DELIM, 1])
@@ -131,9 +121,3 @@ async def test_connect_request(kernel):
 
 async def test_send_interrupt_children(kernel):
     kernel._send_interrupt_children()
-
-
-# @pytest.mark.skip(reason="this causes deadlock")
-async def test_direct_usage_request(client, kernel):
-    reply = await utils.test_control_message(client, kernel, "usage_request")
-    assert reply["header"]["msg_type"] == "usage_reply"

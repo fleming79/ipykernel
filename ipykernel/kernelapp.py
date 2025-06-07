@@ -235,7 +235,11 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
         return port
 
     def _bind_socket(self, s, port):
-        win_in_use = hasattr(errno, "WSAEADDRINUSE")
+        try:
+            win_in_use = errno.WSAEADDRINUSE
+        except AttributeError:
+            win_in_use = None
+
         # Try up to 100 times to bind a port when in conflict to avoid
         # infinite attempts in bad setups
         max_attempts = 1 if port else 100

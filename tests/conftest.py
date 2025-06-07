@@ -1,4 +1,3 @@
-import gc
 import os
 import sys
 import warnings
@@ -13,17 +12,15 @@ from ipykernel.kernelapp import IPKernelApp
 from ipykernel.zmqshell import ZMQInteractiveShell
 
 if TYPE_CHECKING:
-    from ipykernel.kernelbase import Kernel
-
     pytest_plugins = ["anyio.pytest_plugin"]
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _garbage_collection(request):
-    gc.collect()
+# @pytest.fixture(scope="module", autouse=True)
+# def _garbage_collection(request):
+#     gc.collect()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def anyio_backend():
     return "asyncio"
 
@@ -62,13 +59,14 @@ if resource is not None:
     resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 async def app(anyio_backend):
     async with create_task_group() as tg:
         try:
             app: IPKernelApp = IPKernelApp()
             app.initialize()
-            kernel: Kernel = app.kernel
+            app.kernel_class.clear_instance()
+            kernel = app.kernel
             tg.start_soon(kernel.start)
             await kernel._main_subshell_ready.wait()
         except Exception as e:
@@ -79,16 +77,18 @@ async def app(anyio_backend):
         finally:
             kernel.stop()
             kernel.clear_instance()
+            app.close()
+            app.clear_instance()
             ZMQInteractiveShell.clear_instance()
 
 
-@pytest.fixture(scope="module")
-async def kernel(app: IPKernelApp) -> IPythonKernel:
+@pytest.fixture
+async def kernel(app: IPKernelApp, anyio_backend) -> IPythonKernel:
     return app.kernel
 
 
-@pytest.fixture(scope="module")
-async def client(app: IPKernelApp):
+@pytest.fixture
+async def client(app: IPKernelApp, anyio_backend):
     kc: AsyncKernelClient = AsyncKernelClient()
     kc.load_connection_info(app.get_connection_info())
     kc.start_channels()

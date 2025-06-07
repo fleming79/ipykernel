@@ -7,7 +7,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
-import itertools
 import logging
 import math
 import os
@@ -64,19 +63,6 @@ _AWAITABLE_MESSAGE: str = (
 )
 
 
-def _accepts_parameters(meth, param_names):
-    parameters = inspect.signature(meth).parameters
-    accepts = dict.fromkeys(param_names, False)
-
-    for param in param_names:
-        param_spec = parameters.get(param)
-        accepts[param] = (
-            param_spec and param_spec.kind in [param_spec.KEYWORD_ONLY, param_spec.POSITIONAL_OR_KEYWORD]
-        ) or any(p.kind == p.VAR_KEYWORD for p in parameters.values())
-
-    return accepts
-
-
 class Kernel(SingletonConfigurable):
     """The base kernel class."""
 
@@ -91,7 +77,7 @@ class Kernel(SingletonConfigurable):
 
     processes: dict[str, psutil.Process] = {}
 
-    session: Instance[Session | None] = Instance(Session, allow_none=True)  # type: ignore
+    session: Instance[Session] = Instance(Session)
     profile_dir = Instance("IPython.core.profiledir.ProfileDir", allow_none=True)
     shell_socket: Instance[zmq_anyio.Socket | None] = Instance(zmq_anyio.Socket, allow_none=True)
 
@@ -112,7 +98,7 @@ class Kernel(SingletonConfigurable):
     iopub_thread = Any()
     stdin_socket = Any()
 
-    _send_exec_request: Dict[dict[zmq_anyio.Socket, MemoryObjectSendStream]] = Dict()
+    _send_exec_request: Instance[dict[zmq_anyio.Socket, MemoryObjectSendStream]] = Dict()
     _main_subshell_ready = Instance(Event, ())
     asyncio_event_loop = Instance(asyncio.AbstractEventLoop, allow_none=True, read_only=True)  # type:ignore[call-overload]
     _tg_main = Instance(TaskGroup)
@@ -221,7 +207,6 @@ class Kernel(SingletonConfigurable):
     control_msg_types = [
         *msg_types,
         "debug_request",
-        "usage_request",
         "create_subshell_request",
         "delete_subshell_request",
         "list_subshell_request",
@@ -245,9 +230,6 @@ class Kernel(SingletonConfigurable):
         self.control_handlers = {}
         for msg_type in self.control_msg_types:
             self.control_handlers[msg_type] = getattr(self, msg_type)
-
-        # Storing the accepted parameters for do_execute, used in execute_request
-        self._do_exec_accepted_params = _accepts_parameters(self.do_execute, ["cell_meta", "cell_id"])
 
     async def process_control(self):
         try:
@@ -307,7 +289,6 @@ class Kernel(SingletonConfigurable):
             Base class implementation is not async.
         """
         return True
-
 
     async def shell_channel_thread_main(self):
         """Main loop for shell channel thread.
@@ -396,9 +377,7 @@ class Kernel(SingletonConfigurable):
 
     async def _execute_request_loop(self, receive_stream: MemoryObjectReceiveStream):
         async with receive_stream:
-            async for handler, (received_time, socket, idents, msg) in receive_stream:
-                self._set_parent_ident(msg, idents)
-                self._publish_status("busy", msg)
+            async for received_time, socket, idents, msg in receive_stream:
                 try:
                     if received_time < self._aborted_time:
                         self.log.info("Aborting execute_request: %s", msg["header"]["msg_id"])
@@ -417,9 +396,7 @@ class Kernel(SingletonConfigurable):
                                 ident=idents,
                             )
                         continue
-                    result = handler(socket, idents, msg)
-                    if inspect.isawaitable(result):
-                        await result
+                    await self.execute_request(socket, idents, msg)
                 except BaseException as e:
                     self.log.exception("Execute request", exc_info=e)
                 finally:
@@ -488,7 +465,7 @@ class Kernel(SingletonConfigurable):
             try:
                 if msg_type == "execute_request":
                     send_stream = self._send_exec_request[socket]
-                    await send_stream.send((handler, (time.monotonic(), socket, idents, msg)))
+                    await send_stream.send((time.monotonic(), socket, idents, msg))
                 else:
                     result = handler(socket, idents, msg)
                     if inspect.isawaitable(result):
@@ -659,22 +636,12 @@ class Kernel(SingletonConfigurable):
 
     async def execute_request(self, socket, ident, parent):
         """handle an execute_request"""
-        if not self.session:
-            return
-        try:
-            content = parent["content"]
-            code = content["code"]
-            silent = content.get("silent", False)
-            store_history = content.get("store_history", not silent)
-            user_expressions = content.get("user_expressions", {})
-            allow_stdin = content.get("allow_stdin", False)
-            cell_meta = parent.get("metadata", {})
-            cell_id = cell_meta.get("cellId")
-        except Exception:
-            self.log.error("Got bad msg from parent: %s", parent)
-            return
+        content = parent["content"]
+        silent = content["silent"]
+        stop_on_error = content.pop("stop_on_error", True)
 
-        stop_on_error = content.get("stop_on_error", True)
+        self._set_parent_ident(parent, ident)
+        self._publish_status("busy", parent)
 
         # Re-broadcast our input for the benefit of listening clients, and
         # start computing output
@@ -683,36 +650,12 @@ class Kernel(SingletonConfigurable):
             self.session.send(
                 self.iopub_socket,
                 "execute_input",
-                {"code": code, "execution_count": self.execution_count},
+                {"code": content["code"], "execution_count": self.execution_count},
                 parent=parent,
                 ident=self._topic("execute_input"),
             )
-
-        # Arguments based on the do_execute signature
-        do_execute_args = {
-            "code": code,
-            "silent": silent,
-            "store_history": store_history,
-            "user_expressions": user_expressions,
-            "allow_stdin": allow_stdin,
-        }
-
-        if self._do_exec_accepted_params["cell_meta"]:
-            do_execute_args["cell_meta"] = cell_meta
-        if self._do_exec_accepted_params["cell_id"]:
-            do_execute_args["cell_id"] = cell_id
-
         # Call do_execute with the appropriate arguments
-        reply_content = self.do_execute(**do_execute_args)
-
-        if inspect.isawaitable(reply_content):
-            reply_content = await reply_content
-        else:
-            warnings.warn(
-                _AWAITABLE_MESSAGE.format(func_name="do_execute", target=self.do_execute),
-                PendingDeprecationWarning,
-                stacklevel=1,
-            )
+        reply_content = await self.do_execute(**content)
 
         # Flush output before sending the reply.
         if sys.stdout is not None:
@@ -726,13 +669,7 @@ class Kernel(SingletonConfigurable):
             time.sleep(self._execute_sleep)
 
         # Send the reply.
-        reply_msg = self.session.send(
-            socket,
-            "execute_reply",
-            content=reply_content,
-            parent=parent,
-            ident=ident,
-        )
+        reply_msg = self.session.send(socket, "execute_reply", content=reply_content, parent=parent, ident=ident)
 
         self.log.debug("%s", reply_msg)
 
@@ -749,9 +686,7 @@ class Kernel(SingletonConfigurable):
         store_history=True,
         user_expressions=None,
         allow_stdin=False,
-        *,
-        cell_meta=None,
-        cell_id=None,
+        stop_on_error=True,
     ):
         """Execute user code. Must be overridden by subclasses."""
         raise NotImplementedError
@@ -775,7 +710,7 @@ class Kernel(SingletonConfigurable):
             )
         self.session.send(socket, "complete_reply", matches, parent, ident)
 
-    def do_complete(self, code, cursor_pos):
+    async def do_complete(self, code, cursor_pos):
         """Override in subclasses to find completions."""
         return {
             "matches": [],
@@ -790,25 +725,16 @@ class Kernel(SingletonConfigurable):
         if not self.session:
             return
         content = parent["content"]
-
-        reply_content = self.do_inspect(
+        reply_content = await self.do_inspect(
             content["code"],
             content["cursor_pos"],
             content.get("detail_level", 0),
             set(content.get("omit_sections", [])),
         )
-        if inspect.isawaitable(reply_content):
-            reply_content = await reply_content
-        else:
-            warnings.warn(
-                _AWAITABLE_MESSAGE.format(func_name="do_inspect", target=self.do_inspect),
-                PendingDeprecationWarning,
-                stacklevel=1,
-            )
         msg = self.session.send(socket, "inspect_reply", reply_content, parent, ident)
         self.log.debug("%s", msg)
 
-    def do_inspect(self, code, cursor_pos, detail_level=0, omit_sections=()):
+    async def do_inspect(self, code, cursor_pos, detail_level=0, omit_sections=()):
         """Override in subclasses to allow introspection."""
         return {"status": "ok", "data": {}, "metadata": {}, "found": False}
 
@@ -817,20 +743,11 @@ class Kernel(SingletonConfigurable):
         if not self.session:
             return
         content = parent["content"]
-
-        reply_content = self.do_history(**content)
-        if inspect.isawaitable(reply_content):
-            reply_content = await reply_content
-        else:
-            warnings.warn(
-                _AWAITABLE_MESSAGE.format(func_name="do_history", target=self.do_history),
-                PendingDeprecationWarning,
-                stacklevel=1,
-            )
+        reply_content = await self.do_history(**content)
         msg = self.session.send(socket, "history_reply", reply_content, parent, ident)
         self.log.debug("%s", msg)
 
-    def do_history(
+    async def do_history(
         self,
         hist_access_type,
         output,
@@ -974,19 +891,11 @@ class Kernel(SingletonConfigurable):
         content = parent["content"]
         code = content["code"]
 
-        reply_content = self.do_is_complete(code)
-        if inspect.isawaitable(reply_content):
-            reply_content = await reply_content
-        else:
-            warnings.warn(
-                _AWAITABLE_MESSAGE.format(func_name="do_is_complete", target=self.do_is_complete),
-                PendingDeprecationWarning,
-                stacklevel=1,
-            )
+        reply_content = await self.do_is_complete(code)
         reply_msg = self.session.send(socket, "is_complete_reply", reply_content, parent, ident)
         self.log.debug("%s", reply_msg)
 
-    def do_is_complete(self, code):
+    async def do_is_complete(self, code):
         """Override in subclasses to find completions."""
         return {"status": "unknown"}
 
@@ -1005,50 +914,6 @@ class Kernel(SingletonConfigurable):
                 stacklevel=1,
             )
         reply_msg = self.session.send(socket, "debug_reply", reply_content, parent, ident)
-        self.log.debug("%s", reply_msg)
-
-    def get_process_metric_value(self, process, name, attribute=None):
-        """Get the process metric value."""
-        try:
-            metric_value = getattr(process, name)()
-            if attribute is not None:  # ... a named tuple
-                return getattr(metric_value, attribute)
-            # ... or a number
-            return metric_value
-        # Avoid littering logs with stack traces
-        # complaining about dead processes
-        except BaseException:
-            return 0
-
-    async def usage_request(self, socket, ident, parent):
-        """Handle a usage request."""
-        if not self.session:
-            return
-        reply_content = {"hostname": socket.gethostname(), "pid": os.getpid()}
-        current_process = psutil.Process()
-        all_processes = [current_process, *current_process.children(recursive=True)]
-        # Ensure 1) self.processes is updated to only current subprocesses
-        # and 2) we reuse processes when possible (needed for accurate CPU)
-        self.processes = {
-            process.pid: self.processes.get(process.pid, process)  # type:ignore[misc,call-overload]
-            for process in all_processes
-        }
-        reply_content["kernel_cpu"] = sum([
-            self.get_process_metric_value(process, "cpu_percent", None) for process in self.processes.values()
-        ])
-        mem_info_type = "pss" if hasattr(current_process.memory_full_info(), "pss") else "rss"
-        reply_content["kernel_memory"] = sum([
-            self.get_process_metric_value(process, "memory_full_info", mem_info_type)
-            for process in self.processes.values()
-        ])
-        cpu_percent = psutil.cpu_percent()
-        # https://psutil.readthedocs.io/en/latest/index.html?highlight=cpu#psutil.cpu_percent
-        # The first time cpu_percent is called it will return a meaningless 0.0 value which you are supposed to ignore.
-        if cpu_percent is not None and cpu_percent != 0.0:  # type:ignore[redundant-expr]
-            reply_content["host_cpu_percent"] = cpu_percent
-        reply_content["cpu_count"] = psutil.cpu_count(logical=True)
-        reply_content["host_virtual_memory"] = dict(psutil.virtual_memory()._asdict())
-        reply_msg = self.session.send(socket, "usage_reply", reply_content, parent, ident)
         self.log.debug("%s", reply_msg)
 
     async def do_debug_request(self, msg):

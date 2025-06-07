@@ -309,7 +309,7 @@ class KernelMagics(Magics):
         filename = str(Path(filename).resolve())
 
         payload = {"source": "edit_magic", "filename": filename, "line_number": lineno}
-        assert self.shell is not None
+
         self.shell.payload_manager.write_payload(payload)
 
     # A few magics that are adapted to the specifics of using pexpect and a
@@ -318,7 +318,7 @@ class KernelMagics(Magics):
     @line_magic
     def clear(self, arg_s):
         """Clear the terminal."""
-        assert self.shell is not None
+
         if os.name == "posix":
             self.shell.system("clear")
         else:
@@ -340,7 +340,6 @@ class KernelMagics(Magics):
             raise UsageError(msg)
 
         if arg_s.endswith(".py"):
-            assert self.shell is not None
             cont = self.shell.pycolorize(openpy.read_py_file(arg_s, skip_encoding_cookie=False))
         else:
             with open(arg_s) as fid:
@@ -355,7 +354,7 @@ class KernelMagics(Magics):
         @line_magic
         def man(self, arg_s):
             """Find the man page for the given command and display in pager."""
-            assert self.shell is not None
+
             page.page(self.shell.getoutput("man %s | col -b" % arg_s, split=False))
 
     @line_magic

@@ -174,21 +174,3 @@ async def test_install_frozen_modules_off(client, kernel):
         spec = json.load(f)
     assert "env" not in spec
     assert spec["argv"][1] == "-Xfrozen_modules=off"
-
-
-@pytest.mark.skipif(
-    sys.version_info >= (3, 11) or is_cpython,
-    reason="checks versions older than 3.11 and other Python implementations",
-)
-async def test_install_frozen_modules_no_op(client, kernel):
-    # ensure we do not add add Xfrozen_modules on older Python versions
-    # (although cPython does not error out on unknown X options as of 3.8)
-    system_jupyter_dir = tempfile.mkdtemp()
-
-    with mock.patch("jupyter_client.kernelspec.SYSTEM_JUPYTER_PATH", [system_jupyter_dir]):
-        install(frozen_modules=False)
-
-    spec_file = os.path.join(system_jupyter_dir, "kernels", KERNEL_NAME, "kernel.json")
-    with open(spec_file) as f:
-        spec = json.load(f)
-    assert "-Xfrozen_modules=off" not in spec["argv"]

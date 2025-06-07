@@ -17,19 +17,17 @@ import zmq_anyio
 from anyio import TASK_STATUS_IGNORED, create_task_group, to_thread
 from comm.base_comm import CommManager
 from IPython.core import release
-from IPython.utils.tokenutil import line_at_cursor, token_at_cursor
+from IPython.utils.tokenutil import token_at_cursor
 from traitlets import Any, Bool, Dict, Instance, List, Type, default, observe
 from typing_extensions import override
 
 from ipykernel.compiler import XCachingCompiler
 from ipykernel.iostream import OutStream
 from ipykernel.kernelbase import Kernel as KernelBase
-from ipykernel.kernelbase import _accepts_parameters
 from ipykernel.zmqshell import ZMQInteractiveShell
 
 if TYPE_CHECKING:
     from anyio.abc import TaskStatus
-    from IPython.core.payload import PayloadManager
 
     from ipykernel.debugger import Debugger
 
@@ -104,13 +102,16 @@ class IPythonKernel(KernelBase):
             )
 
         # Initialize the InteractiveShell subclass
-        self.shell = self.shell_class.instance(
-            parent=self,
-            profile_dir=self.profile_dir,
-            user_module=self.user_module,
-            user_ns=self.user_ns,
-            kernel=self,
-            compiler_class=self.compiler_class,
+        self.set_trait(
+            "shell",
+            self.shell_class.instance(
+                parent=self,
+                profile_dir=self.profile_dir,
+                user_module=self.user_module,
+                user_ns=self.user_ns,
+                kernel=self,
+                compiler_class=self.compiler_class,
+            ),
         )
         self.shell.displayhook.session = self.session
 
@@ -279,101 +280,56 @@ class IPythonKernel(KernelBase):
     @override
     async def do_execute(
         self,
-        code,
-        silent,
+        code: str,
+        silent: bool,
         store_history=True,
-        user_expressions=None,
+        user_expressions: dict | None = None,
         allow_stdin=False,
-        *,
-        cell_meta=None,
-        cell_id=None,
     ):
         """Handle code execution."""
-        shell = self.shell  # we'll need this a lot here
-        assert shell is not None
+        # ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute
+
+        if not (shell := self.shell):
+            msg = "shell is missing!"
+            raise RuntimeError(msg)
 
         self._forward_input(allow_stdin)
 
         reply_content: dict[str, t.Any] = {}
-        if hasattr(shell, "run_cell_async") and hasattr(shell, "should_run_async"):
-            run_cell = shell.run_cell_async
-            should_run_async = shell.should_run_async
-            with_cell_id = _accepts_parameters(run_cell, ["cell_id"])
-        else:
-            should_run_async = lambda cell: False  # noqa: ARG005, E731
-            # older IPython,
-            # use blocking run_cell and wrap it in coroutine
-
-            async def run_cell(*args, **kwargs):
-                return shell.run_cell(*args, **kwargs)
-
-            with_cell_id = _accepts_parameters(shell.run_cell, ["cell_id"])
         try:
-            # default case: runner is asyncio and asyncio is already running
-            # TODO: this should check every case for "are we inside the runner",
-            # not just asyncio
-            preprocessing_exc_tuple = None
-            try:
-                transformed_cell = shell.transform_cell(code)
-            except Exception:
-                transformed_cell = code
-                preprocessing_exc_tuple = sys.exc_info()
 
-            kwargs = dict(
-                store_history=store_history,
-                silent=silent,
-            )
-            if with_cell_id and with_cell_id["cell_id"]:
-                kwargs.update(cell_id=cell_id)
+            @dataclass
+            class Execution:
+                interrupt: bool = False
+                result: t.Any = None
 
-            if should_run_async(
-                code,
-                transformed_cell=transformed_cell,
-                preprocessing_exc_tuple=preprocessing_exc_tuple,
-            ):
-                kwargs.update(
-                    transformed_cell=transformed_cell,
-                    preprocessing_exc_tuple=preprocessing_exc_tuple,
+            async def run(execution: Execution) -> None:
+                execution.result = await shell.run_cell_async(
+                    raw_cell=code,
+                    store_history=store_history,
+                    silent=silent,
+                    transformed_cell=shell.transform_cell(code),
                 )
+                if not execution.interrupt:
+                    self.shell_interrupt.put(False)
 
-                coro = run_cell(code, **kwargs)
+            res = None
+            try:
+                async with create_task_group() as tg:
+                    execution = Execution()
+                    self.shell_is_awaiting = True
+                    tg.start_soon(run, execution)
+                    execution.interrupt = await to_thread.run_sync(self.shell_interrupt.get)
+                    self.shell_is_awaiting = False
+                    if execution.interrupt:
+                        tg.cancel_scope.cancel()
 
-                @dataclass
-                class Execution:
-                    interrupt: bool = False
-                    result: t.Any = None
+                    res = execution.result
+            finally:
+                shell.events.trigger("post_execute")
+                if not silent:
+                    shell.events.trigger("post_run_cell", res)
 
-                async def run(execution: Execution) -> None:
-                    execution.result = await coro
-                    if not execution.interrupt:
-                        self.shell_interrupt.put(False)
-
-                res = None
-                try:
-                    async with create_task_group() as tg:
-                        execution = Execution()
-                        self.shell_is_awaiting = True
-                        tg.start_soon(run, execution)
-                        execution.interrupt = await to_thread.run_sync(self.shell_interrupt.get)
-                        self.shell_is_awaiting = False
-                        if execution.interrupt:
-                            tg.cancel_scope.cancel()
-
-                        res = execution.result
-                finally:
-                    shell.events.trigger("post_execute")
-                    if not silent:
-                        shell.events.trigger("post_run_cell", res)
-
-            else:
-                # runner isn't already running,
-                # make synchronous call,
-                # letting shell dispatch to loop runners
-                self.shell_is_blocking = True
-                try:
-                    res = shell.run_cell(code, **kwargs)
-                finally:
-                    self.shell_is_blocking = False
         finally:
             self._restore_input()
 
@@ -420,28 +376,6 @@ class IPythonKernel(KernelBase):
 
         return reply_content
 
-    def do_complete(self, code, cursor_pos):
-        """Handle code completion."""
-        if _use_experimental_60_completion and self.use_experimental_completions:
-            return self._experimental_do_complete(code, cursor_pos)
-
-        # FIXME: IPython completers currently assume single line,
-        # but completion messages give multi-line context
-        # For now, extract line from cell, based on cursor_pos:
-        if cursor_pos is None:
-            cursor_pos = len(code)
-        line, offset = line_at_cursor(code, cursor_pos)
-        line_cursor = cursor_pos - offset
-        assert self.shell is not None
-        txt, matches = self.shell.complete("", line, line_cursor)
-        return {
-            "matches": matches,
-            "cursor_end": cursor_pos,
-            "cursor_start": cursor_pos - len(txt),
-            "metadata": {},
-            "status": "ok",
-        }
-
     async def do_debug_request(self, msg):
         """Handle a debug request."""
         from ipykernel.debugger import _is_debugpy_available
@@ -450,14 +384,13 @@ class IPythonKernel(KernelBase):
             return await self.debugger.process_request(msg)
         return None
 
-    def _experimental_do_complete(self, code, cursor_pos):
+    async def do_complete(self, code, cursor_pos):
         """
-        Experimental completions from IPython, using Jedi.
+        Completions from IPython, using Jedi.
         """
         if cursor_pos is None:
             cursor_pos = len(code)
         with _provisionalcompleter():
-            assert self.shell is not None
             raw_completions = self.shell.Completer.completions(code, cursor_pos)
             completions = list(_rectify_completions(code, raw_completions))
 
@@ -488,14 +421,13 @@ class IPythonKernel(KernelBase):
             "status": "ok",
         }
 
-    def do_inspect(self, code, cursor_pos, detail_level=0, omit_sections=()):
+    async def do_inspect(self, code, cursor_pos, detail_level=0, omit_sections=()):
         """Handle code inspection."""
         name = token_at_cursor(code, cursor_pos)
 
         reply_content: dict[str, t.Any] = {"status": "ok"}
         reply_content["data"] = {}
         reply_content["metadata"] = {}
-        assert self.shell is not None
         try:
             bundle = self.shell.object_inspect_mime(name, detail_level=detail_level, omit_sections=omit_sections)
             reply_content["data"].update(bundle)
@@ -507,7 +439,7 @@ class IPythonKernel(KernelBase):
 
         return reply_content
 
-    def do_history(
+    async def do_history(
         self,
         hist_access_type,
         output,
@@ -520,7 +452,7 @@ class IPythonKernel(KernelBase):
         unique=False,
     ):
         """Handle code history."""
-        assert self.shell is not None
+
         history_manager = self.shell.history_manager
         assert history_manager
         if hist_access_type == "tail":
@@ -539,18 +471,18 @@ class IPythonKernel(KernelBase):
             "history": list(hist),
         }
 
-    def do_shutdown(self, restart):
+    async def do_shutdown(self, restart):
         """Handle kernel shutdown."""
         if self.shell:
             self.shell.exit_now = True
         return {"status": "ok", "restart": restart}
 
-    def do_is_complete(self, code):
+    async def do_is_complete(self, code):
         """Handle an is_complete request."""
         transformer_manager = getattr(self.shell, "input_transformer_manager", None)
         if transformer_manager is None:
             # input_splitter attribute is deprecated
-            assert self.shell is not None
+
             transformer_manager = self.shell.input_splitter
         status, indent_spaces = transformer_manager.check_complete(code)
         r = {"status": status}
