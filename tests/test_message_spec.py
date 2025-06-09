@@ -12,7 +12,7 @@ from tests import utils
 
 
 async def clear_pub_message(client):
-    "Collect pubio messages"
+    "Ensure there are no further pubio messages waiting."
     await utils.assemble_output(client, timeout=0.1)
 
 
@@ -76,13 +76,15 @@ async def test_execute_inc(client):
 async def test_execute_stop_on_error(client):
     """execute request should not abort execution queue with stop_on_error False"""
 
-    bad_code = "\n".join([
-        # sleep to ensure subsequent message is waiting in the queue to be aborted
-        # async sleep to ensure coroutines are processing while this happens
-        "import anyio",
-        "await anyio.sleep(1)",
-        "raise ValueError()",
-    ])
+    bad_code = "\n".join(
+        [
+            # sleep to ensure subsequent message is waiting in the queue to be aborted
+            # async sleep to ensure coroutines are processing while this happens
+            "import anyio",
+            "await anyio.sleep(1)",
+            "raise ValueError()",
+        ]
+    )
 
     msg_id_bad_code = client.execute(bad_code)
     msg_id_1 = client.execute('print("Hello")')
@@ -287,7 +289,6 @@ async def test_history_tail(client):
     assert len(content["history"]) == 1
 
 
-
 async def test_history_search(client):
     await utils.execute(client, code="x=1", store_history=True)
 
@@ -302,6 +303,7 @@ async def test_history_search(client):
 
 
 async def test_stream(client):
+    await clear_pub_message(client)
     client.execute("print('hi')")
     stdout, stderr = await utils.assemble_output(client)
     assert stdout == "hi\n"

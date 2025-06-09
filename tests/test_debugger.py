@@ -27,11 +27,6 @@ if True:
     pytest.skip("skipping tests until debug is implemented", allow_module_level=True)
 
 
-@pytest.fixture
-def anyio_backend():
-    return "asyncio"
-
-
 async def wait_for_debug_request(
     kernel: IPKernelApp, client: AsyncKernelClient, command, arguments: dict | None = None, full_reply=False
 ):

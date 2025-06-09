@@ -112,14 +112,16 @@ async def test_smoke_faulthandler(client, kernel):
     pytest.importorskip("faulthandler", reason="this test needs faulthandler")
 
     # Note: faulthandler.register is not available on windows.
-    code = "\n".join([
-        "import sys",
-        "import faulthandler",
-        "import signal",
-        "faulthandler.enable()",
-        'if not sys.platform.startswith("win32"):',
-        "    faulthandler.register(signal.SIGTERM)",
-    ])
+    code = "\n".join(
+        [
+            "import sys",
+            "import faulthandler",
+            "import signal",
+            "faulthandler.enable()",
+            'if not sys.platform.startswith("win32"):',
+            "    faulthandler.register(signal.SIGTERM)",
+        ]
+    )
     _, reply = await execute(client, code)
     assert reply["status"] == "ok", reply.get("traceback", "")
 

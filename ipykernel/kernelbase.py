@@ -21,6 +21,8 @@ from datetime import datetime
 from functools import partial
 from signal import SIGINT, SIGTERM, Signals
 
+import anyio
+
 if sys.platform != "win32":
     from signal import SIGKILL
 else:
@@ -39,8 +41,8 @@ from typing import TYPE_CHECKING
 import psutil
 import zmq
 import zmq_anyio
-from anyio import TASK_STATUS_IGNORED, Event, create_memory_object_stream, create_task_group, sleep, to_thread
-from anyio.abc import TaskGroup, TaskStatus
+from anyio import Event, create_memory_object_stream, create_task_group, sleep, to_thread
+from anyio.abc import TaskGroup
 from anyio.from_thread import BlockingPortal
 from IPython.core.error import StdinNotImplementedError
 from jupyter_client.session import Session
@@ -66,7 +68,7 @@ _AWAITABLE_MESSAGE: str = (
 class Kernel(SingletonConfigurable):
     """The base kernel class."""
 
-    _aborted_time: float = time.monotonic()
+    _stop_on_error_time: float = time.monotonic()
 
     # ---------------------------------------------------------------------------
     # Kernel interface
@@ -79,7 +81,7 @@ class Kernel(SingletonConfigurable):
 
     session: Instance[Session] = Instance(Session)
     profile_dir = Instance("IPython.core.profiledir.ProfileDir", allow_none=True)
-    shell_socket: Instance[zmq_anyio.Socket | None] = Instance(zmq_anyio.Socket, allow_none=True)
+    shell_socket: Instance[zmq_anyio.Socket] = Instance(zmq_anyio.Socket)
 
     implementation: str
     implementation_version: str
@@ -87,7 +89,7 @@ class Kernel(SingletonConfigurable):
 
     _is_test = Bool(False)
 
-    control_socket = Instance(zmq_anyio.Socket, allow_none=True)
+    control_socket = Instance(zmq_anyio.Socket)
     control_tasks: t.Any = List()
 
     debug_shell_socket = Any()
@@ -98,7 +100,7 @@ class Kernel(SingletonConfigurable):
     iopub_thread = Any()
     stdin_socket = Any()
 
-    _send_exec_request: Instance[dict[zmq_anyio.Socket, MemoryObjectSendStream]] = Dict()
+    _send_exec_request: Dict[zmq_anyio.Socket, MemoryObjectSendStream] = Dict()
     _main_subshell_ready = Instance(Event, ())
     asyncio_event_loop = Instance(asyncio.AbstractEventLoop, allow_none=True, read_only=True)  # type:ignore[call-overload]
     _tg_main = Instance(TaskGroup)
@@ -197,7 +199,6 @@ class Kernel(SingletonConfigurable):
         "comm_info_request",
         "kernel_info_request",
         "connect_request",
-        "shutdown_request",
         "is_complete_request",
         "interrupt_request",
     ]
@@ -206,6 +207,7 @@ class Kernel(SingletonConfigurable):
     # and some of its own
     control_msg_types = [
         *msg_types,
+        "shutdown_request",
         "debug_request",
         "create_subshell_request",
         "delete_subshell_request",
@@ -371,6 +373,8 @@ class Kernel(SingletonConfigurable):
                 if not self.shell_stop.is_set():
                     raise
             finally:
+                # Kernel shutdown
+                await self._at_shutdown()
                 self._send_exec_request.pop(socket, None)
                 await send_stream.aclose()
                 await receive_stream.aclose()
@@ -379,7 +383,7 @@ class Kernel(SingletonConfigurable):
         async with receive_stream:
             async for received_time, socket, idents, msg in receive_stream:
                 try:
-                    if received_time < self._aborted_time:
+                    if received_time < self._stop_on_error_time:
                         self.log.info("Aborting execute_request: %s", msg["header"]["msg_id"])
                         if session := self.session:
                             session.send(
@@ -455,7 +459,7 @@ class Kernel(SingletonConfigurable):
 
         handler = self.shell_handlers.get(msg_type)
         if handler is None:
-            self.log.warning("Unknown message type: %r", msg_type)
+            self.log.error("Unknown message type: %r", msg_type)
         else:
             self.log.debug("%s: %s", msg_type, msg)
             try:
@@ -510,33 +514,33 @@ class Kernel(SingletonConfigurable):
             self.log.exception("portal call failed")
             raise
 
-    async def start(self, *, task_status: TaskStatus = TASK_STATUS_IGNORED) -> None:
+    async def start(self, tg: anyio.abc.TaskGroup) -> None:
         """Process messages on shell and control channels"""
-        async with create_task_group() as tg:
-            self.control_stop = threading.Event()
-            if not self._is_test and self.control_socket is not None:
-                if self.control_thread:
-                    self.control_thread.start_soon(self.control_main)
-                    self.control_thread.start()
-                else:
-                    tg.start_soon(self.control_main)
+        self._tg_main = tg
+        self.control_stop = threading.Event()
+        if not self._is_test and self.control_socket is not None:
+            if self.control_thread:
+                self.control_thread.start_soon(self.control_main)
+                self.control_thread.start()
+            else:
+                tg.start_soon(self.control_main)
 
-            self.shell_interrupt: queue.Queue[bool] = queue.Queue()
-            self.shell_is_awaiting = False
-            self.shell_is_blocking = False
-            self.shell_stop = threading.Event()
+        self.shell_interrupt: queue.Queue[bool] = queue.Queue()
+        self.shell_is_awaiting = False
+        self.shell_is_blocking = False
+        self.shell_stop = threading.Event()
 
-            tg.start_soon(self.shell_main, None)
-            await self._main_subshell_ready.wait()
-            if self.shell_channel_thread:
-                # Assign tasks to and start shell channel thread.
-                manager = self.shell_channel_thread.manager
-                self.shell_channel_thread.start_soon(self.shell_channel_thread_main)
-                self.shell_channel_thread.start_soon(
-                    partial(manager.listen_from_control, self.shell_main, self.shell_channel_thread)
-                )
-                self.shell_channel_thread.start_soon(manager.listen_from_subshells)
-                self.shell_channel_thread.start()
+        tg.start_soon(self.shell_main, None)
+        await self._main_subshell_ready.wait()
+        if self.shell_channel_thread:
+            # Assign tasks to and start shell channel thread.
+            manager = self.shell_channel_thread.manager
+            self.shell_channel_thread.start_soon(self.shell_channel_thread_main)
+            self.shell_channel_thread.start_soon(
+                partial(manager.listen_from_control, self.shell_main, self.shell_channel_thread)
+            )
+            self.shell_channel_thread.start_soon(manager.listen_from_subshells)
+            self.shell_channel_thread.start()
 
     def stop(self):
         self.shell_stop.set()
@@ -674,10 +678,11 @@ class Kernel(SingletonConfigurable):
         self.log.debug("%s", reply_msg)
 
         assert reply_msg is not None
-        if not silent and reply_msg["content"]["status"] == "error" and stop_on_error:
-            # execute requests will be aborted if the received time is prior to the _aborted_time
-            self._aborted_time = time.monotonic()
-            self.log.info("Aborting queue")
+        if reply_msg["content"]["status"] == "error":
+            self.log.exception("Execution failed %s", reply_msg)
+            if not silent and stop_on_error:
+                self._stop_on_error_time = time.monotonic()
+                self.log.info("Rejecting non-silent execute request")
 
     async def do_execute(
         self,
@@ -810,13 +815,13 @@ class Kernel(SingletonConfigurable):
         # Should this be moved to ipkernel?
         if hasattr(self, "comm_manager"):
             comms = {
-                k: dict(target_name=v.target_name)
+                k: {"target_name": v.target_name}
                 for (k, v) in self.comm_manager.comms.items()
                 if v.target_name == target_name or target_name is None
             }
         else:
             comms = {}
-        reply_content = dict(comms=comms, status="ok")
+        reply_content = {"comms": comms, "status": "ok"}
         msg = self.session.send(socket, "comm_info_reply", reply_content, parent, ident)
         self.log.debug("%s", msg)
 
@@ -859,26 +864,11 @@ class Kernel(SingletonConfigurable):
 
     async def shutdown_request(self, socket, ident, parent):
         """Handle a shutdown request."""
-        if not self.session:
-            return
-        content = self.do_shutdown(parent["content"]["restart"])
-        if inspect.isawaitable(content):
-            content = await content
-        else:
-            warnings.warn(
-                _AWAITABLE_MESSAGE.format(func_name="do_shutdown", target=self.do_shutdown),
-                PendingDeprecationWarning,
-                stacklevel=1,
-            )
+        content = await self.do_shutdown(parent["content"]["restart"])
         self.session.send(socket, "shutdown_reply", content, parent, ident=ident)
-        # same content, but different msg_id for broadcasting on IOPub
-        self._shutdown_message = self.session.msg("shutdown_reply", content, parent)
-
-        await self._at_shutdown()
-
         self.stop()
 
-    def do_shutdown(self, restart):
+    async def do_shutdown(self, restart):
         """Override in subclasses to do things when the frontend shuts down the
         kernel.
         """

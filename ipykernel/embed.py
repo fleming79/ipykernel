@@ -14,7 +14,7 @@ from ipykernel.kernelapp import IPKernelApp
 # -----------------------------------------------------------------------------
 
 
-def embed_kernel(module=None, local_ns=None, **kwargs):
+async def embed_kernel(taskgroup, *, module=None, local_ns=None, **kwargs):
     """Embed and start an IPython kernel in a given scope.
 
     Parameters

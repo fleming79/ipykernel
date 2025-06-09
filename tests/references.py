@@ -1,5 +1,3 @@
-
-
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
 
@@ -13,7 +11,8 @@ import sys
 from packaging.version import Version as PackingVersion
 from traitlets import Bool, Dict, Enum, HasTraits, Integer, List, TraitError, Unicode, observe
 
-__all__ = ['Reference', 'references']
+__all__ = ["Reference", "references"]
+
 
 class Reference(HasTraits):
     """
@@ -263,4 +262,3 @@ references = {
     "delete_subshell_reply": DeleteSubshellReply(),
     "list_subshell_reply": ListSubshellReply(),
 }
-

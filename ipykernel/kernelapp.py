@@ -12,20 +12,21 @@ import signal
 import sys
 import traceback
 import typing as t
+from contextlib import asynccontextmanager
 from functools import partial
 from io import FileIO, TextIOWrapper
 from logging import StreamHandler
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
+import anyio
+import anyio.to_thread
 import zmq
 import zmq_anyio
-from anyio import create_task_group, run
 from IPython.core.application import (
     BaseIPythonApplication,
     base_aliases,
-    base_flags,
-    catch_config_error,  # type: ignore[import]
+    base_flags,  # type: ignore[import]
 )
 from IPython.core.profiledir import ProfileDir
 from IPython.core.shellapp import InteractiveShellApp, shell_aliases, shell_flags
@@ -60,26 +61,30 @@ from ipykernel.zmqshell import ZMQInteractiveShell
 # -----------------------------------------------------------------------------
 
 kernel_aliases = dict(base_aliases)
-kernel_aliases.update({
-    "ip": "IPKernelApp.ip",
-    "hb": "IPKernelApp.hb_port",
-    "shell": "IPKernelApp.shell_port",
-    "iopub": "IPKernelApp.iopub_port",
-    "stdin": "IPKernelApp.stdin_port",
-    "control": "IPKernelApp.control_port",
-    "f": "IPKernelApp.connection_file",
-    "transport": "IPKernelApp.transport",
-})
+kernel_aliases.update(
+    {
+        "ip": "IPKernelApp.ip",
+        "hb": "IPKernelApp.hb_port",
+        "shell": "IPKernelApp.shell_port",
+        "iopub": "IPKernelApp.iopub_port",
+        "stdin": "IPKernelApp.stdin_port",
+        "control": "IPKernelApp.control_port",
+        "f": "IPKernelApp.connection_file",
+        "transport": "IPKernelApp.transport",
+    }
+)
 
 kernel_flags = dict(base_flags)
-kernel_flags.update({
-    "no-stdout": ({"IPKernelApp": {"no_stdout": True}}, "redirect stdout to the null device"),
-    "no-stderr": ({"IPKernelApp": {"no_stderr": True}}, "redirect stderr to the null device"),
-    "trio-loop": (
-        {"InteractiveShell": {"trio_loop": False}},
-        "Enable Trio as main event loop.",
-    ),
-})
+kernel_flags.update(
+    {
+        "no-stdout": ({"IPKernelApp": {"no_stdout": True}}, "redirect stdout to the null device"),
+        "no-stderr": ({"IPKernelApp": {"no_stderr": True}}, "redirect stderr to the null device"),
+        "trio-loop": (
+            {"InteractiveShell": {"trio_loop": False}},
+            "Enable Trio as main event loop.",
+        ),
+    }
+)
 
 # inherit flags&aliases for any IPython shell apps
 kernel_aliases.update(shell_aliases)
@@ -113,7 +118,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
     classes = [IPythonKernel, ZMQInteractiveShell, ProfileDir, Session]
     # the kernel class, as an importstring
     kernel_class = Type(
-        cast(type[IPythonKernel], "ipykernel.ipkernel.IPythonKernel"),
+        cast("type[IPythonKernel]", "ipykernel.ipkernel.IPythonKernel"),
         klass=IPythonKernel,
         help="""The Kernel subclass to be used.
 
@@ -175,7 +180,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
     # streams, etc.
     no_stdout = Bool(False, help="redirect stdout to the null device").tag(config=True)
     no_stderr = Bool(False, help="redirect stderr to the null device").tag(config=True)
-    trio_loop = Bool(False, help="Set main event loop.").tag(config=True)
+
     quiet = Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
     outstream_class = DottedObjectName(
         "ipykernel.iostream.OutStream",
@@ -254,7 +259,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
                     raise
         return None
 
-    def write_connection_file(self, **kwargs: t.Any) -> None:
+    async def write_connection_file(self, **kwargs: t.Any) -> None:
         """write connection info to JSON file"""
         cf = self.abs_connection_file
         connection_info = {
@@ -266,6 +271,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
             "hb_port": self.hb_port,
             "iopub_port": self.iopub_port,
             "control_port": self.control_port,
+            "kernel_name": self.kernel_name,
         }
         if Path(cf).exists():
             # If the file exists, merge our info into it. For example, if the
@@ -293,10 +299,10 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
 
         self.cleanup_ipc_files()
 
-    def init_connection_file(self):
+    async def init_connection_file(self):
         """Initialize our connection file."""
         if not self.connection_file:
-            self.connection_file = "kernel-%s.json" % os.getpid()
+            self.connection_file = f"kernel-{os.getpid()}.json"
         try:
             self.connection_file = filefind(self.connection_file, [".", self.connection_dir])
         except OSError:
@@ -314,9 +320,9 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
             )
             self.exit(1)
 
-    def init_sockets(self):
+    async def init_sockets(self):
         """Create a context, a session, and the kernel sockets."""
-        self.log.info("Starting the kernel at pid: %i", os.getpid())
+        self.log.info("Starting the kernel at pid: %", os.getpid())
         assert self.context is None, "init_sockets cannot be called twice!"
         self.context = context = zmq.Context()
         atexit.register(self.close)
@@ -337,10 +343,10 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
             # see ipython/ipykernel#270 and zeromq/libzmq#2892
             self.shell_socket.router_handover = self.stdin_socket.router_handover = 1
 
-        self.init_control(context)
-        self.init_iopub(context)
+        await self.init_control(context)
+        await self.init_iopub(context)
 
-    def init_control(self, context):
+    async def init_control(self, context):
         """Initialize the control channel."""
         self.control_socket = zmq_anyio.Socket(context.socket(zmq.ROUTER))
         self.control_socket.linger = 1000
@@ -365,19 +371,18 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
         self.control_thread = ControlThread(daemon=True)
         self.shell_channel_thread = ShellChannelThread(context, self.shell_socket, daemon=True)
 
-    def init_iopub(self, context):
+    async def init_iopub(self, context):
         """Initialize the iopub channel."""
         self.iopub_socket = zmq_anyio.Socket(context.socket(zmq.PUB))
         self.iopub_socket.linger = 1000
         self.iopub_port = self._bind_socket(self.iopub_socket, self.iopub_port)
         self.log.debug("iopub PUB Channel on port: %i", self.iopub_port)
-        # self.configure_tornado_logger()
         self.iopub_thread = IOPubThread(self.iopub_socket, pipe=True)
         self.iopub_thread.start()
         # backward-compat: wrap iopub socket API in background thread
         self.iopub_socket = self.iopub_thread.background_socket
 
-    def init_heartbeat(self):
+    async def init_heartbeat(self):
         """start the heart beating"""
         # heartbeat doesn't share context, because it mustn't be blocked
         # by the GIL, which is accessed by libzmq when freeing zero-copy messages
@@ -423,7 +428,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
             self.context.term()
         self.log.debug("Terminated zmq context")
 
-    def log_connection_info(self):
+    async def log_connection_info(self):
         """display connection info, and store ports"""
         basename = Path(self.connection_file).name
         if basename == self.connection_file or str(Path(self.connection_file).parent) == self.connection_dir:
@@ -456,7 +461,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
             "control": self.control_port,
         }
 
-    def init_blackhole(self):
+    async def init_blackhole(self):
         """redirects stdout/stderr to devnull if necessary"""
         self._save_io()
         if self.no_stdout or self.no_stderr:
@@ -471,7 +476,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
                     sys.stderr.flush()
                 sys.stderr = self._blackhole
 
-    def init_io(self):
+    async def init_io(self):
         """Redirect input streams and set a display hook."""
         self._save_io()
         if self.outstream_class:
@@ -576,11 +581,11 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
         elif self.kernel.shell_is_blocking:
             raise KeyboardInterrupt
 
-    def init_signal(self):
+    async def init_signal(self):
         """Initialize the signal handler."""
         signal.signal(signal.SIGINT, self.sigint_handler)
 
-    def init_kernel(self):
+    async def init_kernel(self):
         """Create the Kernel object itself"""
         kernel_factory = self.kernel_class.instance
 
@@ -636,27 +641,13 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
         finally:
             shell._showtraceback = _showtraceback
 
-    def init_shell(self):
+    async def init_shell(self):
         """Initialize the shell channel."""
+        self.init_path()
         shell = self.kernel.shell
         self.shell = shell
-        shell.configurables.append(self)
 
-    # def configure_tornado_logger(self):
-    #     """Configure the tornado logging.Logger.
-
-    #     Must set up the tornado logger or else tornado will call
-    #     basicConfig for the root logger which makes the root logger
-    #     go to the real sys.stderr instead of the capture streams.
-    #     This function mimics the setup of logging.basicConfig.
-    #     """
-    #     logger = logging.getLogger("tornado")
-    #     handler = logging.StreamHandler()
-    #     formatter = logging.Formatter(logging.BASIC_FORMAT)
-    #     handler.setFormatter(formatter)
-    #     logger.addHandler(handler)
-
-    def init_pdb(self):
+    async def init_pdb(self):
         """Replace pdb with IPython's version that is interruptible.
 
         With the non-interruptible version, stopping pdb() locks up the kernel in a
@@ -672,52 +663,56 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
             pdb.Pdb = debugger.Pdb  # type:ignore[assignment,misc]
             pdb.set_trace = debugger.set_trace
 
-    @catch_config_error
-    def initialize(self, argv=None) -> None:
-        """Initialize the application."""
-        super().initialize(argv)
-        if self.subapp is not None:
-            return
+    @asynccontextmanager
+    async def start_with_context(self):  # TODO: A better name?
+        """Start the application inside the current anyio event loop.
 
-        self.init_pdb()
-        self.init_blackhole()
-        self.init_connection_file()
-        self.init_sockets()
-        self.init_heartbeat()
-        # writing/displaying connection info must be *after* init_sockets/heartbeat
-        self.write_connection_file()
-        # Log connection info after writing connection file, so that the connection
-        # file is definitely available at the time someone reads the log.
-        self.log_connection_info()
-        self.init_io()
-        try:
-            self.init_signal()
-        except Exception:
-            # Catch exception when initializing signal fails, eg when running the
-            # kernel on a separate thread
-            if int(self.log_level) < logging.CRITICAL:  # type:ignore[call-overload]
-                self.log.error("Unable to initialize signal:", exc_info=True)  # noqa: G201
-        self.init_kernel()
-        # shell init steps
-        self.init_path()
-        self.init_shell()
-        if self.shell:
+        ``` python
+
+        app = cls.instance()
+        app.initialize([])
+        async app.start_here():
+            await anyio.sleep_forever()
+        # app has closed
+        ```
+        """
+        async with anyio.create_task_group() as tg:
+            # TODO: start these with taskgroup
+            await self.init_pdb()
+            await self.init_blackhole()
+            await self.init_connection_file()
+            await self.init_sockets()
+            await self.init_heartbeat()
+            # writing/displaying connection info must be *after* init_sockets/heartbeat
+            await self.write_connection_file()
+            # Log connection info after writing connection file, so that the connection
+            # file is definitely available at the time someone reads the log.
+            await self.log_connection_info()
+            await self.init_io()
+            await self.init_signal()
+
+            await self.init_kernel()
+            await self.init_shell()
             self.init_gui_pylab()
             self.init_extensions()
             self.init_code()
-        # flush stdout/stderr, so that anything written to these streams during
-        # initialization do not get associated with the first execution request
-        sys.stdout.flush()
-        sys.stderr.flush()
+            # flush stdout/stderr, so that anything written to these streams during
+            # initialization do not get associated with the first execution request
+            sys.stdout.flush()
+            sys.stderr.flush()
 
-    async def _start(self, backend: str) -> None:
-        """
-        Async version of start, when the loop is not controlled by IPykernel
+            tg.start_soon(self.kernel.start, tg)
 
-        For example to be used in test suite with @pytest.mark.trio
-        """
-        if callable(start := getattr(self.subapp, "start", None)):
-            start()
+            await self.kernel._main_subshell_ready.wait()
+            try:
+                yield self
+            finally:
+                pass
+                # do the cleanup here incase we want to restart
+
+    @classmethod
+    def start(cls, backend: Literal["trio", "asyncio", "asyncio_eager"] = "asyncio") -> None:
+        """Start the application."""
 
         if backend == "asyncio" and sys.platform == "win32":
             import asyncio
@@ -729,16 +724,14 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
                 selector = get_selector()
                 selector._thread.pydev_do_not_trace = True
 
-        await self.main()
+        async def _start() -> None:
+            """ """
+            app = cls.instance()
+            async with app.start_with_context():
+                # Block forever
+                await anyio.Event().wait()
 
-    def start(self) -> None:
-        """Start the application."""
-        backend = "trio" if self.trio_loop else "asyncio"
-        run(partial(self._start, backend), backend=backend)
-
-    async def main(self) -> None:
-        async with create_task_group() as tg:
-            tg.start_soon(self.kernel.start)
+        anyio.run(_start, backend=backend)
 
     def stop(self) -> None:
         """Stop the kernel, thread-safe."""

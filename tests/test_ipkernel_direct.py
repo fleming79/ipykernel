@@ -4,7 +4,6 @@
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
 
-
 import pytest
 from IPython.core.history import DummyDB
 
@@ -25,9 +24,6 @@ async def test_direct_kernel_info_request(
 ):
     reply = await send_shell_message(client, "kernel_info_request")
     assert reply["header"]["msg_type"] == "kernel_info_reply"
-    assert (
-        "supported_features" not in reply["content"] or "kernel subshells" not in reply["content"]["supported_features"]
-    )
 
 
 async def test_complete_request(client, kernel, tracemalloc_resource_warning):

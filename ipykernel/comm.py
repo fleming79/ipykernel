@@ -9,7 +9,6 @@ import logging
 
 import comm
 import traitlets
-from comm import base_comm
 from typing_extensions import override
 
 from ipykernel.ipkernel import IPythonKernel
@@ -20,13 +19,13 @@ logger = logging.getLogger("ipykernel.comm")
 __all__ = ["Comm"]
 
 
-class Comm(base_comm.BaseComm):
-    """Comms optimized for IPythonKernel. 
-    
+class Comm(comm.base_comm.BaseComm):
+    """Comms optimized for IPythonKernel.
+
     Notes:
     -  Requires kernel to b set externally
-    - This is set by CommManager, so if working with a 
-     """
+    - This is set by CommManager, so if working with a
+    """
 
     __slots__ = [
         "_close_callback",
@@ -54,19 +53,19 @@ class Comm(base_comm.BaseComm):
         if (kernel := self.kernel) is None:
             # Only send when the kernel is set
             return
-        
+
         kernel.session.send(
-                kernel.iopub_socket,
-                msg_type,
-                content,
-                metadata=metadata,
-                parent=kernel.parent_msg,
-                ident=self.topic,
-                buffers=buffers  
-            )
+            kernel.iopub_socket,
+            msg_type,
+            content,
+            metadata=metadata,
+            parent=kernel.parent_msg,
+            ident=self.topic,
+            buffers=buffers,
+        )
 
     @override
-    def handle_msg(self, msg: base_comm.MessageType) -> None:
+    def handle_msg(self, msg: comm.base_comm.MessageType) -> None:
         """Handle a comm_msg message"""
         if self._msg_callback:
             self._msg_callback(msg)
@@ -75,7 +74,7 @@ class Comm(base_comm.BaseComm):
 """Base class to manage comms"""
 
 
-class CommManager(base_comm.CommManager, traitlets.HasTraits):
+class CommManager(comm.base_comm.CommManager, traitlets.HasTraits):
     """A comm manager for IPythonKernel.
 
     When the kernel is set it will also set the kernel on all existing `Comm` instances.
@@ -86,8 +85,8 @@ class CommManager(base_comm.CommManager, traitlets.HasTraits):
     """
 
     kernel: traitlets.Instance[IPythonKernel | None] = traitlets.Instance(IPythonKernel, allow_none=True)  # type: ignore[assignment]
-    comms: traitlets.Dict[str, base_comm.BaseComm] = traitlets.Dict()
-    targets: traitlets.Dict[str, base_comm.CommTargetCallback] = traitlets.Dict()
+    comms: traitlets.Dict[str, comm.base_comm.BaseComm] = traitlets.Dict()
+    targets: traitlets.Dict[str, comm.base_comm.CommTargetCallback] = traitlets.Dict()
 
     @traitlets.observe("kernel")
     def _observe_kernel(self, change: dict):
@@ -97,14 +96,21 @@ class CommManager(base_comm.CommManager, traitlets.HasTraits):
                 c.kernel = kernel
 
     @override
-    def register_comm(self, comm: base_comm.BaseComm) -> str:
+    def register_comm(self, comm: comm.base_comm.BaseComm) -> str:
         """Register a new comm"""
         if isinstance(comm, Comm) and (kernel := self.kernel):
             comm.kernel = kernel
         return super().register_comm(comm)
 
-if comm._comm_manager is None:
-    # Override comms
-    comm._comm_manager =  CommManager()
+
+comm_manager = CommManager()
+
+
+def get_comm_manager():
+    return comm_manager
+
+
+def set_comm():
+    "Set the comm manager"
     comm.create_comm = Comm
-    comm.get_comm_manager = lambda : comm._comm_manager
+    comm.get_comm_manager = get_comm_manager

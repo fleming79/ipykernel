@@ -33,7 +33,6 @@ class ExecuteContentType(TypedDict):
     stop_on_error: NotRequired[bool]
 
 
-
 async def get_reply(
     client: AsyncKernelClient,
     msg_id: str,

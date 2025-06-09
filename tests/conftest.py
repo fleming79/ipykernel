@@ -4,12 +4,10 @@ import warnings
 from typing import TYPE_CHECKING
 
 import pytest
-from anyio import create_task_group
 from jupyter_client.asynchronous.client import AsyncKernelClient
+from traitlets.config import SingletonConfigurable
 
-from ipykernel.ipkernel import IPythonKernel
 from ipykernel.kernelapp import IPKernelApp
-from ipykernel.zmqshell import ZMQInteractiveShell
 
 if TYPE_CHECKING:
     pytest_plugins = ["anyio.pytest_plugin"]
@@ -18,11 +16,6 @@ if TYPE_CHECKING:
 # @pytest.fixture(scope="module", autouse=True)
 # def _garbage_collection(request):
 #     gc.collect()
-
-
-@pytest.fixture
-def anyio_backend():
-    return "asyncio"
 
 
 try:
@@ -59,36 +52,29 @@ if resource is not None:
     resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
+def anyio_backend():
+    return "asyncio"
+
+
+@pytest.fixture(scope="session")
 async def app(anyio_backend):
-    async with create_task_group() as tg:
-        try:
-            app: IPKernelApp = IPKernelApp()
-            app.initialize()
-            app.kernel_class.clear_instance()
-            kernel = app.kernel
-            tg.start_soon(kernel.start)
-            await kernel._main_subshell_ready.wait()
-        except Exception as e:
-            e.add_note("Failed to setup IPKernelApp or AsyncKernelClient")
-            raise e from None
-        try:
+    app = IPKernelApp.instance()
+    try:
+        async with app.start_with_context():
             yield app
-        finally:
-            kernel.stop()
-            kernel.clear_instance()
-            app.close()
-            app.clear_instance()
-            ZMQInteractiveShell.clear_instance()
+    finally:
+        # Clean up
+        SingletonConfigurable.clear_instance()
 
 
-@pytest.fixture
-async def kernel(app: IPKernelApp, anyio_backend) -> IPythonKernel:
+@pytest.fixture(scope="session")
+async def kernel(app: IPKernelApp):
     return app.kernel
 
 
-@pytest.fixture
-async def client(app: IPKernelApp, anyio_backend):
+@pytest.fixture(scope="session")
+async def client(app: IPKernelApp):
     kc: AsyncKernelClient = AsyncKernelClient()
     kc.load_connection_info(app.get_connection_info())
     kc.start_channels()
@@ -98,7 +84,7 @@ async def client(app: IPKernelApp, anyio_backend):
         kc.shutdown()
 
 
-@pytest.fixture()
+@pytest.fixture
 def tracemalloc_resource_warning(recwarn, N=10):
     """fixture to enable tracemalloc for a single test, and report the
     location of the leaked resource

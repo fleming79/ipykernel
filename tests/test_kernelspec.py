@@ -26,7 +26,7 @@ pjoin = os.path.join
 is_cpython = platform.python_implementation() == "CPython"
 
 
-async def test_make_ipkernel_cmd(client, kernel):
+def test_make_ipkernel_cmd():
     cmd = make_ipkernel_cmd()
     assert cmd == [sys.executable, "-m", "ipykernel_launcher", "-f", "{connection_file}"]
 
@@ -37,7 +37,7 @@ def assert_kernel_dict(d):
     assert d["language"] == "python"
 
 
-async def test_get_kernel_dict(client, kernel):
+def test_get_kernel_dict():
     d = get_kernel_dict()
     assert_kernel_dict(d)
 
@@ -48,7 +48,7 @@ def assert_kernel_dict_with_profile(d):
     assert d["language"] == "python"
 
 
-async def test_get_kernel_dict_with_profile(client, kernel):
+def test_get_kernel_dict_with_profile():
     d = get_kernel_dict(["--profile", "test"])
     assert_kernel_dict_with_profile(d)
 
@@ -63,13 +63,13 @@ def assert_is_spec(path):
         json.load(f)
 
 
-async def test_write_kernel_spec(client, kernel):
+def test_write_kernel_spec():
     path = write_kernel_spec()
     assert_is_spec(path)
     shutil.rmtree(path)
 
 
-async def test_write_kernel_spec_path(client, kernel):
+def test_write_kernel_spec_path():
     path = os.path.join(tempfile.mkdtemp(), KERNEL_NAME)
     path2 = write_kernel_spec(path)
     assert path == path2
@@ -77,7 +77,7 @@ async def test_write_kernel_spec_path(client, kernel):
     shutil.rmtree(path)
 
 
-async def test_install_kernelspec(client, kernel):
+def test_install_kernelspec():
     path = tempfile.mkdtemp()
     try:
         InstallIPythonKernelSpecApp.launch_instance(argv=["--prefix", path])
@@ -86,7 +86,7 @@ async def test_install_kernelspec(client, kernel):
         shutil.rmtree(path)
 
 
-async def test_install_user(client, kernel):
+def test_install_user():
     tmp = tempfile.mkdtemp()
 
     with mock.patch.dict(os.environ, {"HOME": tmp}):
@@ -96,7 +96,7 @@ async def test_install_user(client, kernel):
     assert_is_spec(os.path.join(data_dir, "kernels", KERNEL_NAME))
 
 
-async def test_install(client, kernel):
+def test_install():
     system_jupyter_dir = tempfile.mkdtemp()
 
     with mock.patch("jupyter_client.kernelspec.SYSTEM_JUPYTER_PATH", [system_jupyter_dir]):
@@ -105,7 +105,7 @@ async def test_install(client, kernel):
     assert_is_spec(os.path.join(system_jupyter_dir, "kernels", KERNEL_NAME))
 
 
-async def test_install_profile(client, kernel):
+def test_install_profile():
     system_jupyter_dir = tempfile.mkdtemp()
 
     with mock.patch("jupyter_client.kernelspec.SYSTEM_JUPYTER_PATH", [system_jupyter_dir]):
@@ -118,7 +118,7 @@ async def test_install_profile(client, kernel):
     assert spec["argv"][-2:] == ["--profile", "Test"]
 
 
-async def test_install_display_name_overrides_profile(client, kernel):
+def test_install_display_name_overrides_profile():
     system_jupyter_dir = tempfile.mkdtemp()
 
     with mock.patch("jupyter_client.kernelspec.SYSTEM_JUPYTER_PATH", [system_jupyter_dir]):
@@ -148,8 +148,7 @@ def test_install_env(tmp_path, env):
         assert "env" not in spec
 
 
-@pytest.mark.skipif(sys.version_info < (3, 11) or not is_cpython, reason="requires cPython 3.11")
-async def test_install_frozen_modules_on(client, kernel):
+def test_install_frozen_modules_on():
     system_jupyter_dir = tempfile.mkdtemp()
 
     with mock.patch("jupyter_client.kernelspec.SYSTEM_JUPYTER_PATH", [system_jupyter_dir]):
@@ -162,8 +161,7 @@ async def test_install_frozen_modules_on(client, kernel):
     assert "-Xfrozen_modules=off" not in spec["argv"]
 
 
-@pytest.mark.skipif(sys.version_info < (3, 11) or not is_cpython, reason="requires cPython 3.11")
-async def test_install_frozen_modules_off(client, kernel):
+def test_install_frozen_modules_off():
     system_jupyter_dir = tempfile.mkdtemp()
 
     with mock.patch("jupyter_client.kernelspec.SYSTEM_JUPYTER_PATH", [system_jupyter_dir]):

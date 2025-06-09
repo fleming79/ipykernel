@@ -12,10 +12,8 @@ import typing as t
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import comm
 import zmq_anyio
-from anyio import TASK_STATUS_IGNORED, create_task_group, to_thread
-from comm.base_comm import CommManager
+from anyio import create_task_group, to_thread
 from IPython.core import release
 from IPython.utils.tokenutil import token_at_cursor
 from traitlets import Any, Bool, Dict, Instance, List, Type, default, observe
@@ -27,8 +25,7 @@ from ipykernel.kernelbase import Kernel as KernelBase
 from ipykernel.zmqshell import ZMQInteractiveShell
 
 if TYPE_CHECKING:
-    from anyio.abc import TaskStatus
-
+    from ipykernel.comm import CommManager
     from ipykernel.debugger import Debugger
 
 try:
@@ -45,7 +42,7 @@ class IPythonKernel(KernelBase):
 
     shell = Instance(ZMQInteractiveShell)
     shell_class = Type(ZMQInteractiveShell)
-    comm_manager = Instance(CommManager)
+    comm_manager: Instance[CommManager] = Instance("ipykernel.comm.CommManager")
 
     # use fully-qualified name to ensure lazy import and prevent the issue from
     # https://github.com/ipython/ipykernel/issues/1198
@@ -71,13 +68,17 @@ class IPythonKernel(KernelBase):
 
     @default("comm_manager")
     def _default_comm_manager(self):
-        return comm.get_comm_manager()
+        import ipykernel.comm
+
+        ipykernel.comm.set_comm()
+        return ipykernel.comm.get_comm_manager()
 
     @observe("user_ns")
     def _user_ns_changed(self, change):
         if self.trait_has_value("shell"):
             self.shell.user_ns = change["new"]
             self.shell.init_user_ns()
+            self.shell.set_completer_frame()
 
     # A reference to the Python builtin 'raw_input' function.
     # (i.e., __builtin__.raw_input for Python 2.7, builtins.input for Python 3)
@@ -100,6 +101,7 @@ class IPythonKernel(KernelBase):
                 self.session,
                 self.debug_just_my_code,
             )
+            self.control_tasks.append(self.process_debugpy)
 
         # Initialize the InteractiveShell subclass
         self.set_trait(
@@ -134,36 +136,40 @@ class IPythonKernel(KernelBase):
             # implement it even as of 3.9.
             gc.callbacks.append(self._clean_thread_parent_frames)
 
-    help_links = List([
-        {
-            "text": "Python Reference",
-            "url": "https://docs.python.org/%i.%i" % sys.version_info[:2],
-        },
-        {
-            "text": "IPython Reference",
-            "url": "https://ipython.org/documentation.html",
-        },
-        {
-            "text": "NumPy Reference",
-            "url": "https://docs.scipy.org/doc/numpy/reference/",
-        },
-        {
-            "text": "SciPy Reference",
-            "url": "https://docs.scipy.org/doc/scipy/reference/",
-        },
-        {
-            "text": "Matplotlib Reference",
-            "url": "https://matplotlib.org/contents.html",
-        },
-        {
-            "text": "SymPy Reference",
-            "url": "http://docs.sympy.org/latest/index.html",
-        },
-        {
-            "text": "pandas Reference",
-            "url": "https://pandas.pydata.org/pandas-docs/stable/",
-        },
-    ]).tag(config=True)
+        self.comm_manager.kernel = self
+
+    help_links = List(
+        [
+            {
+                "text": "Python Reference",
+                "url": "https://docs.python.org/%i.%i" % sys.version_info[:2],
+            },
+            {
+                "text": "IPython Reference",
+                "url": "https://ipython.org/documentation.html",
+            },
+            {
+                "text": "NumPy Reference",
+                "url": "https://docs.scipy.org/doc/numpy/reference/",
+            },
+            {
+                "text": "SciPy Reference",
+                "url": "https://docs.scipy.org/doc/scipy/reference/",
+            },
+            {
+                "text": "Matplotlib Reference",
+                "url": "https://matplotlib.org/contents.html",
+            },
+            {
+                "text": "SymPy Reference",
+                "url": "http://docs.sympy.org/latest/index.html",
+            },
+            {
+                "text": "pandas Reference",
+                "url": "https://pandas.pydata.org/pandas-docs/stable/",
+            },
+        ]
+    ).tag(config=True)
 
     # Kernel info fields
     implementation = "ipython"
@@ -182,6 +188,7 @@ class IPythonKernel(KernelBase):
         async with self.debug_shell_socket, self.debugpy_socket, create_task_group() as tg:
             tg.start_soon(self.receive_debugpy_messages)
             tg.start_soon(self.poll_stopped_queue)
+            self.debugpy_stop = threading.Event()
             await to_thread.run_sync(self.debugpy_stop.wait)
             tg.cancel_scope.cancel()
 
@@ -220,21 +227,11 @@ class IPythonKernel(KernelBase):
         while True:
             await self.debugger.handle_stopped_event()
 
-    async def start(self, *, task_status: TaskStatus = TASK_STATUS_IGNORED) -> None:
-        """Start the kernel."""
-        if self.shell:
-            self.shell.exit_now = False
-        if self.debugpy_socket is None:
-            self.log.warning("debugpy_socket undefined, debugging will not be enabled")
-        else:
-            self.debugpy_stop = threading.Event()
-            self.control_tasks.append(self.process_debugpy)
-        await super().start(task_status=task_status)
-
     def stop(self):
+        self.comm_manager.kernel = None
+        if event := getattr(self, "debugpy_stop", None):
+            event.set()
         super().stop()
-        if self.debugpy_socket is not None:
-            self.debugpy_stop.set()
 
     def _set_parent_ident(self, parent, ident):
         super()._set_parent_ident(parent, ident)
@@ -343,11 +340,13 @@ class IPythonKernel(KernelBase):
         else:
             reply_content["status"] = "error"
 
-            reply_content.update({
-                "traceback": shell._last_traceback or [],
-                "ename": str(type(err).__name__),
-                "evalue": str(err),
-            })
+            reply_content.update(
+                {
+                    "traceback": shell._last_traceback or [],
+                    "ename": str(type(err).__name__),
+                    "evalue": str(err),
+                }
+            )
 
         # Return the execution counter so clients can display prompts
         reply_content["execution_count"] = shell.execution_count - 1
@@ -396,13 +395,15 @@ class IPythonKernel(KernelBase):
 
             comps = []
             for comp in completions:
-                comps.append({
-                    "start": comp.start,
-                    "end": comp.end,
-                    "text": comp.text,
-                    "type": comp.type,
-                    "signature": comp.signature,
-                })
+                comps.append(
+                    {
+                        "start": comp.start,
+                        "end": comp.end,
+                        "text": comp.text,
+                        "type": comp.type,
+                        "signature": comp.signature,
+                    }
+                )
 
         if completions:
             s = completions[0].start
