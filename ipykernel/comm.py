@@ -11,8 +11,7 @@ import comm
 import traitlets
 from typing_extensions import override
 
-from ipykernel.ipkernel import IPythonKernel
-from ipykernel.kernelbase import Kernel
+from ipykernel.kernelbase import IPythonAKernel
 
 logger = logging.getLogger("ipykernel.comm")
 
@@ -20,7 +19,7 @@ __all__ = ["Comm"]
 
 
 class Comm(comm.base_comm.BaseComm):
-    """Comms optimized for IPythonKernel.
+    """Comms optimized for IPythonAKernel.
 
     Notes:
     -  Requires kernel to b set externally
@@ -39,11 +38,11 @@ class Comm(comm.base_comm.BaseComm):
         "target_name",
         "topic",
     ]
-    kernel: IPythonKernel | None = None
+    kernel: IPythonAKernel | None = None
 
     def publish_msg(self, msg_type, data=None, metadata=None, buffers=None, **keys):
         """Helper for sending a comm message on IOPub"""
-        if not Kernel.initialized():
+        if not IPythonAKernel.initialized():
             return
 
         data = {} if data is None else data
@@ -75,22 +74,22 @@ class Comm(comm.base_comm.BaseComm):
 
 
 class CommManager(comm.base_comm.CommManager, traitlets.HasTraits):
-    """A comm manager for IPythonKernel.
+    """A comm manager for IPythonAKernel.
 
     When the kernel is set it will also set the kernel on all existing `Comm` instances.
     Notes:
     - The `Comm` will only send messages when the kernel is set.
     - The kernel is observed and must be set externally.
-    - IPythonKernel, sets the kerenel this once it has been started.
+    - IPythonAKernel, sets the kerenel this once it has been started.
     """
 
-    kernel: traitlets.Instance[IPythonKernel | None] = traitlets.Instance(IPythonKernel, allow_none=True)  # type: ignore[assignment]
+    kernel: traitlets.Instance[IPythonAKernel | None] = traitlets.Instance(IPythonAKernel, allow_none=True)  # type: ignore[assignment]
     comms: traitlets.Dict[str, comm.base_comm.BaseComm] = traitlets.Dict()
     targets: traitlets.Dict[str, comm.base_comm.CommTargetCallback] = traitlets.Dict()
 
     @traitlets.observe("kernel")
     def _observe_kernel(self, change: dict):
-        kernel: IPythonKernel = change["new"]
+        kernel: IPythonAKernel = change["new"]
         for c in self.comms.values():
             if isinstance(c, Comm):
                 c.kernel = kernel

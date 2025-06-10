@@ -1,4 +1,4 @@
-# IPython Kernel documentation build configuration file, created by
+# IPython IPythonAKernel documentation build configuration file, created by
 # sphinx-quickstart on Mon Oct  5 11:32:44 2015.
 #
 # This file is execfile()d with the current directory set to its
@@ -63,7 +63,7 @@ source_suffix = ".rst"
 master_doc = "index"
 
 # General information about the project.
-project = "IPython Kernel"
+project = "IPython IPythonAKernel"
 copyright = "2015, IPython Development Team"
 author = "IPython Development Team"
 
@@ -237,7 +237,7 @@ latex_documents = [
     (
         master_doc,
         "ipykernel.tex",
-        "IPython Kernel Documentation",
+        "IPython IPythonAKernel Documentation",
         "IPython Development Team",
         "manual",
     ),
@@ -268,7 +268,7 @@ latex_documents = [
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [(master_doc, "ipykernel", "IPython Kernel Documentation", [author], 1)]
+man_pages = [(master_doc, "ipykernel", "IPython IPythonAKernel Documentation", [author], 1)]
 
 # If true, show URL addresses after external links.
 # man_show_urls = False
@@ -283,7 +283,7 @@ texinfo_documents = [
     (
         master_doc,
         "ipykernel",
-        "IPython Kernel Documentation",
+        "IPython IPythonAKernel Documentation",
         author,
         "ipykernel",
         "One line description of project.",

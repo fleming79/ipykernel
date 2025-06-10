@@ -127,7 +127,7 @@ async def test_non_execute_stop_on_error(client):
 
 
 async def test_user_expressions(client):
-    msg_id = client.execute(code="x=1", user_expressions=dict(foo="x+1"))
+    msg_id = client.execute(code="x=1", user_expressions={"foo": "x+1"})
     reply = await utils.get_reply(client, msg_id)  # execute
     user_expressions = reply["content"]["user_expressions"]
     assert user_expressions == {
@@ -140,7 +140,7 @@ async def test_user_expressions(client):
 
 
 async def test_user_expressions_fail(client):
-    msg_id, reply = await utils.execute(client, code="x=0", user_expressions=dict(foo="nosuchname"))
+    msg_id, reply = await utils.execute(client, code="x=0", user_expressions={"foo": "nosuchname"})
     user_expressions = reply["user_expressions"]
     foo = user_expressions["foo"]
     assert foo["status"] == "error"

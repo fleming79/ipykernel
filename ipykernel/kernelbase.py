@@ -1,11 +1,15 @@
-"""Base class for a kernel that talks to frontends over 0MQ."""
+"""The IPythonAKernel kernel implementation"""
 
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
+
 from __future__ import annotations
 
 import asyncio
+import builtins
 import contextlib
+import gc
+import getpass
 import inspect
 import logging
 import math
@@ -17,44 +21,49 @@ import time
 import typing as t
 import uuid
 import warnings
-from datetime import datetime
+from dataclasses import dataclass
 from functools import partial
 from signal import SIGINT, SIGTERM, Signals
-
-import anyio
-
-if sys.platform != "win32":
-    from signal import SIGKILL
-else:
-    SIGKILL = "windown-SIGKILL-sentinel"
-
-
-try:
-    # jupyter_client >= 5, use tz-aware now
-    from jupyter_client.session import utcnow as now
-except ImportError:
-    # jupyter_client < 5, use local now()
-    now = datetime.now
-
 from typing import TYPE_CHECKING
 
+import anyio
 import psutil
 import zmq
 import zmq_anyio
 from anyio import Event, create_memory_object_stream, create_task_group, sleep, to_thread
 from anyio.abc import TaskGroup
 from anyio.from_thread import BlockingPortal
+from IPython.core import release
 from IPython.core.error import StdinNotImplementedError
+from IPython.utils.tokenutil import token_at_cursor
 from jupyter_client.session import Session
+from traitlets import Any, Bool, Dict, Float, Instance, List, Type, Unicode, default, observe
 from traitlets.config.configurable import SingletonConfigurable
-from traitlets.traitlets import Any, Bool, Dict, Float, Instance, Integer, List, Unicode, default
 
 from ipykernel._version import kernel_protocol_version
+from ipykernel.compiler import XCachingCompiler
+from ipykernel.iostream import OutStream
+from ipykernel.zmqshell import ZMQInteractiveShell
 
 if TYPE_CHECKING:
     from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
-    from ipykernel.iostream import OutStream
+    from ipykernel.comm import CommManager
+    from ipykernel.debugger import Debugger
+
+try:
+    from IPython.core.completer import provisionalcompleter as _provisionalcompleter
+    from IPython.core.completer import rectify_completions as _rectify_completions
+
+    _use_experimental_60_completion = True
+except ImportError:
+    _use_experimental_60_completion = False
+
+if sys.platform != "win32":
+    from signal import SIGKILL
+else:
+    SIGKILL = "windown-SIGKILL-sentinel"
+
 
 _AWAITABLE_MESSAGE: str = (
     "For consistency across implementations, it is recommended that `{func_name}`"
@@ -65,13 +74,13 @@ _AWAITABLE_MESSAGE: str = (
 )
 
 
-class Kernel(SingletonConfigurable):
+class IPythonAKernel(SingletonConfigurable):
     """The base kernel class."""
 
     _stop_on_error_time: float = time.monotonic()
 
     # ---------------------------------------------------------------------------
-    # Kernel interface
+    # IPythonAKernel interface
     # ---------------------------------------------------------------------------
 
     # attribute to override with a GUI
@@ -85,7 +94,6 @@ class Kernel(SingletonConfigurable):
 
     implementation: str
     implementation_version: str
-    banner: str
 
     _is_test = Bool(False)
 
@@ -108,20 +116,53 @@ class Kernel(SingletonConfigurable):
 
     log: logging.Logger = Instance(logging.Logger, allow_none=True)  # type:ignore[assignment]
 
-    # identities:
-    int_id = Integer(-1)
     ident = Unicode()
 
     @default("ident")
     def _default_ident(self):
         return str(uuid.uuid4())
 
-    # This should be overridden by wrapper kernels that implement any real
-    # language.
-    language_info: dict[str, object] = {}
+    language_info = {
+        "name": "python",
+        "version": sys.version.split()[0],
+        "mimetype": "text/x-python",
+        "codemirror_mode": {"name": "ipython", "version": sys.version_info[0]},
+        "pygments_lexer": "ipython%d" % 3,
+        "nbconvert_exporter": "python",
+        "file_extension": ".py",
+    }
 
     # any links that should go in the help menu
-    help_links: List[dict[str, str]] = List()
+    help_links = List([
+        {
+            "text": "Python Reference",
+            "url": "https://docs.python.org/%i.%i" % sys.version_info[:2],
+        },
+        {
+            "text": "IPython Reference",
+            "url": "https://ipython.org/documentation.html",
+        },
+        {
+            "text": "NumPy Reference",
+            "url": "https://docs.scipy.org/doc/numpy/reference/",
+        },
+        {
+            "text": "SciPy Reference",
+            "url": "https://docs.scipy.org/doc/scipy/reference/",
+        },
+        {
+            "text": "Matplotlib Reference",
+            "url": "https://matplotlib.org/contents.html",
+        },
+        {
+            "text": "SymPy Reference",
+            "url": "http://docs.sympy.org/latest/index.html",
+        },
+        {
+            "text": "pandas Reference",
+            "url": "https://pandas.pydata.org/pandas-docs/stable/",
+        },
+    ]).tag(config=True)
 
     # Experimental option to break in non-user code.
     # The ipykernel source is in the call stack, so the user
@@ -129,17 +170,6 @@ class Kernel(SingletonConfigurable):
     debug_just_my_code = Bool(
         True,
         help="""Set to False if you want to debug python standard and dependent libraries.
-        """,
-    ).tag(config=True)
-
-    # track associations with current request
-    # Private interface
-
-    _darwin_app_nap = Bool(
-        True,
-        help="""Whether to use appnope for compatibility with OS X App Nap.
-
-        Only affects OS X >= 10.9.
         """,
     ).tag(config=True)
 
@@ -187,9 +217,50 @@ class Kernel(SingletonConfigurable):
     # by record_ports and used by connect_request.
     _recorded_ports = Dict()
 
-    # Track execution count here. For IPython, we override this to use the
-    # execution count we store in the shell.
-    execution_count = 0
+    shell = Instance(ZMQInteractiveShell)
+    shell_class = Type(ZMQInteractiveShell)
+
+    # use fully-qualified name to ensure lazy import and prevent the issue from
+    # https://github.com/ipython/ipykernel/issues/1198
+    debugger_class = Type("ipykernel.debugger.Debugger")
+
+    compiler_class = Type(XCachingCompiler)
+
+    debugpy_socket = Instance(zmq_anyio.Socket)
+
+    user_module = Any()
+
+    @observe("user_module")
+    def _user_module_changed(self, change):
+        if self.shell is not None:
+            self.shell.user_module = change["new"]
+
+    user_ns = Dict()
+
+    @observe("user_ns")
+    def _user_ns_changed(self, change):
+        if self.trait_has_value("shell"):
+            self.shell.user_ns = change["new"]
+            self.shell.init_user_ns()
+            self.shell.set_completer_frame()
+
+    comm_manager: Instance[CommManager] = Instance("ipykernel.comm.CommManager")
+
+    @default("comm_manager")
+    def _default_comm_manager(self):
+        import ipykernel.comm
+
+        ipykernel.comm.set_comm()
+        return ipykernel.comm.get_comm_manager()
+
+    # IPythonAKernel info fields
+    implementation = "ipython"
+    implementation_version = release.version
+
+    # A reference to the Python builtin 'raw_input' function.
+    # (i.e., __builtin__.raw_input for Python 2.7, builtins.input for Python 3)
+    _sys_raw_input = Any()
+    _sys_eval_input = Any()
 
     msg_types = [
         "execute_request",
@@ -218,7 +289,7 @@ class Kernel(SingletonConfigurable):
         """Initialize the kernel."""
         super().__init__(**kwargs)
 
-        # Kernel application may swap stdout and stderr to OutStream,
+        # IPythonAKernel application may swap stdout and stderr to OutStream,
         # which is the case in `IPKernelApp.init_io`, hence `sys.stdout`
         # can already by different from TextIO at initialization time.
         self._stdout: OutStream | t.TextIO = sys.stdout
@@ -232,6 +303,55 @@ class Kernel(SingletonConfigurable):
         self.control_handlers = {}
         for msg_type in self.control_msg_types:
             self.control_handlers[msg_type] = getattr(self, msg_type)
+
+        from ipykernel.debugger import _is_debugpy_available
+
+        # Initialize the Debugger
+        if _is_debugpy_available:
+            self.debugger: Debugger = self.debugger_class(
+                self.log,
+                self.debugpy_socket,
+                self._publish_debug_event,
+                self.debug_shell_socket,
+                self.session,
+                self.debug_just_my_code,
+            )
+            self.control_tasks.append(self.process_debugpy)
+
+        # Initialize the InteractiveShell subclass
+        self.set_trait(
+            "shell",
+            self.shell_class.instance(
+                parent=self,
+                profile_dir=self.profile_dir,
+                user_module=self.user_module,
+                user_ns=self.user_ns,
+                kernel=self,
+                compiler_class=self.compiler_class,
+            ),
+        )
+        self.shell.displayhook.session = self.session
+
+        jupyter_session_name = os.environ.get("JPY_SESSION_NAME")
+        if jupyter_session_name:
+            self.shell.user_ns["__session__"] = jupyter_session_name
+
+        self.shell.displayhook.pub_socket = self.iopub_socket
+        self.shell.displayhook.topic = self._topic("execute_result")
+        self.shell.display_pub.session = self.session
+        self.shell.display_pub.pub_socket = self.iopub_socket
+        self.shell.configurables.append(self.comm_manager)  # type:ignore[arg-type]
+        for msg_type in ["comm_open", "comm_msg", "comm_close"]:
+            self.shell_handlers[msg_type] = getattr(self.comm_manager, msg_type)
+        self._new_threads_parent_header = {}
+        self._initialize_thread_hooks()
+
+        if hasattr(gc, "callbacks"):
+            # while `gc.callbacks` exists since Python 3.3, pypy does not
+            # implement it even as of 3.9.
+            gc.callbacks.append(self._clean_thread_parent_frames)
+
+        self.comm_manager.kernel = self
 
     async def process_control(self):
         try:
@@ -373,7 +493,7 @@ class Kernel(SingletonConfigurable):
                 if not self.shell_stop.is_set():
                     raise
             finally:
-                # Kernel shutdown
+                # IPythonAKernel shutdown
                 await self._at_shutdown()
                 self._send_exec_request.pop(socket, None)
                 await send_stream.aclose()
@@ -543,6 +663,9 @@ class Kernel(SingletonConfigurable):
             self.shell_channel_thread.start()
 
     def stop(self):
+        self.comm_manager.kernel = None
+        if event := getattr(self, "debugpy_stop", None):
+            event.set()
         self.shell_stop.set()
         self.control_stop.set()
         self._main_subshell_ready = Event()
@@ -550,19 +673,18 @@ class Kernel(SingletonConfigurable):
     def record_ports(self, ports):
         """Record the ports that this kernel is using.
 
-        The creator of the Kernel instance must call this methods if they
+        The creator of the IPythonAKernel instance must call this methods if they
         want the :meth:`connect_request` method to return the port numbers.
         """
         self._recorded_ports = ports
 
     # ---------------------------------------------------------------------------
-    # Kernel request handlers
+    # IPythonAKernel request handlers
     # ---------------------------------------------------------------------------
 
     def _publish_status(self, status: str, parent):
         """send status (busy/idle) on IOPub"""
-        if not self.session:
-            return
+
         self.session.send(
             self.iopub_socket,
             "status",
@@ -572,8 +694,6 @@ class Kernel(SingletonConfigurable):
         )
 
     def _publish_debug_event(self, event):
-        if not self.session:
-            return
         self.session.send(
             self.iopub_socket,
             "debug_event",
@@ -585,6 +705,7 @@ class Kernel(SingletonConfigurable):
     def _set_parent_ident(self, parent, ident):
         self._parent_msg = parent
         self._parent_ident = ident
+        self.shell.set_parent(parent)
 
     @property
     def parent_msg(self):
@@ -624,8 +745,6 @@ class Kernel(SingletonConfigurable):
         This accepts all the parameters of :meth:`jupyter_client.session.Session.send`
         except ``parent``.
         """
-        if not self.session:
-            return None
         return self.session.send(
             socket,
             msg_or_type,
@@ -686,49 +805,159 @@ class Kernel(SingletonConfigurable):
 
     async def do_execute(
         self,
-        code,
-        silent,
+        code: str,
+        silent: bool,
         store_history=True,
-        user_expressions=None,
+        user_expressions: dict | None = None,
         allow_stdin=False,
-        stop_on_error=True,
     ):
-        """Execute user code. Must be overridden by subclasses."""
-        raise NotImplementedError
+        """Handle code execution."""
+        # ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute
+        if not (shell := self.shell):
+            msg = "shell is missing!"
+            raise RuntimeError(msg)
+        self._forward_input(allow_stdin)
+        reply_content: dict[str, t.Any] = {}
+        try:
+
+            @dataclass
+            class Execution:
+                interrupt: bool = False
+                result: t.Any = None
+
+            async def run(execution: Execution) -> None:
+                execution.result = await shell.run_cell_async(
+                    raw_cell=code,
+                    store_history=store_history,
+                    silent=silent,
+                    transformed_cell=shell.transform_cell(code),
+                )
+                if not execution.interrupt:
+                    self.shell_interrupt.put(False)
+
+            res = None
+            try:
+                async with create_task_group() as tg:
+                    execution = Execution()
+                    self.shell_is_awaiting = True
+                    tg.start_soon(run, execution)
+                    execution.interrupt = await to_thread.run_sync(self.shell_interrupt.get)
+                    self.shell_is_awaiting = False
+                    if execution.interrupt:
+                        tg.cancel_scope.cancel()
+                    res = execution.result
+            finally:
+                shell.events.trigger("post_execute")
+                if not silent:
+                    shell.events.trigger("post_run_cell", res)
+        finally:
+            self._restore_input()
+
+        if res is not None:
+            err = res.error_before_exec if res.error_before_exec is not None else res.error_in_exec
+        else:
+            err = KeyboardInterrupt()
+        if res is not None and res.success:
+            reply_content["status"] = "ok"
+        else:
+            reply_content["status"] = "error"
+            reply_content.update({
+                "traceback": shell._last_traceback or [],
+                "ename": str(type(err).__name__),
+                "evalue": str(err),
+            })
+
+        # Return the execution counter so clients can display prompts
+        reply_content["execution_count"] = shell.execution_count - 1
+        if "traceback" in reply_content:
+            self.log.info(
+                "Exception in execute request:\n%s",
+                "\n".join(reply_content["traceback"]),
+            )
+        # At this point, we can tell whether the main code execution succeeded
+        # or not.  If it did, we proceed to evaluate user_expressions
+        if reply_content["status"] == "ok":
+            reply_content["user_expressions"] = shell.user_expressions(user_expressions or {})
+        else:
+            # If there was an error, don't even try to compute expressions
+            reply_content["user_expressions"] = {}
+
+        # Payloads should be retrieved regardless of outcome, so we can both
+        # recover partial output (that could have been generated early in a
+        # block, before an error) and always clear the payload system.
+        reply_content["payload"] = shell.payload_manager.read_payload()
+        # Be aggressive about clearing the payload because we don't want
+        # it to sit in memory until the next execute_request comes in.
+        shell.payload_manager.clear_payload()
+        return reply_content
+
+    async def is_complete_request(self, socket, ident, parent):
+        """Handle an is_complete request."""
+        content = parent["content"]
+        code = content["code"]
+
+        reply_content = await self.do_is_complete(code)
+        reply_msg = self.session.send(socket, "is_complete_reply", reply_content, parent, ident)
+        self.log.debug("%s", reply_msg)
+
+    async def do_is_complete(self, code):
+        """Handle an is_complete request."""
+        status, indent_spaces = self.shell.input_transformer_manager.check_complete(code)
+        r = {"status": status}
+        if status == "incomplete":
+            r["indent"] = " " * indent_spaces
+        return r
+
+    async def do_complete(self, code, cursor_pos):
+        """
+        Completions from IPython, using Jedi.
+        """
+        if cursor_pos is None:
+            cursor_pos = len(code)
+        with _provisionalcompleter():
+            raw_completions = self.shell.Completer.completions(code, cursor_pos)
+            completions = list(_rectify_completions(code, raw_completions))
+
+            comps = []
+            for comp in completions:
+                comps.append({
+                    "start": comp.start,
+                    "end": comp.end,
+                    "text": comp.text,
+                    "type": comp.type,
+                    "signature": comp.signature,
+                })
+
+        if completions:
+            s = completions[0].start
+            e = completions[0].end
+            matches = [c.text for c in completions]
+        else:
+            s = cursor_pos
+            e = cursor_pos
+            matches = []
+
+        return {
+            "matches": matches,
+            "cursor_end": e,
+            "cursor_start": s,
+            "metadata": {"_jupyter_types_experimental": comps},
+            "status": "ok",
+        }
 
     async def complete_request(self, socket, ident, parent):
         """Handle a completion request."""
-        if not self.session:
-            return
+
         content = parent["content"]
         code = content["code"]
         cursor_pos = content["cursor_pos"]
 
-        matches = self.do_complete(code, cursor_pos)
-        if inspect.isawaitable(matches):
-            matches = await matches
-        else:
-            warnings.warn(
-                _AWAITABLE_MESSAGE.format(func_name="do_complete", target=self.do_complete),
-                PendingDeprecationWarning,
-                stacklevel=1,
-            )
+        matches = await self.do_complete(code, cursor_pos)
         self.session.send(socket, "complete_reply", matches, parent, ident)
-
-    async def do_complete(self, code, cursor_pos):
-        """Override in subclasses to find completions."""
-        return {
-            "matches": [],
-            "cursor_end": cursor_pos,
-            "cursor_start": cursor_pos,
-            "metadata": {},
-            "status": "ok",
-        }
 
     async def inspect_request(self, socket, ident, parent):
         """Handle an inspect request."""
-        if not self.session:
-            return
+
         content = parent["content"]
         reply_content = await self.do_inspect(
             content["code"],
@@ -740,13 +969,26 @@ class Kernel(SingletonConfigurable):
         self.log.debug("%s", msg)
 
     async def do_inspect(self, code, cursor_pos, detail_level=0, omit_sections=()):
-        """Override in subclasses to allow introspection."""
-        return {"status": "ok", "data": {}, "metadata": {}, "found": False}
+        """Handle code inspection."""
+        name = token_at_cursor(code, cursor_pos)
+
+        reply_content: dict[str, t.Any] = {"status": "ok"}
+        reply_content["data"] = {}
+        reply_content["metadata"] = {}
+        try:
+            bundle = self.shell.object_inspect_mime(name, detail_level=detail_level, omit_sections=omit_sections)
+            reply_content["data"].update(bundle)
+            if not self.shell.enable_html_pager:
+                reply_content["data"].pop("text/html")
+            reply_content["found"] = True
+        except KeyError:
+            reply_content["found"] = False
+
+        return reply_content
 
     async def history_request(self, socket, ident, parent):
         """Handle a history request."""
-        if not self.session:
-            return
+
         content = parent["content"]
         reply_content = await self.do_history(**content)
         msg = self.session.send(socket, "history_reply", reply_content, parent, ident)
@@ -757,20 +999,36 @@ class Kernel(SingletonConfigurable):
         hist_access_type,
         output,
         raw,
-        session=None,
-        start=None,
+        session=0,
+        start=0,
         stop=None,
         n=None,
         pattern=None,
         unique=False,
     ):
-        """Override in subclasses to access history."""
-        return {"status": "ok", "history": []}
+        """Handle code history."""
+
+        history_manager = self.shell.history_manager
+        assert history_manager
+        if hist_access_type == "tail":
+            hist = history_manager.get_tail(n, raw=raw, output=output, include_latest=True)
+
+        elif hist_access_type == "range":
+            hist = history_manager.get_range(session, start, stop, raw=raw, output=output)
+
+        elif hist_access_type == "search":
+            hist = history_manager.search(pattern, raw=raw, output=output, n=n, unique=unique)
+        else:
+            hist = []
+
+        return {
+            "status": "ok",
+            "history": list(hist),
+        }
 
     async def connect_request(self, socket, ident, parent):
         """Handle a connect request."""
-        if not self.session:
-            return
+
         content = self._recorded_ports.copy() if self._recorded_ports else {}
         content["status"] = "ok"
         msg = self.session.send(socket, "connect_reply", content, parent, ident)
@@ -791,15 +1049,14 @@ class Kernel(SingletonConfigurable):
             "implementation": self.implementation,
             "implementation_version": self.implementation_version,
             "language_info": self.language_info,
-            "banner": self.banner,
+            "banner": self.shell.banner,
             "help_links": self.help_links,
             "supported_features": supported_features,
         }
 
     async def kernel_info_request(self, socket, ident, parent):
         """Handle a kernel info request."""
-        if not self.session:
-            return
+
         content = {"status": "ok"}
         content.update(self.kernel_info)
         msg = self.session.send(socket, "kernel_info_reply", content, parent, ident)
@@ -807,12 +1064,11 @@ class Kernel(SingletonConfigurable):
 
     async def comm_info_request(self, socket, ident, parent):
         """Handle a comm info request."""
-        if not self.session:
-            return
+
         content = parent["content"]
         target_name = content.get("target_name", None)
 
-        # Should this be moved to ipkernel?
+        # Should this be moved to kernelbase?
         if hasattr(self, "comm_manager"):
             comms = {
                 k: {"target_name": v.target_name}
@@ -844,8 +1100,7 @@ class Kernel(SingletonConfigurable):
 
     async def interrupt_request(self, socket, ident, parent):
         """Handle an interrupt request."""
-        if not self.session:
-            return
+
         content: dict[str, t.Any] = {"status": "ok"}
         try:
             self._send_interrupt_children()
@@ -869,30 +1124,20 @@ class Kernel(SingletonConfigurable):
         self.stop()
 
     async def do_shutdown(self, restart):
-        """Override in subclasses to do things when the frontend shuts down the
-        kernel.
-        """
+        """Handle kernel shutdown."""
+        if self.shell:
+            self.shell.exit_now = True
         return {"status": "ok", "restart": restart}
 
-    async def is_complete_request(self, socket, ident, parent):
-        """Handle an is_complete request."""
-        if not self.session:
-            return
-        content = parent["content"]
-        code = content["code"]
-
-        reply_content = await self.do_is_complete(code)
-        reply_msg = self.session.send(socket, "is_complete_reply", reply_content, parent, ident)
-        self.log.debug("%s", reply_msg)
-
-    async def do_is_complete(self, code):
-        """Override in subclasses to find completions."""
-        return {"status": "unknown"}
+    def do_clear(self):
+        """Clear the kernel."""
+        if self.shell:
+            self.shell.reset(False)
+        return {"status": "ok"}
 
     async def debug_request(self, socket, ident, parent):
         """Handle a debug request."""
-        if not self.session:
-            return
+
         content = parent["content"]
         reply_content = self.do_debug_request(content)
         if inspect.isawaitable(reply_content):
@@ -907,15 +1152,18 @@ class Kernel(SingletonConfigurable):
         self.log.debug("%s", reply_msg)
 
     async def do_debug_request(self, msg):
-        raise NotImplementedError
+        """Handle a debug request."""
+        from ipykernel.debugger import _is_debugpy_available
+
+        if _is_debugpy_available:
+            return await self.debugger.process_request(msg)
+        return None
 
     # ---------------------------------------------------------------------------
     # Subshell control message handlers
     # ---------------------------------------------------------------------------
 
     async def create_subshell_request(self, socket, ident, parent) -> None:
-        if not self.session:
-            return
         if not self._supports_kernel_subshells:
             self.log.error("Subshells are not supported by this kernel")
             return
@@ -929,8 +1177,6 @@ class Kernel(SingletonConfigurable):
         self.session.send(socket, "create_subshell_reply", reply, parent, ident)
 
     async def delete_subshell_request(self, socket, ident, parent) -> None:
-        if not self.session:
-            return
         if not self._supports_kernel_subshells:
             self.log.error("KERNEL SUBSHELLS NOT SUPPORTED")
             return
@@ -951,8 +1197,6 @@ class Kernel(SingletonConfigurable):
         self.session.send(socket, "delete_subshell_reply", reply, parent, ident)
 
     async def list_subshell_request(self, socket, ident, parent) -> None:
-        if not self.session:
-            return
         if not self._supports_kernel_subshells:
             self.log.error("Subshells are not supported by this kernel")
             return
@@ -1114,7 +1358,7 @@ class Kernel(SingletonConfigurable):
     async def _progressively_terminate_all_children(self):
         sleeps = (0.01, 0.03, 0.1, 0.3, 1, 3, 10)
         if not self._process_children():
-            self.log.debug("Kernel has no children.")
+            self.log.debug("IPythonAKernel has no children.")
             return
 
         for signum in (SIGTERM, SIGKILL):
@@ -1135,6 +1379,7 @@ class Kernel(SingletonConfigurable):
     async def _at_shutdown(self):
         """Actions taken at shutdown by the kernel, called by python's atexit."""
         try:
+            # TODO: replace this with anyio equivalent
             await self._progressively_terminate_all_children()
         except Exception as e:
             self.log.exception("Exception during subprocesses termination %s", e)
@@ -1150,4 +1395,152 @@ class Kernel(SingletonConfigurable):
 
     @property
     def _supports_kernel_subshells(self):
+        # TODO: Anyio equivalent - just use a main shell object instead...
         return self.shell_channel_thread is not None
+
+    async def process_debugpy(self):
+        async with self.debug_shell_socket, self.debugpy_socket, create_task_group() as tg:
+            tg.start_soon(self.receive_debugpy_messages)
+            tg.start_soon(self.poll_stopped_queue)
+            self.debugpy_stop = threading.Event()
+            await to_thread.run_sync(self.debugpy_stop.wait)
+            tg.cancel_scope.cancel()
+
+    async def receive_debugpy_messages(self):
+        from ipykernel.debugger import _is_debugpy_available
+
+        if not _is_debugpy_available:
+            return
+
+        while True:
+            await self.receive_debugpy_message()
+
+    async def receive_debugpy_message(self, msg=None):
+        from ipykernel.debugger import _is_debugpy_available
+
+        if not _is_debugpy_available:
+            return
+
+        if msg is None:
+            assert self.debugpy_socket is not None
+            msg = await self.debugpy_socket.arecv_multipart().wait()
+        # The first frame is the socket id, we can drop it
+        if msg and isinstance(data := msg[1], bytes):
+            frame = data.decode("utf-8")
+            self.log.debug("Debugpy received: %s", frame)
+            self.debugger.tcp_client.receive_dap_frame(frame)
+
+    async def poll_stopped_queue(self):
+        """Poll the stopped queue."""
+        while True:
+            await self.debugger.handle_stopped_event()
+
+    def _forward_input(self, allow_stdin=False):
+        """Forward raw_input and getpass to the current frontend.
+
+        via input_request
+        """
+        self._allow_stdin = allow_stdin
+
+        self._sys_raw_input = builtins.input
+        builtins.input = self.raw_input
+
+        self._save_getpass = getpass.getpass
+        getpass.getpass = self.getpass
+
+    def _restore_input(self):
+        """Restore raw_input, getpass"""
+        builtins.input = self._sys_raw_input
+
+        getpass.getpass = self._save_getpass
+
+    @property
+    def execution_count(self):
+        if self.shell:
+            return self.shell.execution_count
+        return None
+
+    @execution_count.setter
+    def execution_count(self, value):
+        # Ignore the incrementing done by KernelBase, in favour of our shell's
+        # execution counter.
+        pass
+
+    # async def execute_request(self, stream, ident, parent):
+    #     """Override for cell output - cell reconciliation."""
+    #     parent_header = extract_header(parent)
+    #     # self._associate_new_top_level_threads_with(parent_header)
+    #     await super().execute_request(stream, ident, parent)
+
+    # def _associate_new_top_level_threads_with(self, parent_header):
+    #     """Store the parent header to associate it with new top-level threads"""
+    #     self._new_threads_parent_header = parent_header
+
+    def _initialize_thread_hooks(self):
+        """Store thread hierarchy and thread-parent_header associations."""
+        stdout = self._stdout
+        stderr = self._stderr
+        kernel_thread_ident = threading.get_ident()
+        kernel = self
+        _threading_Thread_run = threading.Thread.run
+        _threading_Thread__init__ = threading.Thread.__init__
+
+        def run_closure(self: threading.Thread):
+            """Wrap the `threading.Thread.start` to intercept thread identity.
+
+            This is needed because there is no "start" hook yet, but there
+            might be one in the future: https://bugs.python.org/issue14073
+
+            This is a no-op if the `self._stdout` and `self._stderr` are not
+            sub-classes of `OutStream`.
+            """
+
+            try:
+                parent = self._ipykernel_parent_thread_ident
+            except AttributeError:
+                return
+            for stream in [stdout, stderr]:
+                if isinstance(stream, OutStream):
+                    if parent == kernel_thread_ident:
+                        stream._thread_to_parent_header[self.ident] = kernel._new_threads_parent_header
+                    else:
+                        stream._thread_to_parent[self.ident] = parent
+            _threading_Thread_run(self)
+
+        def init_closure(self: threading.Thread, *args, **kwargs):
+            _threading_Thread__init__(self, *args, **kwargs)
+            self._ipykernel_parent_thread_ident = threading.get_ident()
+
+        threading.Thread.__init__ = init_closure  # type:ignore[method-assign]
+        threading.Thread.run = run_closure  # type:ignore[method-assign]
+
+    def _clean_thread_parent_frames(self, phase: t.Literal["start", "stop"], info: dict[str, t.Any]):
+        """Clean parent frames of threads which are no longer running.
+        This is meant to be invoked by garbage collector callback hook.
+
+        The implementation enumerates the threads because there is no "exit" hook yet,
+        but there might be one in the future: https://bugs.python.org/issue14073
+
+        This is a no-op if the `self._stdout` and `self._stderr` are not
+        sub-classes of `OutStream`.
+        """
+        # Only run before the garbage collector starts
+        if phase != "start":
+            return
+        active_threads = {thread.ident for thread in threading.enumerate()}
+        for stream in [self._stdout, self._stderr]:
+            if isinstance(stream, OutStream):
+                thread_to_parent_header = stream._thread_to_parent_header
+                for identity in list(thread_to_parent_header.keys()):
+                    if identity not in active_threads:
+                        try:
+                            del thread_to_parent_header[identity]
+                        except KeyError:
+                            pass
+                thread_to_parent = stream._thread_to_parent
+                for identity in list(thread_to_parent.keys()):
+                    if identity not in active_threads:
+                        try:
+                            del thread_to_parent[identity]
+                        except KeyError:
+                            pass

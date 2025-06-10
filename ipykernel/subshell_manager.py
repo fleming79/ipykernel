@@ -13,10 +13,12 @@ from threading import Lock, current_thread, main_thread
 import zmq
 import zmq_anyio
 from anyio import create_memory_object_stream, create_task_group
-from anyio.abc import TaskGroup
 
 from ipykernel.subshell import SubshellThread
 from ipykernel.thread import SHELL_CHANNEL_THREAD_NAME, BaseThread
+
+if t.TYPE_CHECKING:
+    from anyio.abc import TaskGroup
 
 
 @dataclass

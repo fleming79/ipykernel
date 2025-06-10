@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from queue import Queue
 from threading import Event, Thread
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from anyio import create_task_group, run, to_thread
-from anyio.abc import TaskGroup
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from anyio.abc import TaskGroup
 
 CONTROL_THREAD_NAME = "Control"
 SHELL_CHANNEL_THREAD_NAME = "Shell channel"
@@ -22,7 +25,7 @@ class BaseThread(Thread):
         super().__init__(**kwargs)
         self.started = Event()
         self.stopped = Event()
-        self.pydev_do_not_trace = True
+        self.pydev_do_not_trace = False
         self.is_pydev_daemon_thread = True
         self._tasks: Queue[tuple[str, Callable[[], Awaitable[Any]]] | None] = Queue()
         self._result: Queue[Any] = Queue()

@@ -15,10 +15,9 @@ import traceback
 import warnings
 from binascii import b2a_hex
 from collections import defaultdict, deque
-from collections.abc import Callable
 from io import StringIO, TextIOBase
 from threading import local
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import zmq
 import zmq_anyio
@@ -26,6 +25,9 @@ from anyio import sleep
 from jupyter_client.session import extract_header
 
 from ipykernel.thread import BaseThread
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # -----------------------------------------------------------------------------
 # Globals

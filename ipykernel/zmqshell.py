@@ -148,7 +148,7 @@ class ZMQDisplayPublisher(DisplayPublisher):
             This reduces bounce during repeated clear & display loops.
 
         """
-        content = dict(wait=wait)
+        content = {"wait": wait}
         self._flush_streams()
         assert self.session is not None
         msg = self.session.msg("clear_output", content, parent=self.parent_header)
@@ -207,7 +207,7 @@ class ZMQDisplayPublisher(DisplayPublisher):
 
 @magics_class
 class KernelMagics(Magics):
-    """Kernel magics."""
+    """IPythonAKernel magics."""
 
     # ------------------------------------------------------------------------
     # Magic overrides

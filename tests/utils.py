@@ -68,7 +68,8 @@ def validate_message(msg: Mapping[str, Any], msg_type=None, parent=None):
         msg_ = f"Expected {msg_type=} but got '{msg['msg_type']}'  for {msg=}"
         raise ValueError(msg_)
     if parent and msg["parent_header"]["msg_id"] != parent:
-        raise RuntimeError(f"This parent 'msg_id' does not match {msg=} {parent=}")
+        msg_ = f"This parent 'msg_id' does not match {msg=} {parent=}"
+        raise RuntimeError(msg_)
     content = msg["content"]
     ref = references[msg["msg_type"]]
     try:
@@ -106,7 +107,7 @@ async def assemble_output(client: AsyncKernelClient, timeout=TIMEOUT):
             if done and (stdout or stderr):
                 # idle message signals end of output
                 break
-            elif msg["msg_type"] == "stream":
+            if msg["msg_type"] == "stream":
                 if content["name"] == "stdout":
                     stdout += content["text"]
                 elif content["name"] == "stderr":

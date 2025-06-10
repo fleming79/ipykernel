@@ -28,7 +28,7 @@ def get_connection_file(app: IPKernelApp | None = None) -> str:
         from ipykernel.kernelapp import IPKernelApp
 
         if not IPKernelApp.initialized():
-            msg = "app not specified, and not in a running Kernel"
+            msg = "app not specified, and not in a running IPythonAKernel"
             raise RuntimeError(msg)
 
         app = IPKernelApp.instance()
@@ -38,7 +38,7 @@ def get_connection_file(app: IPKernelApp | None = None) -> str:
 def _find_connection_file(connection_file):
     """Return the absolute path for a connection file
 
-    - If nothing specified, return current Kernel's connection file
+    - If nothing specified, return current IPythonAKernel's connection file
     - Otherwise, call jupyter_client.find_connection_file
     """
     if connection_file is None:
@@ -48,7 +48,7 @@ def _find_connection_file(connection_file):
 
 
 def get_connection_info(connection_file: str | None = None, unpack: bool = False) -> str | dict[str, Any]:
-    """Return the connection information for the current Kernel.
+    """Return the connection information for the current IPythonAKernel.
 
     Parameters
     ----------
@@ -58,7 +58,7 @@ def get_connection_info(connection_file: str | None = None, unpack: bool = False
         If run from IPython,
 
         If unspecified, the connection file for the currently running
-        IPython Kernel will be used, which is only allowed from inside a kernel.
+        IPython IPythonAKernel will be used, which is only allowed from inside a kernel.
 
     unpack : bool [default: False]
         if True, return the unpacked dict, otherwise just the string contents

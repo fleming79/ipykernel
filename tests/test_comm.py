@@ -36,7 +36,8 @@ def test_comm_manager(kernel) -> None:
         comm.close()
 
     def fizz(comm, msg):
-        raise RuntimeError("hi")
+        msg = "hi"
+        raise RuntimeError(msg)
 
     def on_close(msg):
         msgs.append(msg)
@@ -58,19 +59,19 @@ def test_comm_manager(kernel) -> None:
     assert manager.get_comm(comm.comm_id) == comm
     assert manager.get_comm("foo") is None
 
-    msg = dict(content=dict(comm_id=comm.comm_id, target_name="foo"))
+    msg = {"content": {"comm_id": comm.comm_id, "target_name": "foo"}}
     manager.comm_open(None, None, msg)
     assert len(msgs) == 1
     msg["content"]["target_name"] = "bar"
     manager.comm_open(None, None, msg)
     assert len(msgs) == 1
-    msg = dict(content=dict(comm_id=comm.comm_id, target_name="fizz"))
+    msg = {"content": {"comm_id": comm.comm_id, "target_name": "fizz"}}
     manager.comm_open(None, None, msg)
     assert len(msgs) == 1
 
     manager.register_comm(comm)
     assert manager.get_comm(comm.comm_id) == comm
-    msg = dict(content=dict(comm_id=comm.comm_id))
+    msg = {"content": {"comm_id": comm.comm_id}}
     manager.comm_msg(None, None, msg)
     assert len(msgs) == 2
     msg["content"]["comm_id"] = "foo"
@@ -79,15 +80,9 @@ def test_comm_manager(kernel) -> None:
 
     manager.register_comm(comm)
     assert manager.get_comm(comm.comm_id) == comm
-    msg = dict(content=dict(comm_id=comm.comm_id))
+    msg = {"content": {"comm_id": comm.comm_id}}
     manager.comm_close(None, None, msg)
     assert len(msgs) == 3
 
     assert comm._closed
 
-
-# def test_comm_in_manager(ipkernel: IPythonKernel) -> None:
-#     with pytest.deprecated_call():
-#         comm = Comm()
-
-#     assert comm.comm_id in ipkernel.comm_manager.comms

@@ -81,6 +81,7 @@ async def client(app: IPKernelApp):
     try:
         yield kc
     finally:
+        # Instruct the kernel to shutdown
         kc.shutdown()
 
 

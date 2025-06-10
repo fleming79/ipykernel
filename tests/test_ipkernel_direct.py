@@ -1,4 +1,4 @@
-"""Test IPythonKernel directly"""
+"""Test IPythonAKernel directly"""
 
 
 # Copyright (c) IPython Development Team.
@@ -27,17 +27,14 @@ async def test_direct_kernel_info_request(
 
 
 async def test_complete_request(client, kernel, tracemalloc_resource_warning):
-    reply = await send_shell_message(client, "complete_request", dict(code="hello", cursor_pos=0))
-    assert reply["header"]["msg_type"] == "complete_reply"
-    kernel.use_experimental_completions = False
-    reply = await send_shell_message(client, "complete_request", dict(code="hello", cursor_pos=None))
+    reply = await send_shell_message(client, "complete_request", {"code": "hello", "cursor_pos": 0})
     assert reply["header"]["msg_type"] == "complete_reply"
 
 
 async def test_inspect_request(
     client,
 ):
-    reply = await send_shell_message(client, "inspect_request", dict(code="hello", cursor_pos=0))
+    reply = await send_shell_message(client, "inspect_request", {"code": "hello", "cursor_pos": 0})
     assert reply["header"]["msg_type"] == "inspect_reply"
 
 
@@ -45,13 +42,13 @@ async def test_history_request(client, kernel):
     assert kernel.shell
     assert kernel.shell.history_manager
     kernel.shell.history_manager.db = DummyDB()
-    reply = await send_shell_message(client, "history_request", dict(hist_access_type="", output="", raw=""))
+    reply = await send_shell_message(client, "history_request", {"hist_access_type": "", "output": "", "raw": ""})
     assert reply["header"]["msg_type"] == "history_reply"
-    reply = await send_shell_message(client, "history_request", dict(hist_access_type="tail", output="", raw=""))
+    reply = await send_shell_message(client, "history_request", {"hist_access_type": "tail", "output": "", "raw": ""})
     assert reply["header"]["msg_type"] == "history_reply"
-    reply = await send_shell_message(client, "history_request", dict(hist_access_type="range", output="", raw=""))
+    reply = await send_shell_message(client, "history_request", {"hist_access_type": "range", "output": "", "raw": ""})
     assert reply["header"]["msg_type"] == "history_reply"
-    reply = await send_shell_message(client, "history_request", dict(hist_access_type="search", output="", raw=""))
+    reply = await send_shell_message(client, "history_request", {"hist_access_type": "search", "output": "", "raw": ""})
     assert reply["header"]["msg_type"] == "history_reply"
 
 
@@ -82,10 +79,10 @@ async def test_direct_interrupt_request(client, kernel):
 
 
 async def test_is_complete_request(client, kernel):
-    reply = await send_shell_message(client, "is_complete_request", dict(code="hello"))
+    reply = await send_shell_message(client, "is_complete_request", {"code": "hello"})
     assert reply["header"]["msg_type"] == "is_complete_reply"
     setattr(kernel, "shell.input_transformer_manager", None)
-    reply = await send_shell_message(client, "is_complete_request", dict(code="hello"))
+    reply = await send_shell_message(client, "is_complete_request", {"code": "hello"})
     assert reply["header"]["msg_type"] == "is_complete_reply"
 
 

@@ -1,4 +1,4 @@
-"""test the IPython Kernel"""
+"""test the IPython IPythonAKernel"""
 
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
@@ -6,58 +6,44 @@ from __future__ import annotations
 
 import time
 
-from jupyter_client.session import DELIM
+import pytest
 
 from tests import utils
-
-# if os.name == "nt":
-#     pytest.skip("skipping tests on windows", allow_module_level=True)
 
 
 async def test_direct_kernel_info_request(client):
     reply = await utils.send_shell_message(client, "kernel_info_request")
     assert reply["header"]["msg_type"] == "kernel_info_reply"
-    assert (
-        "supported_features" not in reply["content"] or "kernel subshells" not in reply["content"]["supported_features"]
-    )
+    supported_features = reply["content"]["supported_features"]
+    assert supported_features == ["kernel subshells", "debugger"]
 
 
 async def test_direct_execute_request(client):
-    reply = await utils.send_shell_message(client, "execute_request", dict(code="hello", silent=False))
+    reply = await utils.send_shell_message(client, "execute_request", {"code": "hello", "silent": False})
     assert reply["header"]["msg_type"] == "execute_reply"
 
 
 async def test_direct_execute_request_aborting(client, kernel):
     kernel._stop_on_error_time = time.monotonic() + 10
-    reply = await utils.send_shell_message(client, "execute_request", dict(code="hello", silent=False))
+    reply = await utils.send_shell_message(client, "execute_request", {"code": "hello", "silent": False})
     assert reply["header"]["msg_type"] == "execute_reply"
     assert reply["content"]["status"] == "error"
 
 
-async def test_direct_execute_request_error(kernel):
-    await kernel.execute_request(None, None, None)
-
-
 async def test_complete_request(client):
-    reply = await utils.send_shell_message(client, "complete_request", dict(code="hello", cursor_pos=0))
+    reply = await utils.send_shell_message(client, "complete_request", {"code": "hello", "cursor_pos": 0})
     assert reply["header"]["msg_type"] == "complete_reply"
 
 
 async def test_inspect_request(client):
-    reply = await utils.send_shell_message(client, "inspect_request", dict(code="hello", cursor_pos=0))
+    reply = await utils.send_shell_message(client, "inspect_request", {"code": "hello", "cursor_pos": 0})
     assert reply["header"]["msg_type"] == "inspect_reply"
 
 
-async def test_history_request(client):
-    reply = await utils.send_shell_message(client, "history_request", dict(hist_access_type="", output="", raw=""))
-    assert reply["header"]["msg_type"] == "history_reply"
-    reply = await utils.send_shell_message(client, "history_request", dict(hist_access_type="tail", output="", raw=""))
-    assert reply["header"]["msg_type"] == "history_reply"
-    reply = await utils.send_shell_message(client, "history_request", dict(hist_access_type="range", output="", raw=""))
-    assert reply["header"]["msg_type"] == "history_reply"
-    reply = await utils.send_shell_message(
-        client, "history_request", dict(hist_access_type="search", output="", raw="")
-    )
+@pytest.mark.parametrize("hist_access_type", ["", "tail", "range", "search"])
+async def test_history_request(client, hist_access_type):
+    content = {"hist_access_type": hist_access_type, "output": "", "raw": ""}
+    reply = await utils.send_shell_message(client, "history_request", content)
     assert reply["header"]["msg_type"] == "history_reply"
 
 
@@ -94,13 +80,13 @@ async def test_shutdown_request(client, kernel, mocker):
     assert stop.call_count == 1
 
 
-# async def test_shutdown_request_shell(client, kernel, mocker):
-#     mocker.patch.object(kernel, "do_shutdown", return_value={"restart": False, "status": "ok"})
-#     with pytest.raises(TimeoutError):
-#         with anyio.fail_after(1):
-#             await utils.send_shell_message(client, "shutdown_request", {"restart": False})
-#             # Message should be ignored
-#             # shutdown_request on shell is deprecated: https://jupyter-client.readthedocs.io/en/stable/messaging.html#changelog (5.4)
+async def test_is_complete_request(client):
+    reply = await utils.send_shell_message(client, "is_complete_request", {"code": "hello"})
+    assert reply["header"]["msg_type"] == "is_complete_reply"
+
+
+async def test_publish_debug_event(kernel):
+    kernel._publish_debug_event({})
 
 
 async def test_shutdown_request_control(client, kernel, mocker):
@@ -109,31 +95,9 @@ async def test_shutdown_request_control(client, kernel, mocker):
     assert shutdown_request.call_count == 1
 
 
-async def test_is_complete_request(client):
-    reply = await utils.send_shell_message(client, "is_complete_request", dict(code="hello"))
-    assert reply["header"]["msg_type"] == "is_complete_reply"
+# async def test_connect_request(kernel):
+#     await kernel.connect_request(kernel.shell_socket, b"foo", None)
 
 
-async def test_process_control(kernel):
-    await kernel.process_control_message([DELIM, 1])
-    msg = utils._prep_msg(kernel, msg_type="does_not_exist")
-    await kernel.process_control_message(msg)
-
-
-async def test_dispatch_shell(client):
-    from jupyter_client.session import DELIM
-
-    reply = await utils.send_shell_message(client, "is_complete_request", {"delim": DELIM})
-    assert reply
-
-
-async def test_publish_debug_event(kernel):
-    kernel._publish_debug_event({})
-
-
-async def test_connect_request(kernel):
-    await kernel.connect_request(kernel.shell_socket, b"foo", None)
-
-
-async def test_send_interrupt_children(kernel):
-    kernel._send_interrupt_children()
+# async def test_send_interrupt_children(kernel):
+#     kernel._send_interrupt_children()

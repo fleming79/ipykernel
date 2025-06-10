@@ -51,7 +51,7 @@ from ipykernel.connect import get_connection_info, write_connection_file
 from ipykernel.control import ControlThread
 from ipykernel.heartbeat import Heartbeat
 from ipykernel.iostream import IOPubThread
-from ipykernel.ipkernel import IPythonKernel
+from ipykernel.kernelbase import IPythonAKernel
 from ipykernel.shellchannel import ShellChannelThread
 from ipykernel.thread import BaseThread
 from ipykernel.zmqshell import ZMQInteractiveShell
@@ -105,7 +105,7 @@ To read more about this, see https://github.com/ipython/ipython/issues/2049
 """
 
 # -----------------------------------------------------------------------------
-# Application class for starting an IPython Kernel
+# Application class for starting an IPython IPythonAKernel
 # -----------------------------------------------------------------------------
 
 
@@ -115,18 +115,18 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
     name = "ipython-kernel"
     aliases = Dict(kernel_aliases)  # type:ignore[assignment]
     flags = Dict(kernel_flags)  # type:ignore[assignment]
-    classes = [IPythonKernel, ZMQInteractiveShell, ProfileDir, Session]
+    classes = [IPythonAKernel, ZMQInteractiveShell, ProfileDir, Session]
     # the kernel class, as an importstring
     kernel_class = Type(
-        cast("type[IPythonKernel]", "ipykernel.ipkernel.IPythonKernel"),
-        klass=IPythonKernel,
-        help="""The Kernel subclass to be used.
+        cast("type[IPythonAKernel]", "ipykernel.kernelbase.IPythonAKernel"),
+        klass=IPythonAKernel,
+        help="""The IPythonAKernel subclass to be used.
 
     This should allow easy reuse of the IPKernelApp entry point
     to configure and launch kernels other than IPython's own.
     """,
     ).tag(config=True)
-    kernel = Instance(IPythonKernel)
+    kernel = Instance(IPythonAKernel)
     poller = Any()  # don't restrict this even though current pollers are all Threads
     heartbeat: Instance[Heartbeat | None] = Instance(Heartbeat, allow_none=True)  # type:ignore[assignment]
 
@@ -154,7 +154,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
 
     subcommands = {
         "install": (
-            "ipykernel.kernelspec.InstallIPythonKernelSpecApp",
+            "ipykernel.kernelspec.InstallIPythonAKernelSpecApp",
             "Install the IPython kernel",
         ),
     }
@@ -586,7 +586,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
         signal.signal(signal.SIGINT, self.sigint_handler)
 
     async def init_kernel(self):
-        """Create the Kernel object itself"""
+        """Create the IPythonAKernel object itself"""
         kernel_factory = self.kernel_class.instance
 
         kernel = kernel_factory(

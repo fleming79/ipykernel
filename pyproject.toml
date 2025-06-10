@@ -8,7 +8,7 @@ dynamic = ["version"]
 authors = [{name = "IPython Development Team", email = "ipython-dev@python.org"}]
 license = {file = "LICENSE"}
 readme = "README.md"
-description = "IPython Kernel for Jupyter"
+description = "IPython IPythonAKernel for Jupyter"
 keywords = ["Interactive", "Interpreter", "Shell", "Web"]
 classifiers = [
     "Intended Audience :: Developers",
@@ -129,19 +129,11 @@ addopts = [
   "-raXs", "--durations=10", "--color=yes", "--doctest-modules",
    "--showlocals", "--strict-markers", "--strict-config",
   "-s",
-   "--ignore=ipykernel/gui/gtk3embed.py",
-   "--ignore=ipykernel/gui/gtkembed.py",
-   "--ignore=ipykernel/datapub.py",
    "--ignore=ipykernel/log.py",
-   "--ignore=ipykernel/pickleutil.py",
-   "--ignore=ipykernel/serialize.py",
-   "--ignore=ipykernel/_eventloop_macos.py"
 ]
 testpaths = [
-    "tests",
-    # "tests/inprocess"
+    "tests"
 ]
-norecursedirs = "tests/inprocess"
 # Restore this setting to debug failures
 # timeout_method = "thread"
 filterwarnings= [
@@ -200,7 +192,6 @@ omit = [
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
 
 [tool.ruff.lint]
 extend-select = [
@@ -257,8 +248,6 @@ ignore = [
 # PLC1901 `stderr == ""` can be simplified to `not stderr` as an empty string is falsey
 # B018 Found useless expression. Either assign it to a variable or remove it.
 # S603 `subprocess` call: check for execution of untrusted input
-"tests/*" = ["B011", "C408", "T201", "B007", "EM", "PTH", "PLW", "PLC1901", "B018", "S603", "ARG", "RET", "PGH"]
-"*/__init__.py" = ["F401"]
 
 [tool.interrogate]
 ignore-init-module=true

@@ -8,7 +8,6 @@ Subpackages
    :maxdepth: 4
 
    ipykernel.comm
-   ipykernel.inprocess
 
 Submodules
 ----------
@@ -61,7 +60,7 @@ Submodules
    :show-inheritance:
 
 
-.. automodule:: ipykernel.ipkernel
+.. automodule:: ipykernel.kernelbase
    :members:
    :undoc-members:
    :show-inheritance:

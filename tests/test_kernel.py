@@ -1,4 +1,4 @@
-"""test the IPython Kernel"""
+"""test the IPython IPythonAKernel"""
 
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
@@ -250,7 +250,7 @@ async def test_unc_paths(client, kernel):
     reason="does not work on PyPy",
 )
 async def test_shutdown(client, app):
-    """Kernel exits after polite shutdown_request"""
+    """IPythonAKernel exits after polite shutdown_request"""
     await execute(client, "a = 1")
     client.shutdown()
     assert app.kernel._main_subshell_ready.is_set()
