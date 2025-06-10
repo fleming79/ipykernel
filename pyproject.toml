@@ -186,8 +186,6 @@ omit = [
   "ipykernel/log.py",
   "ipykernel/pickleutil.py",
   "ipykernel/serialize.py",
-  "ipykernel/gui/*",
-  "ipykernel/pylab/*",
 ]
 
 [tool.ruff]

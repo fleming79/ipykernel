@@ -150,7 +150,6 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
 
     _log_map: Dict[int, t.Any] = Dict()
     _io_modified = Bool(False)
-    _blackhole = Any()
 
     subcommands = {
         "install": (
@@ -461,21 +460,6 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
             "control": self.control_port,
         }
 
-    async def init_blackhole(self):
-        """redirects stdout/stderr to devnull if necessary"""
-        self._save_io()
-        if self.no_stdout or self.no_stderr:
-            # keep reference around so that it would not accidentally close the pipe fds
-            self._blackhole = open(os.devnull, "w")  # noqa: SIM115
-            if self.no_stdout:
-                if sys.stdout is not None:
-                    sys.stdout.flush()
-                sys.stdout = self._blackhole
-            if self.no_stderr:
-                if sys.stderr is not None:
-                    sys.stderr.flush()
-                sys.stderr = self._blackhole
-
     async def init_io(self):
         """Redirect input streams and set a display hook."""
         self._save_io()
@@ -513,7 +497,6 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
             self.displayhook = displayhook_factory(self.session, self.iopub_socket)
             sys.displayhook = self.displayhook
 
-
     def _save_io(self):
         if not self._io_modified:
             self._original_io = sys.stdout, sys.stderr, sys.displayhook
@@ -544,9 +527,6 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
                 stderr.close()
             if isinstance(stdout, outstream_factory):
                 stdout.close()
-        if self._blackhole:
-            self._blackhole.close()
-
 
     def sigint_handler(self, *args):
         if self.kernel.shell_is_awaiting:
@@ -582,44 +562,11 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
 
         # Allow the displayhook to get the execution count
         self.displayhook.get_execution_count = lambda: kernel.execution_count
-
-    def init_gui_pylab(self):
-        """Enable GUI event loop integration, taking pylab into account."""
-
-        # Register inline backend as default
-        # this is higher priority than matplotlibrc,
-        # but lower priority than anything else (mpl.use() for instance).
-        # This only affects matplotlib >= 1.5
-        if not os.environ.get("MPLBACKEND"):
-            os.environ["MPLBACKEND"] = "module://matplotlib_inline.backend_inline"
-
-        # Provide a wrapper for :meth:`InteractiveShellApp.init_gui_pylab`
-        # to ensure that any exception is printed straight to stderr.
-        # Normally _showtraceback associates the reply with an execution,
-        # which means frontends will never draw it, as this exception
-        # is not associated with any execute request.
-
-        shell = self.shell
-        assert shell is not None
-        _showtraceback = shell._showtraceback
-        try:
-            # replace error-sending traceback with stderr
-            def print_tb(etype, evalue, stb):
-                print("GUI event loop or pylab initialization failed", file=sys.stderr)
-                assert shell is not None
-                print(shell.InteractiveTB.stb2text(stb), file=sys.stderr)
-
-            shell._showtraceback = print_tb
-            InteractiveShellApp.init_gui_pylab(self)
-        finally:
-            shell._showtraceback = _showtraceback
-
     async def init_shell(self):
         """Initialize the shell channel."""
         self.init_path()
         shell = self.kernel.shell
         self.shell = shell
-
     async def init_pdb(self):
         """Replace pdb with IPython's version that is interruptible.
 
@@ -652,7 +599,6 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
         async with anyio.create_task_group() as tg:
             # TODO: start these with taskgroup
             await self.init_pdb()
-            await self.init_blackhole()
             self.init_connection_file()
             self.init_sockets()
             self.init_heartbeat()
@@ -666,7 +612,6 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
 
             await self.init_kernel()
             await self.init_shell()
-            self.init_gui_pylab()
             self.init_extensions()
             self.init_code()
             # flush stdout/stderr, so that anything written to these streams during
