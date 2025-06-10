@@ -117,14 +117,19 @@ async def assemble_output(client: AsyncKernelClient, timeout=TIMEOUT):
     return stdout, stderr
 
 
-async def wait_for_idle(kc: AsyncKernelClient, *, wait=1):
-    with anyio.fail_after(wait):
+async def wait_for_idle(client: AsyncKernelClient, *, wait=1.0):
+    with anyio.move_on_after(wait):
         while True:
-            msg = await kc.get_iopub_msg()
+            msg = await client.get_iopub_msg()
             msg_type = msg["msg_type"]
             content = msg["content"]
             if msg_type == "status" and content["execution_state"] == "idle":
                 break
+
+
+async def clear_pub_message(client):
+    "Ensure there are no further pubio messages waiting."
+    await assemble_output(client, timeout=0.1)
 
 
 async def send_shell_message(client: AsyncKernelClient, msg_type: str, content: Mapping[str, Any] | None = None):

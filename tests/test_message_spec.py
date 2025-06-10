@@ -10,12 +10,6 @@ from jupyter_client._version import version_info
 
 from tests import utils
 
-
-async def clear_pub_message(client):
-    "Ensure there are no further pubio messages waiting."
-    await utils.assemble_output(client, timeout=0.1)
-
-
 # -----------------------------------------------------------------------------
 # Tests
 # -----------------------------------------------------------------------------
@@ -31,7 +25,7 @@ async def test_execute(client, kernel):
 
 
 async def test_execute_silent(client):
-    await clear_pub_message(client)
+    await utils.clear_pub_message(client)
     msg_id, reply = await utils.execute(client, code="x=1", silent=True)
     count = reply["execution_count"]
     await utils.check_pub_message(client, msg_id, execution_state="busy")
@@ -51,7 +45,7 @@ async def test_execute_silent(client):
 
 
 async def test_execute_error(client):
-    await clear_pub_message(client)
+    await utils.clear_pub_message(client)
     msg_id, reply = await utils.execute(client, code="1/0")
     assert reply["status"] == "error"
     assert reply["ename"] == "ZeroDivisionError"
@@ -303,14 +297,14 @@ async def test_history_search(client):
 
 
 async def test_stream(client):
-    await clear_pub_message(client)
+    await utils.clear_pub_message(client)
     client.execute("print('hi')")
     stdout, stderr = await utils.assemble_output(client)
     assert stdout == "hi\n"
 
 
 async def test_display_data(client):
-    await clear_pub_message(client)
+    await utils.clear_pub_message(client)
     msg_id, reply = await utils.execute(client, "from IPython.display import display; display(1)")
     await utils.check_pub_message(client, msg_id, execution_state="busy")
     await utils.check_pub_message(client, msg_id, msg_type="execute_input")

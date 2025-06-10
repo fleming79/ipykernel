@@ -53,6 +53,7 @@ async def test_comm_info_request(client):
 
 
 async def test_direct_interrupt_request(client, kernel):
+    await utils.clear_pub_message(client)
     reply = await utils.send_control_message(client, "interrupt_request")
     assert reply["header"]["msg_type"] == "interrupt_reply"
     assert reply["content"] == {"status": "ok"}

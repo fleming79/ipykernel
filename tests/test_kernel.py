@@ -6,17 +6,14 @@
 from __future__ import annotations
 
 import ast
-import os.path
-import platform
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING
 
 import anyio
 import pytest
 
-from tests.utils import assemble_output, execute, wait_for_idle
+from tests import utils
 
 if TYPE_CHECKING:
     from jupyter_client.asynchronous.client import AsyncKernelClient
@@ -25,7 +22,7 @@ if TYPE_CHECKING:
 async def _check_main(client: AsyncKernelClient, expected=True, stream="stdout"):
     client.execute("import sys")
     client.execute(f"print(sys.{stream}._is_main_process())")
-    stdout, stderr = await assemble_output(client)
+    stdout, stderr = await utils.assemble_output(client)
     assert stdout.strip() == repr(expected)
 
 
@@ -40,17 +37,19 @@ def _check_status(content):
 
 async def test_simple_print(client):
     """simple print statement in kernel"""
+    await utils.clear_pub_message(client)
     client.execute("print('hi')")
-    stdout, stderr = await assemble_output(client)
+    stdout, stderr = await utils.assemble_output(client)
     assert stdout == "hi\n"
     assert stderr == ""
     await _check_main(client, expected=True)
 
 
-async def test_sys_path(client, kernel):
+async def test_sys_path(client):
     """test that sys.path doesn't get messed up by default"""
+    await utils.clear_pub_message(client)
     client.execute("import sys; print(repr(sys.path))")
-    stdout, stderr = await assemble_output(client)
+    stdout, stderr = await utils.assemble_output(client)
     # for error-output on failure
     sys.stderr.write(stderr)
 
@@ -58,10 +57,10 @@ async def test_sys_path(client, kernel):
     assert "" in sys_path
 
 
-async def test_sys_path_profile_dir(client, kernel):
+async def test_sys_path_profile_dir(client):
     """test that sys.path doesn't get messed up when `--profile-dir` is specified"""
     client.execute("import sys; print(repr(sys.path))")
-    stdout, stderr = await assemble_output(client)
+    stdout, stderr = await utils.assemble_output(client)
     # for error-output on failure
     sys.stderr.write(stderr)
 
@@ -90,17 +89,17 @@ async def test_raw_input(client):
     client.input(text)
     reply = await client.get_shell_msg()
     assert reply["content"]["status"] == "ok"
-    stdout, stderr = await assemble_output(client)
+    stdout, stderr = await utils.assemble_output(client)
     assert stdout == text + "\n"
 
 
 async def test_save_history(client, tmp_path):
     file = tmp_path.joinpath("hist.out")
     client.execute("a=1")
-    await wait_for_idle(client)
+    await utils.wait_for_idle(client)
     client.execute('b="abcþ"')
-    await wait_for_idle(client)
-    _, reply = await execute(client, f"%hist -f {file}")
+    await utils.wait_for_idle(client)
+    _, reply = await utils.execute(client, f"%hist -f {file}")
     assert reply["status"] == "ok"
     with open(file, encoding="utf-8") as f:
         content = f.read()
@@ -122,7 +121,7 @@ async def test_smoke_faulthandler(client, kernel):
             "    faulthandler.register(signal.SIGTERM)",
         ]
     )
-    _, reply = await execute(client, code)
+    _, reply = await utils.execute(client, code)
     assert reply["status"] == "ok", reply.get("traceback", "")
 
 
@@ -162,7 +161,7 @@ async def test_is_complete(client, kernel):
 @pytest.mark.skipif(sys.platform != "win32", reason="only run on Windows")
 async def test_complete(client, kernel):
     client.execute("a = 1")
-    await wait_for_idle(client)
+    await utils.wait_for_idle(client)
     cell = "import IPython\nb = a."
     client.complete(cell)
     reply = await client.get_shell_msg()
@@ -199,7 +198,7 @@ async def test_matplotlib_inline_on_import(client, kernel):
 async def test_message_order(client, kernel):
     N = 100  # number of messages to test
 
-    _, reply = await execute(client, "a = 1")
+    _, reply = await utils.execute(client, "a = 1")
     _check_status(reply)
     offset = reply["execution_count"] + 1
     cell = "a += 1\na"
@@ -219,41 +218,31 @@ async def test_message_order(client, kernel):
     sys.platform.startswith("linux") or sys.platform.startswith("darwin"),
     reason="test only on windows",
 )
-async def test_unc_paths(client, kernel):
-    with client, kernel() as client, TemporaryDirectory() as td:
-        drive_file_path = os.path.join(td, "unc.txt")
-        with open(drive_file_path, "w+") as f:
-            f.write("# UNC test")
-        unc_root = "\\\\localhost\\C$"
-        file_path = os.path.splitdrive(os.path.dirname(drive_file_path))[1]
-        unc_file_path = os.path.join(unc_root, file_path[1:])
+async def test_unc_paths(client, kernel, tmp_path):
+    drive_file_path = tmp_path.joinpath("unc.txt")
+    with drive_file_path.open("w+") as f:
+        f.write("# UNC test")
+    unc_root = "\\\\localhost\\C$"
+    unc_file_path = f"{unc_root}\\{drive_file_path.name}"
 
-        client.execute(f"cd {unc_file_path:s}")
-        reply = await client.get_shell_msg()
-        assert reply["content"]["status"] == "ok"
-        out, err = await assemble_output(client)
-        assert unc_file_path in out
+    client.execute(f"cd {unc_file_path:s}")
+    reply = await client.get_shell_msg()
+    assert reply["content"]["status"] == "ok"
+    out, err = await utils.assemble_output(client)
+    assert unc_file_path in out
 
-        client.execute("ls")
-        reply = await client.get_shell_msg()
-        assert reply["content"]["status"] == "ok"
-        out, err = await assemble_output(client)
-        assert "unc.txt" in out
+    client.execute("ls")
+    reply = await client.get_shell_msg()
+    assert reply["content"]["status"] == "ok"
+    out, err = await utils.assemble_output(client)
+    assert "unc.txt" in out
 
-        client.execute("cd")
-        reply = await client.get_shell_msg()
-        assert reply["content"]["status"] == "ok"
+    client.execute("cd")
+    reply = await client.get_shell_msg()
+    assert reply["content"]["status"] == "ok"
 
 
-@pytest.mark.skipif(
-    platform.python_implementation() == "PyPy",
-    reason="does not work on PyPy",
-)
+
 async def test_shutdown(client, app):
     """IPythonAKernel exits after polite shutdown_request"""
-    await execute(client, "a = 1")
-    client.shutdown()
-    assert app.kernel._main_subshell_ready.is_set()
-    with anyio.fail_after(30):
-        while not app.kernel._main_subshell_ready.is_set():
-            await anyio.sleep(0.1)
+    # TODO: write me

@@ -32,7 +32,7 @@ async def test_port_bind_success(client, kernel):
 @no_type_check
 async def test_port_bind_failure_recovery(client, kernel):
     try:
-        errno.WSAEADDRINUSE
+        errno.WSAEADDRINUSE  # noqa: B018
     except AttributeError:
         # Fake windows address in-use code
         errno.WSAEADDRINUSE = 12345

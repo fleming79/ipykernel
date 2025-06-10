@@ -8,6 +8,7 @@ from jupyter_client.asynchronous.client import AsyncKernelClient
 from traitlets.config import SingletonConfigurable
 
 from ipykernel.kernelapp import IPKernelApp
+from tests import utils
 
 if TYPE_CHECKING:
     pytest_plugins = ["anyio.pytest_plugin"]
@@ -69,21 +70,18 @@ async def app(anyio_backend):
 
 
 @pytest.fixture(scope="session")
-async def kernel(app: IPKernelApp):
+async def kernel(app: IPKernelApp, client: AsyncKernelClient):
+    # We require client for it to send shutdown
     return app.kernel
-
-
 @pytest.fixture(scope="session")
 async def client(app: IPKernelApp):
-    kc: AsyncKernelClient = AsyncKernelClient()
-    kc.load_connection_info(app.get_connection_info())
-    kc.start_channels()
+    client: AsyncKernelClient = AsyncKernelClient()
+    client.load_connection_info(app.get_connection_info())
+    client.start_channels()
     try:
-        yield kc
+        yield client
     finally:
-        # Instruct the kernel to shutdown
-        kc.shutdown()
-
+        client.shutdown()
 
 @pytest.fixture
 def tracemalloc_resource_warning(recwarn, N=10):

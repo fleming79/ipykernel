@@ -67,7 +67,7 @@ async def test_io_api(iopub_thread):
     with pytest.raises(io.UnsupportedOperation):
         stream.tell()
     with pytest.raises(TypeError):
-        stream.write(b"")  # type:ignore
+        stream.write(b"")  # type: ignore[arg-type]
 
 
 async def test_io_isatty(iopub_thread):

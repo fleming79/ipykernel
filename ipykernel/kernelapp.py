@@ -259,7 +259,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
                     raise
         return None
 
-    async def write_connection_file(self, **kwargs: t.Any) -> None:
+    def write_connection_file(self, **kwargs: t.Any) -> None:
         """write connection info to JSON file"""
         cf = self.abs_connection_file
         connection_info = {
@@ -299,7 +299,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
 
         self.cleanup_ipc_files()
 
-    async def init_connection_file(self):
+    def init_connection_file(self):
         """Initialize our connection file."""
         if not self.connection_file:
             self.connection_file = f"kernel-{os.getpid()}.json"
@@ -320,7 +320,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
             )
             self.exit(1)
 
-    async def init_sockets(self):
+    def init_sockets(self):
         """Create a context, a session, and the kernel sockets."""
         self.log.info("Starting the kernel at pid: %", os.getpid())
         assert self.context is None, "init_sockets cannot be called twice!"
@@ -343,10 +343,10 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
             # see ipython/ipykernel#270 and zeromq/libzmq#2892
             self.shell_socket.router_handover = self.stdin_socket.router_handover = 1
 
-        await self.init_control(context)
-        await self.init_iopub(context)
+        self.init_control(context)
+        self.init_iopub(context)
 
-    async def init_control(self, context):
+    def init_control(self, context):
         """Initialize the control channel."""
         self.control_socket = zmq_anyio.Socket(context.socket(zmq.ROUTER))
         self.control_socket.linger = 1000
@@ -371,7 +371,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
         self.control_thread = ControlThread(daemon=True)
         self.shell_channel_thread = ShellChannelThread(context, self.shell_socket, daemon=True)
 
-    async def init_iopub(self, context):
+    def init_iopub(self, context):
         """Initialize the iopub channel."""
         self.iopub_socket = zmq_anyio.Socket(context.socket(zmq.PUB))
         self.iopub_socket.linger = 1000
@@ -382,7 +382,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
         # backward-compat: wrap iopub socket API in background thread
         self.iopub_socket = self.iopub_thread.background_socket
 
-    async def init_heartbeat(self):
+    def init_heartbeat(self):
         """start the heart beating"""
         # heartbeat doesn't share context, because it mustn't be blocked
         # by the GIL, which is accessed by libzmq when freeing zero-copy messages
@@ -680,11 +680,11 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
             # TODO: start these with taskgroup
             await self.init_pdb()
             await self.init_blackhole()
-            await self.init_connection_file()
-            await self.init_sockets()
-            await self.init_heartbeat()
+            self.init_connection_file()
+            self.init_sockets()
+            self.init_heartbeat()
             # writing/displaying connection info must be *after* init_sockets/heartbeat
-            await self.write_connection_file()
+            self.write_connection_file()
             # Log connection info after writing connection file, so that the connection
             # file is definitely available at the time someone reads the log.
             await self.log_connection_info()
