@@ -1142,12 +1142,6 @@ class IPythonAKernel(SingletonConfigurable):
         reply_content = self.do_debug_request(content)
         if inspect.isawaitable(reply_content):
             reply_content = await reply_content
-        else:
-            warnings.warn(
-                _AWAITABLE_MESSAGE.format(func_name="do_debug_request", target=self.do_debug_request),
-                PendingDeprecationWarning,
-                stacklevel=1,
-            )
         reply_msg = self.session.send(socket, "debug_reply", reply_content, parent, ident)
         self.log.debug("%s", reply_msg)
 

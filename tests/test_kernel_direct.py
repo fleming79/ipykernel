@@ -63,13 +63,17 @@ async def test_direct_interrupt_request(client, kernel):
         msg = "evalue"
         raise OSError(msg)
 
-    kernel._send_interrupt_children = raiseOSError
-    reply = await utils.send_control_message(client, "interrupt_request")
-    assert reply["header"]["msg_type"] == "interrupt_reply"
-    assert reply["content"]["status"] == "error"
-    assert reply["content"]["ename"] == "OSError"
-    assert reply["content"]["evalue"] == "evalue"
-    assert len(reply["content"]["traceback"]) > 0
+    _obj = kernel._send_interrupt_children
+    try:
+        kernel._send_interrupt_children = raiseOSError
+        reply = await utils.send_control_message(client, "interrupt_request")
+        assert reply["header"]["msg_type"] == "interrupt_reply"
+        assert reply["content"]["status"] == "error"
+        assert reply["content"]["ename"] == "OSError"
+        assert reply["content"]["evalue"] == "evalue"
+        assert len(reply["content"]["traceback"]) > 0
+    finally:
+        kernel._send_interrupt_children = _obj
 
 
 async def test_shutdown_request(client, kernel, mocker):

@@ -93,10 +93,6 @@ async def test_io_thread(iopub_thread):
 async def test_background_socket(iopub_thread):
     sock = BackgroundSocket(iopub_thread)
     assert sock.__class__ == BackgroundSocket
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        sock.linger = 101
-        assert iopub_thread.socket.linger == 101
     assert sock.io_thread == iopub_thread
     sock.send(b"hi")
 
@@ -105,15 +101,11 @@ async def test_outstream(iopub_thread):
     session = Session()
     pub = iopub_thread.socket
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        stream = OutStream(session, pub, "stdout")
-        stream.close()
-        stream = OutStream(session, iopub_thread, "stdout", pipe=object())
-        stream.close()
+    stream = OutStream(session, pub, "stdout")
+    stream.close()
 
-        stream = OutStream(session, iopub_thread, "stdout", watchfd=False)
-        stream.close()
+    stream = OutStream(session, iopub_thread, "stdout", watchfd=False)
+    stream.close()
 
     stream = OutStream(session, iopub_thread, "stdout", isatty=True, echo=io.StringIO())
 
