@@ -241,7 +241,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
 
     def _bind_socket(self, s, port):
         try:
-            win_in_use = errno.WSAEADDRINUSE
+            win_in_use = errno.WSAEADDRINUSE  # type: ignore[attr-defined]
         except AttributeError:
             win_in_use = None
 
@@ -513,7 +513,6 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
             self.displayhook = displayhook_factory(self.session, self.iopub_socket)
             sys.displayhook = self.displayhook
 
-        self.patch_io()
 
     def _save_io(self):
         if not self._io_modified:
@@ -548,32 +547,6 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
         if self._blackhole:
             self._blackhole.close()
 
-    def patch_io(self):
-        """Patch important libraries that can't handle sys.stdout forwarding"""
-        try:
-            import faulthandler
-        except ImportError:
-            pass
-        else:
-            # Warning: this is a monkeypatch of `faulthandler.enable`, watch for possible
-            # updates to the upstream API and update accordingly (up-to-date as of Python 3.5):
-            # https://docs.python.org/3/library/faulthandler.html#faulthandler.enable
-
-            # change default file to __stderr__ from forwarded stderr
-            faulthandler_enable = faulthandler.enable
-
-            def enable(file=sys.__stderr__, all_threads=True, **kwargs):
-                return faulthandler_enable(file=file, all_threads=all_threads, **kwargs)
-
-            faulthandler.enable = enable
-
-            if hasattr(faulthandler, "register"):
-                faulthandler_register = faulthandler.register
-
-                def register(signum, file=sys.__stderr__, all_threads=True, chain=False, **kwargs):
-                    return faulthandler_register(signum, file=file, all_threads=all_threads, chain=chain, **kwargs)
-
-                faulthandler.register = register
 
     def sigint_handler(self, *args):
         if self.kernel.shell_is_awaiting:

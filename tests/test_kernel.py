@@ -107,24 +107,6 @@ async def test_save_history(client, tmp_path):
     assert 'b="abcþ"' in content
 
 
-async def test_smoke_faulthandler(client, kernel):
-    pytest.importorskip("faulthandler", reason="this test needs faulthandler")
-
-    # Note: faulthandler.register is not available on windows.
-    code = "\n".join(
-        [
-            "import sys",
-            "import faulthandler",
-            "import signal",
-            "faulthandler.enable()",
-            'if not sys.platform.startswith("win32"):',
-            "    faulthandler.register(signal.SIGTERM)",
-        ]
-    )
-    _, reply = await utils.execute(client, code)
-    assert reply["status"] == "ok", reply.get("traceback", "")
-
-
 async def test_help_output(client, kernel):
     """ipython kernel --help-all works"""
     cmd = [sys.executable, "-m", "IPython", "kernel", "--help-all"]
