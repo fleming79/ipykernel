@@ -104,7 +104,7 @@ async def test_outstream(iopub_thread):
     stream = OutStream(session, pub, "stdout")
     stream.close()
 
-    stream = OutStream(session, iopub_thread, "stdout", watchfd=False)
+    stream = OutStream(session, iopub_thread, "stdout")
     stream.close()
 
     stream = OutStream(session, iopub_thread, "stdout", isatty=True, echo=io.StringIO())
@@ -112,7 +112,6 @@ async def test_outstream(iopub_thread):
     with stream:
         with pytest.raises(io.UnsupportedOperation):
             stream.fileno()
-        stream._watch_pipe_fd()
         stream.flush()
         stream.write("hi")
         stream.writelines(["ab", "cd"])
@@ -127,7 +126,6 @@ async def test_event_pipe_gc(iopub_thread):
         iopub_thread,
         "stdout",
         isatty=True,
-        watchfd=False,
     )
     assert iopub_thread._event_pipes == {}
     with stream, mock.patch.object(sys, "stdout", stream), ThreadPoolExecutor(1) as pool:
@@ -163,14 +161,7 @@ async def subprocess_test_echo_watch():
         iopub_thread.start()
         stdout_fd = sys.stdout.fileno()
         sys.stdout.flush()
-        stream = OutStream(
-            session,
-            iopub_thread,
-            "stdout",
-            isatty=True,
-            echo=sys.stdout,
-            watchfd="force",
-        )
+        stream = OutStream(session, iopub_thread, "stdout", isatty=True, echo=sys.stdout)
         save_stdout = sys.stdout
         with stream, mock.patch.object(sys, "stdout", stream):
             # write to low-level FD
@@ -193,64 +184,3 @@ async def subprocess_test_echo_watch():
         iopub_thread.stop()
         iopub_thread.close()
 
-
-@pytest.mark.skipif(sys.platform.startswith("win"), reason="Windows")
-async def test_echo_watch(ctx):
-    """Test echo on underlying FD while capturing the same FD
-
-    Test runs in a subprocess to avoid messing with pytest output capturing.
-    """
-    s = zmq_anyio.Socket(ctx.socket(zmq.PULL))
-    port = s.bind_to_random_port("tcp://127.0.0.1")
-    url = f"tcp://127.0.0.1:{port}"
-    session = Session(key=b"abc")
-    stdout_chunks = []
-    async with s:
-        env = dict(os.environ)
-        env["IOPUB_URL"] = url
-        env["PYTHONUNBUFFERED"] = "1"
-        env.pop("PYTEST_CURRENT_TEST", None)
-        p = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                f"import {__name__}, anyio; anyio.run({__name__}.subprocess_test_echo_watch)",
-            ],
-            env=env,
-            capture_output=True,
-            check=True,
-            text=True,
-            timeout=10,
-        )
-        print(f"{p.stdout=}")
-        print(f"{p.stderr}=", file=sys.stderr)
-        assert p.returncode == 0
-        while await s.apoll(timeout=100).wait():
-            msg = await s.arecv_multipart().wait()
-            ident, msg = session.feed_identities(msg, copy=True)
-            msg = session.deserialize(msg, content=True, copy=True)
-            assert msg is not None  # for type narrowing
-            if msg["header"]["msg_type"] == "stream" and msg["content"]["name"] == "stdout":
-                stdout_chunks.append(msg["content"]["text"])
-
-    # check outputs
-    # use sets of lines to ignore ordering issues with
-    # async flush and watchfd thread
-
-    # Check the stream output forwarded over zmq
-    zmq_stdout = "".join(stdout_chunks)
-    assert set(zmq_stdout.strip().splitlines()) == {
-        "fd",
-        "print",
-        "stdout",
-        "__stdout__",
-    }
-
-    # Check what was written to the process stdout (kernel terminal)
-    # just check that each output source went to the terminal
-    assert set(p.stdout.strip().splitlines()) == {
-        "fd",
-        "print",
-        "stdout",
-        "__stdout__",
-    }

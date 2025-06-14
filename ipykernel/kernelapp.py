@@ -470,7 +470,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp, ConnectionFileMix
             e_stderr = None if self.quiet else sys.stderr
 
             if not self.capture_fd_output:
-                outstream_factory = partial(outstream_factory, watchfd=False)
+                outstream_factory = partial(outstream_factory)
 
             if sys.stdout is not None:
                 sys.stdout.flush()

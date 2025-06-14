@@ -343,31 +343,6 @@ class OutStream(TextIOBase):
         msg = "fileno"
         raise io.UnsupportedOperation(msg)
 
-    def _watch_pipe_fd(self):
-        """
-        We've redirected standards streams 0 and 1 into a pipe.
-
-        We need to watch in a thread and redirect them to the right places.
-
-        1) the ZMQ channels to show in notebook interfaces,
-        2) the original stdout/err, to capture errors in terminals.
-
-        We cannot schedule this on the ioloop thread, as this might be blocking.
-
-        """
-
-        if self._fid is None:
-            return
-
-        try:
-            bts = os.read(self._fid, PIPE_BUFFER_SIZE)
-            while bts and self._should_watch:
-                self.write(bts.decode(errors="replace"))
-                os.write(self._original_stdstream_copy, bts)
-                bts = os.read(self._fid, PIPE_BUFFER_SIZE)
-        except Exception:
-            self._exc = sys.exc_info()
-
     def __init__(
         self,
         session,
@@ -375,7 +350,6 @@ class OutStream(TextIOBase):
         name,
         echo=None,
         *,
-        watchfd=True,
         isatty=False,
     ):
         """
@@ -387,16 +361,8 @@ class OutStream(TextIOBase):
             the publication thread
         name : str {'stderr', 'stdout'}
             the name of the standard stream to replace
-        pipe : object
-            the pipe object
         echo : bool
             whether to echo output
-        watchfd : bool (default, True)
-            Watch the file descriptor corresponding to the replaced stream.
-            This is useful if you know some underlying code will write directly
-            the file descriptor by its number. It will spawn a watching thread,
-            that will swap the give file descriptor for a pipe, read from the
-            pipe, and insert this into the current Stream.
         isatty : bool (default, False)
             Indication of whether this stream has terminal capabilities (e.g. can handle colors)
 
@@ -421,22 +387,6 @@ class OutStream(TextIOBase):
         self._isatty = bool(isatty)
         self._should_watch = False
         self._local = local()
-
-        if (
-            (
-                watchfd
-                and (
-                    (sys.platform.startswith("linux") or sys.platform.startswith("darwin"))
-                    # Pytest set its own capture. Don't redirect from within pytest.
-                    and ("PYTEST_CURRENT_TEST" not in os.environ)
-                )
-            )
-            # allow forcing watchfd (mainly for tests)
-            or watchfd == "force"
-        ):
-            self._should_watch = True
-            self._setup_stream_redirects(name)
-
         if echo:
             if hasattr(echo, "read") and hasattr(echo, "write"):
                 # make sure we aren't trying to echo on the FD we're watching!
@@ -497,9 +447,6 @@ class OutStream(TextIOBase):
         self._fid = pr
 
         self._exc = None
-        self.watch_fd_thread = threading.Thread(target=self._watch_pipe_fd)
-        self.watch_fd_thread.daemon = True
-        self.watch_fd_thread.start()
 
     def _is_main_process(self):
         return os.getpid() == self._main_pid
@@ -510,20 +457,6 @@ class OutStream(TextIOBase):
 
     def close(self):
         """Close the stream."""
-        if self._should_watch:
-            self._should_watch = False
-            # thread won't wake unless there's something to read
-            # writing something after _should_watch will not be echoed
-            if self.watch_fd_thread is not None and self.watch_fd_thread.is_alive():
-                os.write(self._original_stdstream_fd, b"\0")
-                self.watch_fd_thread.join()
-            self.echo = None
-            # restore original FDs
-            os.dup2(self._original_stdstream_copy, self._original_stdstream_fd)
-            os.close(self._original_stdstream_copy)
-        if self._exc:
-            etype, value, tb = self._exc
-            traceback.print_exception(etype, value, tb)
         self.pub_thread = None
 
     @property

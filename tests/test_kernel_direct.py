@@ -28,6 +28,7 @@ async def test_direct_execute_request_aborting(client, kernel):
     reply = await utils.send_shell_message(client, "execute_request", {"code": "hello", "silent": False})
     assert reply["header"]["msg_type"] == "execute_reply"
     assert reply["content"]["status"] == "error"
+    kernel._stop_on_error_time = time.monotonic()
 
 
 async def test_complete_request(client):
@@ -52,12 +53,12 @@ async def test_comm_info_request(client):
     assert reply["header"]["msg_type"] == "comm_info_reply"
 
 
-async def test_direct_interrupt_request(client, kernel):
+async def test_direct_interrupt_request(client, kernel, mocker):
     await utils.clear_pub_message(client)
+    mocker.patch.object(kernel, "interrupt_request")
     reply = await utils.send_control_message(client, "interrupt_request")
     assert reply["header"]["msg_type"] == "interrupt_reply"
     assert reply["content"] == {"status": "ok"}
-
     # test failure on interrupt request
     def raiseOSError():
         msg = "evalue"
@@ -96,8 +97,10 @@ async def test_publish_debug_event(kernel):
 
 async def test_shutdown_request_control(client, kernel, mocker):
     shutdown_request = mocker.patch.object(kernel, "do_shutdown", return_value={"restart": False, "status": "ok"})
+    stop = mocker.patch.object(kernel, "stop")
     await client.shutdown(reply=True)
     assert shutdown_request.call_count == 1
+    assert stop.call_count == 1
 
 
 # async def test_connect_request(kernel):

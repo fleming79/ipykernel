@@ -59,7 +59,8 @@ async def test_comm_info_request(
     assert reply["header"]["msg_type"] == "comm_info_reply"
 
 
-async def test_direct_interrupt_request(client, kernel):
+async def test_direct_interrupt_request(client, kernel, mocker):
+    mocker.patch.object(kernel, "interrupt_request")
     reply = await send_control_message(client, "interrupt_request")
     assert reply["header"]["msg_type"] == "interrupt_reply"
     assert reply["content"] == {"status": "ok"}
