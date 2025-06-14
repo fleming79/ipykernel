@@ -4,10 +4,10 @@
 # Distributed under the terms of the Modified BSD License.
 from __future__ import annotations
 
-import contextlib
 import errno
 import functools
 import os
+import queue
 import sys
 import threading
 import traceback
@@ -66,6 +66,7 @@ class MainKernel(ConnectionFileMixin, Kernel):
     _instance = None
     _stop_event = Instance(threading.Event, ())
     zmq_context = Instance(zmq.Context)
+    shell_interrupt: queue.Queue[bool] = queue.Queue()
 
     def __new__(cls) -> Self:
         #  There is only one instance.
@@ -425,8 +426,7 @@ class MainKernel(ConnectionFileMixin, Kernel):
         socket_type: zmq.SocketType,
         linger: int,
         max_attempts=100,
-        context: zmq.Context | None = None,
-        tg: TaskGroup = None,
+        context: zmq.Context | None = None
     ):
         "Open the socket for comms, it will be closed when the context is exited"
         # Create socket
@@ -484,30 +484,27 @@ class MainKernel(ConnectionFileMixin, Kernel):
 
     async def _process_shell(self, socket, idents, msg):
         msg_type = msg["header"]["msg_type"]
-        if msg_type == "execute_request":
-            await self.execute_request(socket, idents, msg)
-            self._publish_status("busy", msg)
 
-        # Print some info about this message and leave a '--->' marker, so it's
-        # easier to trace visually the message chain when debugging.  Each
-        # handler prints its message at the end.
         self.log.debug("\n*** MESSAGE TYPE:%s***", msg_type)
         self.log.debug("   Content: %s\n   --->\n   ", msg["content"])
 
-        handler = self.shell_handlers.get(msg_type)
-        if handler is None:
-            self.log.error("Unknown message type: %r", msg_type)
+        if msg_type == "execute_request":
+            await self.execute_request(socket, idents, msg)
         else:
-            self.log.debug("%s: %s", msg_type, msg)
-            try:
-                await handler(idents, idents, msg)
-            except Exception as e:
-                self.log.error("Exception in message handler:", exc_info=e)
-            except KeyboardInterrupt:
-                # Ctrl-c shouldn't crash the kernel here.
-                self.log.error("KeyboardInterrupt caught in kernel.")
-        if msg_type != "execute_request":
-            self._publish_status("idle", msg)
+            handler = self.shell_handlers.get(msg_type)
+            if handler is None:
+                self.log.error("Unknown message type: %r", msg_type)
+            else:
+                try:
+                    self._publish_status("busy", msg)
+                    await handler(idents, idents, msg)
+                except Exception as e:
+                    self.log.error("Exception in message handler:", exc_info=e)
+                except KeyboardInterrupt:
+                    # Ctrl-c shouldn't crash the kernel here.
+                    self.log.error("KeyboardInterrupt caught in kernel.")
+                finally:
+                    self._publish_status("idle", msg)
 
     # async def shell_main(self, socket: zmq_anyio.Socket, *, task_status: TaskStatus):
     #     """Main loop for a single subshell."""

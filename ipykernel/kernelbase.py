@@ -361,12 +361,14 @@ class Kernel(LoggingConfigurable):
     #         metadata=metadata,
     #     )
 
+
     async def execute_request(self, socket, ident, parent):
         content = parent["content"]
         silent = content["silent"]
-        if silent:
+        if not silent:
             await self._exec_send_stream.send((time.monotonic(), socket, ident, parent))
-        await self._execute_request(socket, ident, parent)
+        else:
+            self.main_kernel.start_soon(self._execute_request, socket, ident, parent)
 
     async def _shell_execute_request_loop(self):
         async with self._exec_receive_stream as receive_stream:
@@ -389,7 +391,7 @@ class Kernel(LoggingConfigurable):
                                 ident=idents,
                             )
                         continue
-                    await self.execute_request(socket, idents, msg)
+                    await self._execute_request(socket, idents, msg)
                 except BaseException as e:
                     self.log.exception("Execute request", exc_info=e)
                 finally:
@@ -436,6 +438,8 @@ class Kernel(LoggingConfigurable):
                 self._stop_on_error_time = time.monotonic()
                 self.log.info("Rejecting non-silent execute request")
 
+        self._publish_status("idle", parent)
+
     async def do_execute(
         self,
         code: str,
@@ -466,7 +470,7 @@ class Kernel(LoggingConfigurable):
                     transformed_cell=shell.transform_cell(code),
                 )
                 if not execution.interrupt:
-                    self.shell_interrupt.put(False)
+                    self.main_kernel.shell_interrupt.put(False)
 
             res = None
             try:
@@ -474,7 +478,7 @@ class Kernel(LoggingConfigurable):
                     execution = Execution()
                     self.shell_is_awaiting = True
                     tg.start_soon(run, execution)
-                    execution.interrupt = await to_thread.run_sync(self.shell_interrupt.get)
+                    execution.interrupt = await to_thread.run_sync(self.main_kernel.shell_interrupt.get)
                     self.shell_is_awaiting = False
                     if execution.interrupt:
                         tg.cancel_scope.cancel()
