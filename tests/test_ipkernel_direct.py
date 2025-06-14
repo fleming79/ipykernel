@@ -1,4 +1,4 @@
-"""Test IPythonAKernel directly"""
+"""Test Kernel directly"""
 
 
 # Copyright (c) IPython Development Team.

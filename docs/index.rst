@@ -1,6 +1,6 @@
 .. _index:
 
-IPython IPythonAKernel Docs
+IPython Kernel Docs
 ===================
 
 This contains minimal version-sensitive documentation for the IPython kernel package.

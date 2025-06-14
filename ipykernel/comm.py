@@ -11,7 +11,8 @@ import comm
 import traitlets
 from typing_extensions import override
 
-from ipykernel.kernelbase import IPythonAKernel
+from ipykernel.iostream import SocketID
+from ipykernel.kernelbase import Kernel
 
 logger = logging.getLogger("ipykernel.comm")
 
@@ -19,7 +20,7 @@ __all__ = ["Comm"]
 
 
 class Comm(comm.base_comm.BaseComm):
-    """Comms optimized for IPythonAKernel.
+    """Comms optimized for Kernel.
 
     Notes:
     -  Requires kernel to b set externally
@@ -38,26 +39,21 @@ class Comm(comm.base_comm.BaseComm):
         "target_name",
         "topic",
     ]
-    kernel: IPythonAKernel | None = None
+    kernel: Kernel | None = None
 
-    def publish_msg(self, msg_type, data=None, metadata=None, buffers=None, **keys):
+    def publish_msg(self, msg_type, data=None, buffers=None, **keys):
         """Helper for sending a comm message on IOPub"""
-        if not IPythonAKernel.initialized():
-            return
-
-        data = {} if data is None else data
-        metadata = {} if metadata is None else metadata
-        content = dict(data=data, comm_id=self.comm_id, **keys)
-
         if (kernel := self.kernel) is None:
             # Only send when the kernel is set
             return
 
-        kernel.session.send(
-            kernel.iopub_socket,
-            msg_type,
-            content,
-            metadata=metadata,
+        data = {} if data is None else data
+        content = dict(data=data, comm_id=self.comm_id, **keys)
+
+        kernel.send(
+            stream=kernel.sockets[SocketID.iopub],
+            msg_or_type=msg_type,
+            content=content,
             parent=kernel.parent_msg,
             ident=self.topic,
             buffers=buffers,
@@ -74,22 +70,22 @@ class Comm(comm.base_comm.BaseComm):
 
 
 class CommManager(comm.base_comm.CommManager, traitlets.HasTraits):
-    """A comm manager for IPythonAKernel.
+    """A comm manager for Kernel.
 
     When the kernel is set it will also set the kernel on all existing `Comm` instances.
     Notes:
     - The `Comm` will only send messages when the kernel is set.
     - The kernel is observed and must be set externally.
-    - IPythonAKernel, sets the kerenel this once it has been started.
+    - Kernel, sets the kerenel this once it has been started.
     """
 
-    kernel: traitlets.Instance[IPythonAKernel | None] = traitlets.Instance(IPythonAKernel, allow_none=True)  # type: ignore[assignment]
+    kernel: traitlets.Instance[Kernel | None] = traitlets.Instance(Kernel, allow_none=True)  # type: ignore[assignment]
     comms: traitlets.Dict[str, comm.base_comm.BaseComm] = traitlets.Dict()
     targets: traitlets.Dict[str, comm.base_comm.CommTargetCallback] = traitlets.Dict()
 
     @traitlets.observe("kernel")
     def _observe_kernel(self, change: dict):
-        kernel: IPythonAKernel = change["new"]
+        kernel: Kernel = change["new"]
         for c in self.comms.values():
             if isinstance(c, Comm):
                 c.kernel = kernel

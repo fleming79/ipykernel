@@ -6,7 +6,7 @@
 
 ([Full Changelog]())
 
-IPythonAKernel - Derived from an discontinued version branching from Ipython version 6.29.4.
+Kernel - Derived from an discontinued version branching from Ipython version 6.29.4.
 
 ### Enhancements made
 

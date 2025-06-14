@@ -207,7 +207,7 @@ class ZMQDisplayPublisher(DisplayPublisher):
 
 @magics_class
 class KernelMagics(Magics):
-    """IPythonAKernel magics."""
+    """Kernel magics."""
 
     # ------------------------------------------------------------------------
     # Magic overrides

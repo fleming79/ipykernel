@@ -1,3 +1,4 @@
+import gc
 import os
 import sys
 import warnings
@@ -7,23 +8,22 @@ import pytest
 from jupyter_client.asynchronous.client import AsyncKernelClient
 from traitlets.config import SingletonConfigurable
 
-from ipykernel.kernelapp import IPKernelApp
-from tests import utils
+from ipykernel.kernelapp import MainKernel
 
 if TYPE_CHECKING:
     pytest_plugins = ["anyio.pytest_plugin"]
 
 
-# @pytest.fixture(scope="module", autouse=True)
-# def _garbage_collection(request):
-#     gc.collect()
+@pytest.fixture(scope="module", autouse=True)
+def _garbage_collection(request):
+    gc.collect()
 
 
 try:
     import resource
 except ImportError:
     # Windows
-    resource = None  # type:ignore
+    resource = None  # type:ignore  # noqa: PGH003
 
 try:
     import tracemalloc
@@ -60,9 +60,9 @@ def anyio_backend():
 
 @pytest.fixture(scope="session")
 async def app(anyio_backend):
-    app = IPKernelApp.instance()
+    app = MainKernel()
     try:
-        async with app.start_with_context():
+        async with app.start_in_context():
             yield app
     finally:
         # Clean up
@@ -70,18 +70,21 @@ async def app(anyio_backend):
 
 
 @pytest.fixture(scope="session")
-async def kernel(app: IPKernelApp, client: AsyncKernelClient):
+async def kernel(app: MainKernel, client: AsyncKernelClient):
     # We require client for it to send shutdown
-    return app.kernel
+    return app
+
+
 @pytest.fixture(scope="session")
-async def client(app: IPKernelApp):
+async def client(app: MainKernel):
     client: AsyncKernelClient = AsyncKernelClient()
     client.load_connection_info(app.get_connection_info())
     client.start_channels()
     try:
         yield client
     finally:
-        client.shutdown()
+        app.stop()
+        client.stop_channels()
 
 @pytest.fixture
 def tracemalloc_resource_warning(recwarn, N=10):

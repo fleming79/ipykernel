@@ -15,9 +15,9 @@ from tests.references import RMessage, references
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from ipykernel.kernelapp import IPKernelApp
+    from ipykernel.kernelapp import MainKernel
 
-    OwnerType = AsyncKernelClient | tuple[IPKernelApp, AsyncKernelClient]
+    OwnerType = AsyncKernelClient | tuple[MainKernel, AsyncKernelClient]
 
 
 STARTUP_TIMEOUT = 60 if "debugpy" not in sys.modules else 1e6

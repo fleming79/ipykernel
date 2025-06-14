@@ -207,7 +207,7 @@ class ExecuteInput(Reference):
 class Error(ExecuteReplyError):
     """Errors are the same as ExecuteReply, but without status"""
 
-    status = None  # type:ignore  # no status field
+    status = None  # type: ignore[assignment]  # no status field
 
 
 class Stream(Reference):

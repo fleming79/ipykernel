@@ -1,4 +1,4 @@
-"""test the IPython IPythonAKernel"""
+"""test the IPython Kernel"""
 
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
@@ -226,5 +226,5 @@ async def test_unc_paths(client, kernel, tmp_path):
 
 
 async def test_shutdown(client, app):
-    """IPythonAKernel exits after polite shutdown_request"""
+    """Kernel exits after polite shutdown_request"""
     # TODO: write me

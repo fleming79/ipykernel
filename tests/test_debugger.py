@@ -10,7 +10,7 @@ from tests.utils import TIMEOUT, execute, get_reply
 if TYPE_CHECKING:
     from jupyter_client.asynchronous.client import AsyncKernelClient
 
-    from ipykernel.kernelapp import IPKernelApp
+    from ipykernel.kernelapp import MainKernel
 
 seq = 0
 
@@ -28,7 +28,7 @@ if True:
 
 
 async def wait_for_debug_request(
-    kernel: IPKernelApp, client: AsyncKernelClient, command, arguments: dict | None = None, full_reply=False
+    kernel: MainKernel, client: AsyncKernelClient, command, arguments: dict | None = None, full_reply=False
 ):
     """Carry out a debug request and return the reply content.
 
@@ -234,7 +234,6 @@ f(2, 3)"""
     )
 
     client.execute(code)
-    debug_kernel.e
 
     if not debugpy:
         # Cannot stop on breakpoint if debugpy not installed

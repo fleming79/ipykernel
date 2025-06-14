@@ -11,10 +11,10 @@ import jupyter_client
 from jupyter_client import write_connection_file
 
 if TYPE_CHECKING:
-    from ipykernel.kernelapp import IPKernelApp
+    from ipykernel.kernelapp import MainKernel
 
 
-def get_connection_file(app: IPKernelApp | None = None) -> str:
+def get_connection_file(app: MainKernel | None = None) -> str:
     """Return the path to the connection file of an app
 
     Parameters
@@ -25,20 +25,20 @@ def get_connection_file(app: IPKernelApp | None = None) -> str:
     from traitlets.utils import filefind
 
     if app is None:
-        from ipykernel.kernelapp import IPKernelApp
+        from ipykernel.kernelapp import MainKernel
 
-        if not IPKernelApp.initialized():
-            msg = "app not specified, and not in a running IPythonAKernel"
+        if not MainKernel.initialized():
+            msg = "app not specified, and not in a running Kernel"
             raise RuntimeError(msg)
 
-        app = IPKernelApp.instance()
+        app = MainKernel.instance()
     return filefind(app.connection_file, [".", app.connection_dir])
 
 
 def _find_connection_file(connection_file):
     """Return the absolute path for a connection file
 
-    - If nothing specified, return current IPythonAKernel's connection file
+    - If nothing specified, return current Kernel's connection file
     - Otherwise, call jupyter_client.find_connection_file
     """
     if connection_file is None:
@@ -48,7 +48,7 @@ def _find_connection_file(connection_file):
 
 
 def get_connection_info(connection_file: str | None = None, unpack: bool = False) -> str | dict[str, Any]:
-    """Return the connection information for the current IPythonAKernel.
+    """Return the connection information for the current Kernel.
 
     Parameters
     ----------
@@ -58,7 +58,7 @@ def get_connection_info(connection_file: str | None = None, unpack: bool = False
         If run from IPython,
 
         If unspecified, the connection file for the currently running
-        IPython IPythonAKernel will be used, which is only allowed from inside a kernel.
+        IPython Kernel will be used, which is only allowed from inside a kernel.
 
     unpack : bool [default: False]
         if True, return the unpacked dict, otherwise just the string contents

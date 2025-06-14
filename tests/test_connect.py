@@ -15,7 +15,7 @@ import zmq
 from traitlets.config.loader import Config
 
 from ipykernel import connect
-from ipykernel.kernelapp import IPKernelApp
+from ipykernel.kernelapp import MainKernel
 
 sample_info: dict = {
     "ip": "1.2.3.4",
@@ -30,7 +30,7 @@ sample_info: dict = {
 }
 
 
-class DummyKernelApp(IPKernelApp):
+class DummyKernelApp(MainKernel):
     def _default_shell_port(self):
         return 0
 
@@ -91,7 +91,7 @@ def test_port_bind_failure_raises(request, tmp_path):
 @no_type_check
 def test_port_bind_failure_recovery(request, tmp_path):
     try:
-        errno.WSAEADDRINUSE
+        errno.WSAEADDRINUSE  # noqa: B018
     except AttributeError:
         # Fake windows address in-use code
         p = patch.object(errno, "WSAEADDRINUSE", 12345, create=True)

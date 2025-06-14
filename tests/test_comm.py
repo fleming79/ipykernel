@@ -3,7 +3,7 @@ import unittest.mock
 from ipykernel.comm import Comm, CommManager
 
 
-def test_comm(kernel) -> None:
+async def test_comm(kernel) -> None:
     assert isinstance(kernel.comm_manager, CommManager)
     c = Comm(target_name="bar")
     msgs = []
@@ -27,7 +27,7 @@ def test_comm(kernel) -> None:
     assert c.target_name == "bar"
 
 
-def test_comm_manager(kernel) -> None:
+async def test_comm_manager(kernel) -> None:
     manager = kernel.comm_manager
     msgs = []
 

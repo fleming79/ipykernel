@@ -8,7 +8,7 @@ dynamic = ["version"]
 authors = [{name = "IPython Development Team", email = "ipython-dev@python.org"}]
 license = {file = "LICENSE"}
 readme = "README.md"
-description = "IPython IPythonAKernel for Jupyter"
+description = "IPython Kernel for Jupyter"
 keywords = ["Interactive", "Interpreter", "Shell", "Web"]
 classifiers = [
     "Intended Audience :: Developers",
