@@ -38,6 +38,47 @@ if TYPE_CHECKING:
     from anyio.abc import TaskStatus
 
 
+async def start_in_thread(
+    func: Callable[[TaskStatus], CoroutineType],
+    stop_event: threading.Event,
+    tg: TaskGroup,
+    *,
+    task_status: TaskStatus,
+):
+    """Start a function in a separate thread and manage its lifecycle using AnyIO.
+
+    This function takes an asynchronous function, a stop event, and a task group,
+    and starts the function in a separate thread. It ensures that the function
+    is properly started and can be stopped gracefully.
+
+    The task returns once `func` indicates it is ready and `func` will continue
+    running until the `stop_event` is set.
+
+    Args:
+        func: The asynchronous function to run in a separate thread. It should
+            accept a TaskStatus object as an argument and return a coroutine.
+        stop_event: A threading.Event that signals when the function should stop.
+        tg: The AnyIO TaskGroup to use for managing the function's task.
+        task_status: An AnyIO TaskStatus object to signal when the function has started.
+    """
+    ready_event = threading.Event()
+
+    def run_func():
+        async def run_until_stop_event():
+            async with anyio.create_task_group() as tg:
+                await tg.start(func)
+                ready_event.set()
+                await to_thread.run_sync(stop_event.wait)
+                tg.cancel_scope.cancel()
+
+        anyio.run(run_until_stop_event)
+
+    tg.start_soon(to_thread.run_sync, run_func)
+    await to_thread.run_sync(ready_event.wait)
+    task_status.started()
+    await anyio.sleep_forever()
+
+
 class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
     """The IPYKernel application class."""
 
@@ -256,11 +297,11 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
                 tg.cancel_scope.shield = True
                 self._tg_main = tg
                 try:
-                    await tg.start(start_thread_wait_ready, self._run_control_loop)
-                    await tg.start(start_thread_wait_ready, self._heartbeat_thread)
+                    await tg.start(start_in_thread, self._run_control_loop, self._stop_event, tg)
+                    await tg.start(start_in_thread, self._heartbeat, self._stop_event, tg)
                     self.init_pubio(iopub_socket)
                     # Ensure sockets are created
-                    if missing_sockets := set(self.sockets).difference(SocketID):
+                    if missing_sockets := set(SocketID).difference(self.sockets):
                         msg = f"Failed to create sockets: {missing_sockets}"
                         raise RuntimeError(msg)
 
@@ -434,8 +475,7 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
          - control socket
         """
         while True:
-            future = socket.arecv_multipart(copy=False)
-            if not (msg_ := await future.wait()):
+            if not (msg_ := await socket.arecv_multipart(copy=False).wait()):
                 self.log.error("Empty message received on socket %", socket)
                 await anyio.sleep(0.1)
                 continue
@@ -461,86 +501,47 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
         await self._stopped.wait()
         return {"status": "ok", "restart": restart}
 
-    def _run_control_loop(self, ready_event):
+    # Control thread
+    async def _run_control_loop(self, *, task_status: TaskStatus):
         # This code runs in a different thread having its own event loop
+        async with self.get_socket(SocketID.control, zmq.SocketType.ROUTER, 1000) as control_socket:
+            task_status.started()
+            await self._receive_msg_loop(self._process_control, socket=control_socket)
 
-        async def start_control():
-            async def _process_control(socket, idents, msg):
-                msg_type = msg["header"]["msg_type"]
+    # Control thread
+    async def _process_control(self, socket, idents, msg):
+        msg_type = msg["header"]["msg_type"]
 
-                self.log.debug("\n*** MESSAGE TYPE:%s***", msg_type)
-                self.log.debug("   Content: %s\n   --->\n   ", msg["content"])
+        self.log.debug("\n*** MESSAGE TYPE:%s***", msg_type)
+        self.log.debug("   Content: %s\n   --->\n   ", msg["content"])
 
-                # Execute_requests
-                handler = self.control_handlers.get(msg_type) or self.shell_handlers.get(msg_type)
-                if not handler:
-                    self.log.error("Unknown message type: %r", msg_type)
-                else:
-                    try:
-                        self._publish_status("busy", msg)
-                        await handler(socket, idents, msg)
-                    except Exception as e:
-                        self.log.error("Exception in message handler:", exc_info=e)
-                    except KeyboardInterrupt:
-                        # Ctrl-c shouldn't crash the kernel here.
-                        self.log.error("KeyboardInterrupt caught in kernel.")
-                    finally:
-                        self._publish_status("idle", msg)
+        # Execute_requests
+        handler = self.control_handlers.get(msg_type) or self.shell_handlers.get(msg_type)
+        if not handler:
+            self.log.error("Unknown message type: %r", msg_type)
+        else:
+            try:
+                self._publish_status("busy", msg)
+                await handler(socket, idents, msg)
+            except Exception as e:
+                self.log.error("Exception in message handler:", exc_info=e)
+            except KeyboardInterrupt:
+                # Ctrl-c shouldn't crash the kernel here.
+                self.log.error("KeyboardInterrupt caught in kernel.")
+            finally:
+                self._publish_status("idle", msg)
 
-            async with (
-                anyio.create_task_group() as tg,
-                self.get_socket(SocketID.control, zmq.SocketType.ROUTER, 1000) as control_socket,
-            ):
-                tg.start_soon(self._receive_msg_loop, _process_control, control_socket)
-                await set_ready_wait_stop(ready_event, self._stop_event)
-                tg.cancel_scope.cancel()
-
-        anyio.run(start_control)
-
-    def _heartbeat_thread(self, ready_event: threading.Event):
-        """The heartbeat run in its own thread.
+    # Heartbeat thread
+    async def _heartbeat(self, *, task_status: TaskStatus):
+        """The heartbeat.
 
         Reference: https://jupyter-client.readthedocs.io/en/stable/messaging.html#heartbeat-for-kernels
         """
-
-        context = zmq.Context()
-
-        async def run_heartbeat():
-            async def heartbeat_loop(*, task_status: TaskStatus):
-                socket = self.get_socket(SocketID.heartbeat, zmq.SocketType.ROUTER, 1000, context=context)
-                count = 0
-                await anyio.sleep(1)
-                async with socket:
-                    task_status.started()
-                    count += 1
-                    while True:
-                        data = await socket.arecv_multipart(copy=False).wait()
-                        socket.send_multipart(data)
-
-            try:
-                async with anyio.create_task_group() as tg:
-                    await tg.start(heartbeat_loop)
-                    await set_ready_wait_stop(ready_event, self._stop_event)
-                    tg.cancel_scope.cancel()
-            finally:
-                context.destroy(linger=0)
-
-        # TODO: see if we can push this call to `start_thread_wait_ready`
-        anyio.run(run_heartbeat)
-
-
-async def start_thread_wait_ready(func: Callable[[threading.Event], None], *, task_status: TaskStatus):
-    async with anyio.create_task_group() as tg:
-        ready_event = threading.Event()
-        tg.start_soon(to_thread.run_sync, func, ready_event)
-        await to_thread.run_sync(ready_event.wait)
-        task_status.started()
-
-
-async def set_ready_wait_stop(ready_event: threading.Event | None, stop_event: threading.Event):
-    def _set_ready_wait():
-        if ready_event:
-            ready_event.set()
-        stop_event.wait()
-
-    await to_thread.run_sync(_set_ready_wait)
+        # threading.current_thread()
+        socket = self.get_socket(SocketID.heartbeat, zmq.SocketType.ROUTER, 1000)
+        await anyio.sleep(1)
+        async with socket:
+            task_status.started()
+            while True:
+                data = await socket.arecv_multipart(copy=False).wait()
+                socket.send_multipart(data)
