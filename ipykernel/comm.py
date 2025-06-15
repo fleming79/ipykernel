@@ -50,7 +50,8 @@ class Comm(comm.base_comm.BaseComm):
         data = {} if data is None else data
         content = dict(data=data, comm_id=self.comm_id, **keys)
 
-        kernel.send(
+        # Note this is a no-op when comm_manager.comm_enabled is False
+        kernel.comm_manager.send(
             stream=kernel.sockets[SocketID.iopub],
             msg_or_type=msg_type,
             content=content,
@@ -74,18 +75,25 @@ class CommManager(comm.base_comm.CommManager, traitlets.HasTraits):
 
     When the kernel is set it will also set the kernel on all existing `Comm` instances.
     Notes:
-    - The `Comm` will only send messages when the kernel is set.
+    - `Comm` will only send messages when the kernel is set.
     - The kernel is observed and must be set externally.
-    - Kernel, sets the kerenel this once it has been started.
+    - The `send` attribue is a proxy kernel.session.send when comm is `comm_enabled` is True.
     """
 
     kernel: traitlets.Instance[Kernel | None] = traitlets.Instance(Kernel, allow_none=True)  # type: ignore[assignment]
     comms: traitlets.Dict[str, comm.base_comm.BaseComm] = traitlets.Dict()
     targets: traitlets.Dict[str, comm.base_comm.CommTargetCallback] = traitlets.Dict()
+    comm_enabled = traitlets.Bool()
+    send = traitlets.Callable()
 
-    @traitlets.observe("kernel")
-    def _observe_kernel(self, change: dict):
-        kernel: Kernel = change["new"]
+    @traitlets.default("send")
+    def _default_send(self):
+        return self._nosend
+
+    @traitlets.observe("kernel", "comm_enabled")
+    def _observe_kernel_and_comm(self, change: dict):
+        kernel = self.kernel
+        self.send = kernel.session.send if kernel and self.comm_enabled else self._nosend
         for c in self.comms.values():
             if isinstance(c, Comm):
                 c.kernel = kernel
@@ -96,6 +104,9 @@ class CommManager(comm.base_comm.CommManager, traitlets.HasTraits):
         if isinstance(comm, Comm) and (kernel := self.kernel):
             comm.kernel = kernel
         return super().register_comm(comm)
+
+    def _nosend(self, *args, **kwgs):
+        pass
 
 
 comm_manager = CommManager()

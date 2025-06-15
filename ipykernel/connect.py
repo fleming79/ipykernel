@@ -19,7 +19,7 @@ def get_connection_file(app: MainKernel | None = None) -> str:
 
     Parameters
     ----------
-    app : IPKernelApp instance [optional]
+    app : MainKernel instance [optional]
         If unspecified, the currently running app will be used
     """
     from traitlets.utils import filefind
