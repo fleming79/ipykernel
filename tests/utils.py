@@ -149,7 +149,9 @@ async def check_pub_message(client: AsyncKernelClient, msg_id: str, *, msg_type=
     validate_message(msg, msg_type, msg_id)
     content = msg["content"]
     for k, v in content_checks.items():
-        assert content[k] == v
+        if content[k] != v:
+            msg = f"Failed content check for {msg_type=}  {k}!={v}"
+            raise ValueError(msg)
     return msg
 
 

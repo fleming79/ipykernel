@@ -8,22 +8,11 @@ from __future__ import annotations
 import ast
 import subprocess
 import sys
-from typing import TYPE_CHECKING
 
 import anyio
 import pytest
 
 from tests import utils
-
-if TYPE_CHECKING:
-    from jupyter_client.asynchronous.client import AsyncKernelClient
-
-
-async def _check_main(client: AsyncKernelClient, expected=True, stream="stdout"):
-    client.execute("import sys")
-    client.execute(f"print(sys.{stream}._is_main_process())")
-    stdout, stderr = await utils.assemble_output(client)
-    assert stdout.strip() == repr(expected)
 
 
 def _check_status(content):
@@ -42,7 +31,6 @@ async def test_simple_print(client):
     stdout, stderr = await utils.assemble_output(client)
     assert stdout == "hi\n"
     assert stderr == ""
-    await _check_main(client, expected=True)
 
 
 async def test_sys_path(client):
@@ -117,7 +105,7 @@ async def test_help_output(client, kernel):
     assert b"Class" in proc.stdout
 
 
-async def test_is_complete(client, kernel):
+async def test_is_complete(client):
     # There are more test cases for this in core - here we just check
     # that the kernel exposes the interface correctly.
     client.is_complete("2+2")

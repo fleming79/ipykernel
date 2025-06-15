@@ -7,14 +7,13 @@ from __future__ import annotations
 import errno
 import functools
 import os
-import queue
 import sys
 import threading
 import traceback
 import typing as t
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Self, Unpack, cast
+from typing import TYPE_CHECKING, Literal, Self, cast
 
 import anyio
 import anyio.from_thread
@@ -22,21 +21,21 @@ import anyio.to_thread
 import zmq
 import zmq_anyio
 from anyio import to_thread
+from anyio.abc import TaskGroup
 from anyio.from_thread import BlockingPortal
 from jupyter_client.connect import ConnectionFileMixin
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import Bool, Dict, DottedObjectName, Instance, Integer, Type, Unicode, default
+from traitlets import Bool, Container, Dict, DottedObjectName, Instance, Integer, Set, Type, Unicode, default
 from traitlets.utils.importstring import import_item
 
-from ipykernel.heartbeat import Heartbeat
-from ipykernel.iostream import OutStream, SendKwgs, SocketID
+from ipykernel.iostream import OutStream, SocketID
 from ipykernel.kernelbase import Kernel
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import CoroutineType
 
-    from anyio.abc import TaskGroup, TaskStatus
+    from anyio.abc import TaskStatus
 
 
 class MainKernel(ConnectionFileMixin, Kernel):
@@ -46,14 +45,8 @@ class MainKernel(ConnectionFileMixin, Kernel):
     kernel_class = Type(
         cast("type[Kernel]", "ipykernel.kernelbase.Kernel"),
         klass=Kernel,
-        help="""The Kernel subclass to be used.
-
-    This should allow easy reuse of the IPKernelApp entry point
-    to configure and launch kernels other than IPython's own.
-    """,
+        help="""The Kernel used  for subshells.""",
     ).tag(config=True)
-
-    heartbeat = Instance(Heartbeat)
     _ports = Dict()
     sockets: Dict[SocketID, zmq_anyio.Socket] = Dict()
     _socket_threads: Dict[zmq_anyio.Socket, threading.Thread] = Dict()
@@ -64,9 +57,11 @@ class MainKernel(ConnectionFileMixin, Kernel):
     # connection info:
     connection_dir = Unicode()
     _instance = None
+    _tg_main = Instance(TaskGroup)
     _stop_event = Instance(threading.Event, ())
     zmq_context = Instance(zmq.Context)
-    shell_interrupt: queue.Queue[bool] = queue.Queue()
+    shell_interrupt: Container[set[threading.Event]] = Set()
+    _stopped = Instance(anyio.Event, ())
 
     def __new__(cls) -> Self:
         #  There is only one instance.
@@ -81,6 +76,7 @@ class MainKernel(ConnectionFileMixin, Kernel):
         self.control_handlers = {
             "shutdown_request": self.shutdown_request,
             "debug_request": self.debug_request,
+            "execute_request": self._execute_request,  # bypass
         }
         # self.init_connection_file()
         self.init_crash_handler()
@@ -120,12 +116,6 @@ class MainKernel(ConnectionFileMixin, Kernel):
         int(os.environ.get("JPY_PARENT_PID") or 0),
         help="""kill this process if its parent dies.  On Windows, the argument
         specifies the HANDLE of the parent process, otherwise it is simply boolean.
-        """,
-    ).tag(config=True)
-    interrupt = Integer(
-        int(os.environ.get("JPY_INTERRUPT_EVENT") or 0),
-        help="""ONLY USED ON WINDOWS
-        Interrupt this process when the parent is signaled.
         """,
     ).tag(config=True)
 
@@ -218,7 +208,12 @@ class MainKernel(ConnectionFileMixin, Kernel):
             self.log.info(line)
 
     def init_pubio(self, iopub_socket: zmq.Socket):
-        """Redirect input streams and set a display hook."""
+        """Redirect input streams."""
+        if threading.current_thread() != threading.main_thread():
+            msg = "pubio expects to be running in the main thread"
+            raise RuntimeError(msg)
+        main_thread = threading.main_thread()
+
         self._save_io()
         if self.outstream_class:
             cls: type[OutStream] = import_item(self.outstream_class)
@@ -227,16 +222,29 @@ class MainKernel(ConnectionFileMixin, Kernel):
                 if echo is not None:
                     echo.flush()
 
-                def flush(string: str, name=name):
-                    self.send(
-                        stream=iopub_socket,
-                        msg_or_type="stream",
-                        content={"name": name, "text": string},
-                        parent=self.parent_msg,
-                        ident=self._topic("status"),
-                    )
+                def flusher(string: str, name=name):
+                    "Publish stdio or stderr when flush is called"
+                    if threading.current_thread() != main_thread:
+                        anyio.from_thread.run_sync(
+                            functools.partial(
+                                self.session.send,
+                                stream=iopub_socket,
+                                msg_or_type="stream",
+                                content={"name": name, "text": string},
+                                parent=self.parent_msg,
+                                ident=self._topic("status"),
+                            )
+                        )
+                    else:
+                        self.session.send(
+                            stream=iopub_socket,
+                            msg_or_type="stream",
+                            content={"name": name, "text": string},
+                            parent=self.parent_msg,
+                            ident=self._topic("status"),
+                        )
 
-                wrapper = cls(name=name, flusher=flush)  # type: ignore
+                wrapper = cls(name=name, flusher=flusher)  # type: ignore[call-arg]
                 setattr(sys, name, wrapper)
 
     def _save_io(self):
@@ -306,6 +314,8 @@ class MainKernel(ConnectionFileMixin, Kernel):
                 self.get_socket(SocketID.stdin, zmq.SocketType.ROUTER, 1000),
             ):
                 self._shell_portal = portal
+                tg.cancel_scope.shield = True
+                self._tg_main = tg
                 try:
                     await tg.start(start_thread_wait_ready, self._run_control_loop)
                     await tg.start(start_thread_wait_ready, self._heartbeat_thread)
@@ -324,7 +334,7 @@ class MainKernel(ConnectionFileMixin, Kernel):
                     tg.start_soon(self._receive_msg_loop, self._process_shell, shell_socket)
                     tg.start_soon(self._shell_execute_request_loop)
                     tg.start_soon(self.init_pdb)
-                    self.init_shell()
+                    self.init_shell(iopub_socket)
 
                     # flush stdout/stderr, so that anything written to these streams during
                     # initialization do not get associated with the first execution request
@@ -333,8 +343,10 @@ class MainKernel(ConnectionFileMixin, Kernel):
                     self.comm_manager.kernel = self
                     yield self
                 finally:
+                    # enable a message to be sent incase anyone is waiting
+                    self._stopped.set()
+                    await anyio.sleep(0)
                     self.comm_manager.kernel = None
-                    self.stop()
                     tg.cancel_scope.cancel()
 
         finally:
@@ -357,44 +369,6 @@ class MainKernel(ConnectionFileMixin, Kernel):
         except Exception:
             self.log.exception("portal call failed")
             raise
-
-    def send(self, **kwgs: Unpack[SendKwgs]):
-        target_thread = self._socket_threads.get(kwgs["stream"])  # type: ignore
-        if target_thread is not threading.current_thread():
-            try:
-                anyio.from_thread.run_sync(functools.partial(super().send, **kwgs))
-                return
-            except Exception:
-                pass
-        super().send(**kwgs)
-
-    # async def __DELETE_ME_start(self, tg: anyio.abc.TaskGroup) -> None:
-    #     """Process messages on shell and control channels"""
-    #     self._tg_main = tg
-    #     self.control_stop = threading.Event()
-    #     if not self._is_test and self.control_socket is not None:
-    #         if self.control_thread:
-    #             self.control_thread.start_soon(self.control_main)
-    #             self.control_thread.start()
-    #         else:
-    #             tg.start_soon(self.control_main)
-
-    #     self.shell_interrupt: queue.Queue[bool] = queue.Queue()
-    #     self.shell_is_awaiting = False
-    #     self.shell_is_blocking = False
-    #     self.shell_stop = threading.Event()
-
-    #     tg.start_soon(self.shell_main, None)
-    #     await self._main_subshell_ready.wait()
-    #     if self.shell_channel_thread:
-    #         # Assign tasks to and start shell channel thread.
-    #         manager = self.shell_channel_thread.manager
-    #         self.shell_channel_thread.start_soon(self.shell_channel_thread_main)
-    #         self.shell_channel_thread.start_soon(
-    #             partial(manager.listen_from_control, self.shell_main, self.shell_channel_thread)
-    #         )
-    #         self.shell_channel_thread.start_soon(manager.listen_from_subshells)
-    #         self.shell_channel_thread.start()
 
     def start(self, backend: Literal["trio", "asyncio", "asyncio_eager"] = "asyncio") -> None:
         """Start the application."""
@@ -426,12 +400,12 @@ class MainKernel(ConnectionFileMixin, Kernel):
         socket_type: zmq.SocketType,
         linger: int,
         max_attempts=100,
-        context: zmq.Context | None = None
+        context: zmq.Context | None = None,
     ):
         "Open the socket for comms, it will be closed when the context is exited"
         # Create socket
         assert socket_id not in self.sockets
-        socket = zmq_anyio.Socket(context or self.zmq_context, socket_type, task_group=tg)
+        socket = zmq_anyio.Socket(context or self.zmq_context, socket_type)
         socket.linger = linger
         # Bind port
         port_name = f"{socket_id}_port"
@@ -497,7 +471,7 @@ class MainKernel(ConnectionFileMixin, Kernel):
             else:
                 try:
                     self._publish_status("busy", msg)
-                    await handler(idents, idents, msg)
+                    await handler(socket, idents, msg)
                 except Exception as e:
                     self.log.error("Exception in message handler:", exc_info=e)
                 except KeyboardInterrupt:
@@ -506,45 +480,18 @@ class MainKernel(ConnectionFileMixin, Kernel):
                 finally:
                     self._publish_status("idle", msg)
 
-    # async def shell_main(self, socket: zmq_anyio.Socket, *, task_status: TaskStatus):
-    #     """Main loop for a single subshell."""
-    #     async with create_task_group() as tg:
-    #         try:
-    #             await tg.start(self._process_message_loop, SocketID.shell, self._process_shell, tg)
-    #             tg.start_soon(self._execute_request_loop, receive_stream)
-    #             async with create_task_group() as tg_main:
-    #                 tg_main.cancel_scope.shield = True
-    #                 self._tg_main = tg_main
-    #                 async with BlockingPortal() as portal:
-    #                     # Provide a portal for general threadsafe access
-    #                     self._shell_portal = portal
-    #                     task_status.started()
-    #                     await to_thread.run_sync(self._stop_event.wait)
-    #                     await portal.stop(True)
-    #                 tg_main.cancel_scope.cancel()
-    #                 tg.cancel_scope.cancel()
-    #         except BaseException:
-    #             raise
-    #             # if not self.shell_stop.is_set():
-    #             #     raise
-    #         finally:
-    #             self._stop_event.set()
-    #             await self._send_exec_request.aclose()
-    #             await receive_stream.aclose()
-
     async def _receive_msg_loop(
         self,
         process_message: Callable[[zmq.Socket, list[bytes | bytearray], dict | None], CoroutineType],
         socket: zmq_anyio.Socket,
     ):
-        """Receive messages  from the socket, unpack themm and pass them to be processed with process_message.
+        """Receive messages from the socket, unpack themm and pass them to be processed with process_message.
 
         Intended to be used with:
          - shell socket
          - control socket
         """
         while True:
-            # try:
             future = socket.arecv_multipart(copy=False)
             if not (msg_ := await future.wait()):
                 self.log.error("Empty message received on socket %", socket)
@@ -554,26 +501,23 @@ class MainKernel(ConnectionFileMixin, Kernel):
             idents, msg_ = self.session.feed_identities(msg_, copy=copy)
             msg = self.session.deserialize(msg_, content=True, copy=copy)
             await process_message(socket, idents, msg)
-        # except BaseException as e:
-        #     self.log.error("Invalid Message", exc_info=e)
-        #     continue
+
 
     async def shutdown_request(self, socket, ident, parent):
         """Handle a shutdown request."""
         content = await self.do_shutdown(parent["content"]["restart"])
-        self.send(
+        self.session.send(
             stream=socket,
             msg_or_type="shutdown_reply",
             content=content,
             parent=parent,
             ident=ident,
         )
-        self.stop()
 
     async def do_shutdown(self, restart):
         """Handle kernel shutdown."""
-        if self.shell:
-            self.shell.exit_now = True
+        self.shell.exit_now = True
+        await self._stopped.wait()
         return {"status": "ok", "restart": restart}
 
     def _run_control_loop(self, ready_event):
@@ -582,35 +526,31 @@ class MainKernel(ConnectionFileMixin, Kernel):
         async def start_control():
             async def _process_control(socket, idents, msg):
                 msg_type = msg["header"]["msg_type"]
-                if msg_type != "execute_request":
-                    self._publish_status("busy", msg)
 
-                # Print some info about this message and leave a '--->' marker, so it's
-                # easier to trace visually the message chain when debugging.  Each
-                # handler prints its message at the end.
                 self.log.debug("\n*** MESSAGE TYPE:%s***", msg_type)
                 self.log.debug("   Content: %s\n   --->\n   ", msg["content"])
 
-                handler = self.shell_handlers.get(msg_type)
-                if handler is None:
+                # Execute_requests
+                handler = self.control_handlers.get(msg_type) or self.shell_handlers.get(msg_type)
+                if not handler:
                     self.log.error("Unknown message type: %r", msg_type)
                 else:
-                    self.log.debug("%s: %s", msg_type, msg)
                     try:
-                        await handler(idents, msg)
+                        self._publish_status("busy", msg)
+                        await handler(socket, idents, msg)
                     except Exception as e:
                         self.log.error("Exception in message handler:", exc_info=e)
                     except KeyboardInterrupt:
                         # Ctrl-c shouldn't crash the kernel here.
                         self.log.error("KeyboardInterrupt caught in kernel.")
-                if msg_type != "execute_request":
-                    self._publish_status("idle", msg)
+                    finally:
+                        self._publish_status("idle", msg)
 
             async with (
                 anyio.create_task_group() as tg,
-                self.get_socket(SocketID.control, zmq.SocketType.ROUTER, 1000) as socket,
+                self.get_socket(SocketID.control, zmq.SocketType.ROUTER, 1000) as control_socket,
             ):
-                tg.start_soon(self._receive_msg_loop, _process_control, socket)
+                tg.start_soon(self._receive_msg_loop, _process_control, control_socket)
                 await set_ready_wait_stop(ready_event, self._stop_event)
                 tg.cancel_scope.cancel()
 

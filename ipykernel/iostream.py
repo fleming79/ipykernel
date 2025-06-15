@@ -62,13 +62,13 @@ class OutStream(TextIOBase):
             number of items from input parameter written to stream.
 
         """
-        self._out += string
+        self._out = string
+        self.flush()
         return len(string)
 
     def writelines(self, sequence):
         """Write lines to the stream."""
-        for string in sequence:
-            self.write(string)
+        self.write("".join(sequence))
 
     def writable(self):
         """Test whether the stream is writable."""

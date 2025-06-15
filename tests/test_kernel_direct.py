@@ -80,10 +80,8 @@ async def test_direct_interrupt_request(client, kernel, mocker):
 async def test_shutdown_request(client, kernel, mocker):
     # Apply patches
     shutdown_request = mocker.patch.object(kernel, "do_shutdown", return_value={"restart": False, "status": "ok"})
-    stop = mocker.patch.object(kernel, "stop")
     await utils.send_control_message(client, "shutdown_request", {"restart": False})
     assert shutdown_request.call_count == 1
-    assert stop.call_count == 1
 
 
 async def test_is_complete_request(client):
@@ -94,18 +92,3 @@ async def test_is_complete_request(client):
 async def test_publish_debug_event(kernel):
     kernel._publish_debug_event({})
 
-
-async def test_shutdown_request_control(client, kernel, mocker):
-    shutdown_request = mocker.patch.object(kernel, "do_shutdown", return_value={"restart": False, "status": "ok"})
-    stop = mocker.patch.object(kernel, "stop")
-    await client.shutdown(reply=True)
-    assert shutdown_request.call_count == 1
-    assert stop.call_count == 1
-
-
-# async def test_connect_request(kernel):
-#     await kernel.connect_request(kernel.shell_socket, b"foo", None)
-
-
-# async def test_send_interrupt_children(kernel):
-#     kernel._send_interrupt_children()

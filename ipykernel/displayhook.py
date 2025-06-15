@@ -56,7 +56,7 @@ class ZMQShellDisplayHook(DisplayHook):
 
     topic = None
 
-    session = Instance(Session, allow_none=True)
+    session = Instance(Session)
     pub_socket = Any(allow_none=True)
     parent_header = Dict({})
     msg: dict[str, t.Any] | None
@@ -65,17 +65,6 @@ class ZMQShellDisplayHook(DisplayHook):
         """Set the parent for outbound messages."""
         self.parent_header = extract_header(parent)
 
-    def start_displayhook(self):
-        """Start the display hook."""
-        if self.session:
-            self.msg = self.session.msg(
-                "execute_result",
-                {
-                    "data": {},
-                    "metadata": {},
-                },
-                parent=self.parent_header,
-            )
 
     def write_output_prompt(self):
         """Write the output prompt."""

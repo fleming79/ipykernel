@@ -14,15 +14,14 @@ import os
 import sys
 import threading
 import time
+import traceback
 import typing as t
 import uuid
-from dataclasses import dataclass
-from signal import SIGINT
-from typing import TYPE_CHECKING, Literal, Unpack
+from typing import TYPE_CHECKING, Literal
 
 import zmq
+import zmq_anyio
 from anyio import create_memory_object_stream, create_task_group, to_thread
-from anyio.abc import TaskGroup
 from anyio.from_thread import BlockingPortal
 from IPython.core.completer import provisionalcompleter as _provisionalcompleter
 from IPython.core.completer import rectify_completions as _rectify_completions
@@ -34,13 +33,14 @@ from traitlets.config.configurable import LoggingConfigurable
 
 from ipykernel._version import kernel_protocol_version
 from ipykernel.compiler import XCachingCompiler
-from ipykernel.iostream import SendKwgs, SocketID
+from ipykernel.iostream import SocketID
 from ipykernel.zmqshell import ZMQInteractiveShell
 
 if TYPE_CHECKING:
-    import zmq_anyio
+    from IPython.core.interactiveshell import ExecutionResult
 
     from ipykernel.comm import CommManager
+    from ipykernel.debugger import Debugger
     from ipykernel.kernelapp import MainKernel
 
 
@@ -61,7 +61,6 @@ class Kernel(LoggingConfigurable):
     execution_count = 0
     main_kernel: Instance[MainKernel] = Instance("ipykernel.kernelapp.MainKernel", ())
     asyncio_event_loop = Instance(asyncio.AbstractEventLoop, allow_none=True, read_only=True)  # type:ignore[call-overload]
-    _tg_main = Instance(TaskGroup)
     _portal = Instance(BlockingPortal)
 
     log = Instance(logging.LoggerAdapter)
@@ -152,23 +151,12 @@ class Kernel(LoggingConfigurable):
         """,
     )
 
-    # If the shutdown was requested over the network, we leave here the
-    # necessary reply message so it can be sent by our registered atexit
-    # handler.  This ensures that the reply is only sent to clients truly at
-    # the end of our shutdown process (which happens after the underlying
-    # IPython shell's own shutdown).
-    _shutdown_message = None
-
-    # This is a dict of port number that the kernel is listening on. It is set
-    # by record_ports and used by connect_request.
-    _recorded_ports = Dict()
-
     shell = Instance(ZMQInteractiveShell)
     shell_class = Type(ZMQInteractiveShell)
 
     # use fully-qualified name to ensure lazy import and prevent the issue from
     # https://github.com/ipython/ipykernel/issues/1198
-    debugger_class = Type("ipykernel.debugger.Debugger")
+    debugger_class: Type[type[Debugger], type[Debugger]] = Type("ipykernel.debugger.Debugger")
 
     compiler_class = Type(XCachingCompiler)
 
@@ -218,7 +206,6 @@ class Kernel(LoggingConfigurable):
             "history_request": self.history_request,
             "comm_info_request": self.comm_info_request,
             "kernel_info_request": self.kernel_info_request,
-            "connect_request": self.connect_request,
             "is_complete_request": self.is_complete_request,
             "interrupt_request": self.interrupt_request,
             "comm_open": self.comm_manager.comm_open,
@@ -226,10 +213,10 @@ class Kernel(LoggingConfigurable):
             "comm_close": self.comm_manager.comm_close,
         }
         self._exec_send_stream, self._exec_receive_stream = create_memory_object_stream[
-            tuple[float, zmq.Socket, list[bytes | bytearray], dict | None]
+            tuple[float, zmq_anyio.Socket, list[bytes | bytearray], dict]
         ](max_buffer_size=1000)
 
-    def init_shell(self):
+    def init_shell(self, iopub_socket: zmq_anyio.Socket):
         # Initialize the InteractiveShell subclass
         shell = self.shell_class.instance(
             parent=self,
@@ -239,42 +226,14 @@ class Kernel(LoggingConfigurable):
             kernel=self,
             compiler_class=self.compiler_class,
         )
+        shell.display_pub.session = self.session
         shell.displayhook.session = self.session
+        shell.displayhook.pub_socket = iopub_socket
+        shell.display_pub.pub_socket = iopub_socket
         self.set_trait("shell", shell)
         jupyter_session_name = os.environ.get("JPY_SESSION_NAME")
         if jupyter_session_name:
             self.shell.user_ns["__session__"] = jupyter_session_name
-
-    # async def shell_channel_thread_main(self):
-    #     """Main loop for shell channel thread.
-
-    #     Listen for incoming messages on kernel shell_socket.  For each message
-    #     received, extract the subshell_id from the message header and forward the
-    #     message to the correct subshell via ZMQ inproc pair socket.
-    #     """
-    #     async with self.shell_socket, create_task_group() as tg:
-    #         try:
-    #             while True:
-    #                 msg = await self.shell_socket.arecv_multipart(copy=False).wait()
-    #                 # deserialize only the header to get subshell_id
-    #                 # Keep original message to send to subshell_id unmodified.
-    #                 _, msg2 = self.feed_identities(msg, copy=False)
-    #                 try:
-    #                     msg3 = self.deserialize(msg2, content=False, copy=False)
-    #                     subshell_id = msg3["header"].get("subshell_id")
-
-    #                     # Find inproc pair socket to use to send message to correct subshell.
-    #                     socket = self.shell_channel_thread.manager.get_shell_channel_socket(subshell_id)
-    #                     assert socket is not None
-    #                     if not socket.started.is_set():
-    #                         await tg.start(socket.start)
-    #                     await socket.asend_multipart(msg, copy=False).wait()
-    #                 except Exception:
-    #                     self.log.error("Invalid message", exc_info=True)
-    #         except BaseException:
-    #             if self.shell_stop.is_set():
-    #                 return
-    # raise
 
     # ---------------------------------------------------------------------------
     # Kernel request handlers
@@ -282,7 +241,7 @@ class Kernel(LoggingConfigurable):
 
     def _publish_status(self, status: Literal["busy", "idle"], parent):
         """send status (busy/idle) on IOPub"""
-        self.send(
+        self.session.send(
             stream=self.sockets[SocketID.iopub],
             msg_or_type="status",
             content={"execution_state": status},
@@ -291,20 +250,13 @@ class Kernel(LoggingConfigurable):
         )
 
     def _publish_debug_event(self, event):
-        self.send(
+        self.session.send(
             stream=self.sockets[SocketID.iopub],
             msg_or_type="debug_event",
             content=event,
             parent=self.parent_msg,
             ident=self._topic("debug_event"),
         )
-
-    def send(self, **kwgs: Unpack[SendKwgs]) -> dict[str, t.Any] | None:
-        # if self is self.main_kernel:
-        #     super().send(**kwgs)
-        # else:
-        #     self.main_kernel.send(**kwgs)
-        self.session.send(**kwgs)
 
     def _set_parent_ident(self, parent, ident):
         self._parent_msg = parent
@@ -333,35 +285,6 @@ class Kernel(LoggingConfigurable):
         except AttributeError:
             return []
 
-    # def send_response(
-    #     self,
-    #     socket,
-    #     msg_or_type,
-    #     content=None,
-    #     ident=None,
-    #     buffers=None,
-    #     track=False,
-    #     header=None,
-    #     metadata=None,
-    # ):
-    #     """Send a response to the message we're currently processing.
-
-    #     This accepts all the parameters of :meth:`jupyter_client.session.Session.send`
-    #     except ``parent``.
-    #     """
-    #     return self.send(
-    #         socket,
-    #         msg_or_type,
-    #         content=content,
-    #         parent=self.parent_msg,
-    #         ident=ident,
-    #         buffers=buffers,
-    #         track=track,
-    #         header=header,
-    #         metadata=metadata,
-    #     )
-
-
     async def execute_request(self, socket, ident, parent):
         content = parent["content"]
         silent = content["silent"]
@@ -376,24 +299,18 @@ class Kernel(LoggingConfigurable):
                 try:
                     if received_time < self._stop_on_error_time:
                         self.log.info("Aborting execute_request: %s", msg["header"]["msg_id"])
-                        if session := self:
-                            session.send(
-                                stream=socket,
-                                msg_or_type="execute_reply",
-                                content={
-                                    "status": "error",
-                                    "execution_count": self.execution_count,
-                                    "ename": "RuntimeError",
-                                    "evalue": "An exception occurred whilst this execute request was queued!",
-                                    "traceback": [],
-                                },
-                                parent=msg,
-                                ident=idents,
-                            )
                         continue
                     await self._execute_request(socket, idents, msg)
                 except BaseException as e:
                     self.log.exception("Execute request", exc_info=e)
+                    self._send_error_reply(
+                        socket,
+                        idents,
+                        msg,
+                        ename=str(type(e).__name__),
+                        evalue=str(e),
+                        traceback=traceback.format_stack(),
+                    )
                 finally:
                     self._publish_status("idle", msg)
 
@@ -403,44 +320,42 @@ class Kernel(LoggingConfigurable):
         silent = content["silent"]
         stop_on_error = content.pop("stop_on_error", True)
 
-        self._set_parent_ident(parent, ident)
         self._publish_status("busy", parent)
+        try:
+            # Re-broadcast our input for the benefit of listening clients, and
+            # start computing output
+            if not silent:
+                self._set_parent_ident(parent, ident)
+                self.execution_count += 1
+                self.session.send(
+                    stream=self.sockets[SocketID.iopub],
+                    msg_or_type="execute_input",
+                    content={"code": content["code"], "execution_count": self.execution_count},
+                    parent=parent,
+                    ident=self._topic("execute_input"),
+                )
+            # Call do_execute with the appropriate arguments
+            reply_content = await self._do_execute(**content)
 
-        # Re-broadcast our input for the benefit of listening clients, and
-        # start computing output
-        if not silent:
-            self.execution_count += 1
-            self.send(
-                stream=self.sockets[SocketID.iopub],
-                msg_or_type="execute_input",
-                content={"code": content["code"], "execution_count": self.execution_count},
+            # Send the reply.
+            reply_msg = self.session.send(
+                stream=socket,
+                msg_or_type="execute_reply",
+                content=reply_content,
                 parent=parent,
-                ident=self._topic("execute_input"),
+                ident=ident,
             )
-        # Call do_execute with the appropriate arguments
-        reply_content = await self.do_execute(**content)
+            if reply_content.get("status") == "error":
+                self.log.exception("Execution failed %s", reply_msg)
+                if not silent and stop_on_error:
+                    self._stop_on_error_time = time.monotonic()
+                    self.log.info("An error occurred in a non-silent execution request at %s", self._stop_on_error_time)
+        except Exception as e:
+            self._send_error_reply(socket, parent, ident, ename=e.__class__.__name__, evalue=str(e))
+        finally:
+            self._publish_status("idle", parent)
 
-        # Send the reply.
-        reply_msg = self.send(
-            stream=socket,
-            msg_or_type="execute_reply",
-            content=reply_content,
-            parent=parent,
-            ident=ident,
-        )
-
-        self.log.debug("%s", reply_msg)
-
-        assert reply_msg is not None
-        if reply_msg["content"]["status"] == "error":
-            self.log.exception("Execution failed %s", reply_msg)
-            if not silent and stop_on_error:
-                self._stop_on_error_time = time.monotonic()
-                self.log.info("Rejecting non-silent execute request")
-
-        self._publish_status("idle", parent)
-
-    async def do_execute(
+    async def _do_execute(
         self,
         code: str,
         silent: bool,
@@ -455,96 +370,80 @@ class Kernel(LoggingConfigurable):
             raise RuntimeError(msg)
         self._forward_input(allow_stdin)
         reply_content: dict[str, t.Any] = {}
+        result: list[ExecutionResult] = []
+        interrupt = threading.Event()
+        if not silent:
+            self.main_kernel.shell_interrupt.add(interrupt)
         try:
 
-            @dataclass
-            class Execution:
-                interrupt: bool = False
-                result: t.Any = None
-
-            async def run(execution: Execution) -> None:
-                execution.result = await shell.run_cell_async(
+            async def run() -> None:
+                result_ = await shell.run_cell_async(
                     raw_cell=code,
                     store_history=store_history,
                     silent=silent,
                     transformed_cell=shell.transform_cell(code),
                 )
-                if not execution.interrupt:
-                    self.main_kernel.shell_interrupt.put(False)
+                result.append(result_)
+                interrupt.set()
 
-            res = None
-            try:
-                async with create_task_group() as tg:
-                    execution = Execution()
-                    self.shell_is_awaiting = True
-                    tg.start_soon(run, execution)
-                    execution.interrupt = await to_thread.run_sync(self.main_kernel.shell_interrupt.get)
-                    self.shell_is_awaiting = False
-                    if execution.interrupt:
-                        tg.cancel_scope.cancel()
-                    res = execution.result
-            finally:
-                shell.events.trigger("post_execute")
-                if not silent:
-                    shell.events.trigger("post_run_cell", res)
+            async with create_task_group() as tg:
+                tg.start_soon(run)
+                await to_thread.run_sync(interrupt.wait)
+                if not result:
+                    tg.cancel_scope.cancel()
         finally:
+            self.main_kernel.shell_interrupt.discard(interrupt)
             self._restore_input()
 
-        if res is not None:
+        reply_content = {}
+        if result and (res := result[0]):
             err = res.error_before_exec if res.error_before_exec is not None else res.error_in_exec
         else:
-            err = KeyboardInterrupt()
-        if res is not None and res.success:
+            err = KeyboardInterrupt("Interruped by client request")
+        if not err:
             reply_content["status"] = "ok"
         else:
+            if traceback := shell._last_traceback:
+                self.log.info("Exception in execute request:\n%s", "\n".join(traceback))
             reply_content["status"] = "error"
-            reply_content.update({
-                "traceback": shell._last_traceback or [],
-                "ename": str(type(err).__name__),
-                "evalue": str(err),
-            })
+            reply_content["traceback"] = traceback or []
+            reply_content["ename"] = str(type(err).__name__)
+            reply_content["evalue"] = str(err)
 
-        # Return the execution counter so clients can display prompts
         reply_content["execution_count"] = shell.execution_count - 1
-        if "traceback" in reply_content:
-            self.log.info(
-                "Exception in execute request:\n%s",
-                "\n".join(reply_content["traceback"]),
-            )
-        # At this point, we can tell whether the main code execution succeeded
-        # or not.  If it did, we proceed to evaluate user_expressions
-        if reply_content["status"] == "ok":
-            reply_content["user_expressions"] = shell.user_expressions(user_expressions or {})
-        else:
-            # If there was an error, don't even try to compute expressions
-            reply_content["user_expressions"] = {}
-
-        # Payloads should be retrieved regardless of outcome, so we can both
-        # recover partial output (that could have been generated early in a
-        # block, before an error) and always clear the payload system.
-        reply_content["payload"] = shell.payload_manager.read_payload()
-        # Be aggressive about clearing the payload because we don't want
-        # it to sit in memory until the next execute_request comes in.
-        shell.payload_manager.clear_payload()
+        reply_content["user_expressions"] = (
+            shell.user_expressions(user_expressions) if not err and user_expressions else {}
+        )
         return reply_content
+
+    def _send_error_reply(
+        self,
+        socket: zmq_anyio.Socket,
+        idents,
+        msg: dict,
+        *,
+        ename="RuntimeError",
+        evalue="",
+        traceback: list[str] | None = None,
+    ):
+        "Send a reply to the request"
+        msg_or_type = msg["header"]["msg_type"].replace("request", "reply")
+        content = {
+            "status": "error",
+            "execution_count": self.execution_count,
+            "ename": ename,
+            "evalue": evalue,
+            "traceback": traceback or [],
+        }
+        self.session.send(stream=socket, msg_or_type=msg_or_type, content=content, ident=idents, parent=msg)
 
     async def interrupt_request(self, socket_id, ident, parent):
         """Handle an interrupt request."""
 
         content: dict[str, t.Any] = {"status": "ok"}
-        try:
-            self._send_interrupt_children()
-        except OSError as err:
-            import traceback
-
-            content = {
-                "status": "error",
-                "traceback": traceback.format_stack(),
-                "ename": str(type(err).__name__),
-                "evalue": str(err),
-            }
-
-        self.send(
+        for event in self.main_kernel.shell_interrupt:
+            event.set()
+        self.session.send(
             stream=socket_id,
             msg_or_type="interrupt_reply",
             content=content,
@@ -559,7 +458,7 @@ class Kernel(LoggingConfigurable):
         code = content["code"]
 
         reply_content = await self.do_is_complete(code)
-        reply_msg = self.send(
+        reply_msg = self.session.send(
             stream=socket,
             msg_or_type="is_complete_reply",
             content=reply_content,
@@ -621,7 +520,7 @@ class Kernel(LoggingConfigurable):
         cursor_pos = content["cursor_pos"]
 
         matches = await self.do_complete(code, cursor_pos)
-        self.send(
+        self.session.send(
             stream=socket,
             msg_or_type="complete_reply",
             content=matches,
@@ -639,7 +538,7 @@ class Kernel(LoggingConfigurable):
             content.get("detail_level", 0),
             set(content.get("omit_sections", [])),
         )
-        msg = self.send(
+        msg = self.session.send(
             stream=socket,
             msg_or_type="inspect_reply",
             content=reply_content,
@@ -671,7 +570,9 @@ class Kernel(LoggingConfigurable):
 
         content = parent["content"]
         reply_content = await self.do_history(**content)
-        msg = self.send(stream=socket, msg_or_type="history_reply", content=reply_content, parent=parent, ident=ident)
+        msg = self.session.send(
+            stream=socket, msg_or_type="history_reply", content=reply_content, parent=parent, ident=ident
+        )
         self.log.debug("%s", msg)
 
     async def do_history(
@@ -706,20 +607,6 @@ class Kernel(LoggingConfigurable):
             "history": list(hist),
         }
 
-    async def connect_request(self, socket, ident, parent):
-        """Handle a connect request."""
-
-        content = self._recorded_ports.copy() if self._recorded_ports else {}
-        content["status"] = "ok"
-        msg = self.send(
-            stream=socket,
-            msg_or_type="connect_reply",
-            content=content,
-            parent=parent,
-            ident=ident,
-        )
-        self.log.debug("%s", msg)
-
     @property
     def kernel_info(self):
         from ipykernel.debugger import _is_debugpy_available
@@ -745,7 +632,7 @@ class Kernel(LoggingConfigurable):
 
         content = {"status": "ok"}
         content.update(self.kernel_info)
-        msg = self.send(
+        msg = self.session.send(
             stream=socket,
             msg_or_type="kernel_info_reply",
             content=content,
@@ -770,7 +657,7 @@ class Kernel(LoggingConfigurable):
         else:
             comms = {}
         reply_content = {"comms": comms, "status": "ok"}
-        msg = self.send(
+        msg = self.session.send(
             stream=socket,
             msg_or_type="comm_info_reply",
             content=reply_content,
@@ -778,23 +665,6 @@ class Kernel(LoggingConfigurable):
             ident=ident,
         )
         self.log.debug("%s", msg)
-
-    def _send_interrupt_children(self):
-        if os.name == "nt":
-            self.log.error("Interrupt message not supported on Windows")
-        else:
-            pid = os.getpid()
-            pgid = os.getpgid(pid)
-            # Prefer process-group over process
-            # but only if the kernel is the leader of the process group
-            if pgid and pgid == pid and hasattr(os, "killpg"):
-                try:
-                    os.killpg(pgid, SIGINT)
-                except OSError:
-                    os.kill(pid, SIGINT)
-                    raise
-            else:
-                os.kill(pid, SIGINT)
 
     async def do_shutdown(self, restart):
         """Handle kernel shutdown."""
@@ -815,7 +685,7 @@ class Kernel(LoggingConfigurable):
         reply_content = self.do_debug_request(content)
         if inspect.isawaitable(reply_content):
             reply_content = await reply_content
-        reply_msg = self.send(
+        reply_msg = self.session.send(
             stream=socket,
             msg_or_type="debug_reply",
             content=reply_content,
@@ -900,7 +770,7 @@ class Kernel(LoggingConfigurable):
 
         # Send the input request.
         assert self is not None
-        self.send(
+        self.session.send(
             stream=socket,
             msg_or_type="input_request",
             content={"prompt": prompt, "password": password},

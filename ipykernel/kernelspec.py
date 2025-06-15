@@ -64,6 +64,7 @@ def get_kernel_dict(
         "argv": make_ipkernel_cmd(extra_arguments=extra_arguments, python_arguments=python_arguments),
         "display_name": "Python %i (ipykernel)" % sys.version_info[0],
         "language": "python",
+        "interrupt_mode": "message",
         "metadata": {"debugger": True},
     }
 

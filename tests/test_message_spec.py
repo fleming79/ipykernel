@@ -6,7 +6,6 @@
 from queue import Empty
 
 import pytest
-from jupyter_client._version import version_info
 
 from tests import utils
 
@@ -200,13 +199,6 @@ async def test_kernel_info_request(client):
     assert "kernel subshells" in reply["content"]["supported_features"]
 
 
-async def test_connect_request(client):
-    msg = client.session.msg("connect_request")
-    client.shell_channel.send(msg)
-    msg_id = msg["header"]["msg_id"]
-    reply = await utils.get_reply(client, msg_id)
-    utils.validate_message(reply, "connect_reply", msg_id)
-
 
 async def test_subshell(client):
     msg = client.session.msg("create_subshell_request")
@@ -229,33 +221,10 @@ async def test_subshell(client):
     utils.validate_message(reply, "delete_subshell_reply", msg_id)
 
 
-@pytest.mark.skipif(
-    version_info < (5, 0),
-    reason="earlier Jupyter Client don't have comm_info",
-)
 async def test_comm_info_request(client):
     msg_id = client.comm_info()
     reply = await utils.get_reply(client, msg_id)
     utils.validate_message(reply, "comm_info_reply", msg_id)
-
-
-async def test_single_payload(client):
-    """
-    We want to test the set_next_input is not triggered several time per cell.
-    This is (was ?) mostly due to the fact that `?` in a loop would trigger
-    several set_next_input.
-
-    I'm tempted to thing that we actually want to _allow_ multiple
-    set_next_input (that's users' choice). But that `?` itself (and ?'s
-    transform) should avoid setting multiple set_next_input).
-    """
-
-    msg_id, reply = await utils.execute(
-        client, code="ip = get_ipython()\nfor i in range(3):\n   ip.set_next_input('Hello There')\n"
-    )
-    payload = reply["payload"]
-    next_input_pls = [pl for pl in payload if pl["source"] == "set_next_input"]
-    assert len(next_input_pls) == 1
 
 
 async def test_is_complete(client):

@@ -13,31 +13,24 @@ machinery.  This should thus be thought of as scaffolding.
 
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
+from __future__ import annotations
 
 import os
 import sys
 import threading
-import warnings
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from IPython.core import page
 from IPython.core.autocall import ZMQExitAutocall
 from IPython.core.displaypub import DisplayPublisher
-from IPython.core.error import UsageError
 from IPython.core.interactiveshell import InteractiveShell, InteractiveShellABC
-from IPython.core.magic import Magics, line_magic, magics_class
-from IPython.core.magics import CodeMagics, MacroToEdit
 from IPython.core.usage import default_banner
-from IPython.display import Javascript, display
-from IPython.utils import openpy
-from IPython.utils.process import system
 from jupyter_client.session import Session, extract_header
-from jupyter_core.paths import jupyter_runtime_dir
 from traitlets import Any, CBool, CBytes, Dict, Instance, Type, default, observe
-from typing_extensions import override
 
-from ipykernel import get_connection_file, get_connection_info
 from ipykernel.displayhook import ZMQShellDisplayHook
+
+if TYPE_CHECKING:
+    from ipykernel.kernelbase import Kernel
 
 # -----------------------------------------------------------------------------
 # Functions and classes
@@ -205,244 +198,16 @@ class ZMQDisplayPublisher(DisplayPublisher):
             return False
 
 
-@magics_class
-class KernelMagics(Magics):
-    """Kernel magics."""
-
-    # ------------------------------------------------------------------------
-    # Magic overrides
-    # ------------------------------------------------------------------------
-    # Once the base class stops inheriting from magic, this code needs to be
-    # moved into a separate machinery as well.  For now, at least isolate here
-    # the magics which this class needs to implement differently from the base
-    # class, or that are unique to it.
-
-    @line_magic
-    def edit(self, parameter_s="", last_call=None):
-        """Bring up an editor and execute the resulting code.
-
-        Usage:
-          %edit [options] [args]
-
-        %edit runs an external text editor. You will need to set the command for
-        this editor via the ``TerminalInteractiveShell.editor`` option in your
-        configuration file before it will work.
-
-        This command allows you to conveniently edit multi-line code right in
-        your IPython session.
-
-        If called without arguments, %edit opens up an empty editor with a
-        temporary file and will execute the contents of this file when you
-        close it (don't forget to save it!).
-
-        Options:
-
-        -n <number>
-          Open the editor at a specified line number. By default, the IPython
-          editor hook uses the unix syntax 'editor +N filename', but you can
-          configure this by providing your own modified hook if your favorite
-          editor supports line-number specifications with a different syntax.
-
-        -p
-          Call the editor with the same data as the previous time it was used,
-          regardless of how long ago (in your current session) it was.
-
-        -r
-          Use 'raw' input. This option only applies to input taken from the
-          user's history.  By default, the 'processed' history is used, so that
-          magics are loaded in their transformed version to valid Python.  If
-          this option is given, the raw input as typed as the command line is
-          used instead.  When you exit the editor, it will be executed by
-          IPython's own processor.
-
-        Arguments:
-
-        If arguments are given, the following possibilities exist:
-
-        - The arguments are numbers or pairs of colon-separated numbers (like
-          1 4:8 9). These are interpreted as lines of previous input to be
-          loaded into the editor. The syntax is the same of the %macro command.
-
-        - If the argument doesn't start with a number, it is evaluated as a
-          variable and its contents loaded into the editor. You can thus edit
-          any string which contains python code (including the result of
-          previous edits).
-
-        - If the argument is the name of an object (other than a string),
-          IPython will try to locate the file where it was defined and open the
-          editor at the point where it is defined. You can use ``%edit function``
-          to load an editor exactly at the point where 'function' is defined,
-          edit it and have the file be executed automatically.
-
-          If the object is a macro (see %macro for details), this opens up your
-          specified editor with a temporary file containing the macro's data.
-          Upon exit, the macro is reloaded with the contents of the file.
-
-          Note: opening at an exact line is only supported under Unix, and some
-          editors (like kedit and gedit up to Gnome 2.8) do not understand the
-          '+NUMBER' parameter necessary for this feature. Good editors like
-          (X)Emacs, vi, jed, pico and joe all do.
-
-        - If the argument is not found as a variable, IPython will look for a
-          file with that name (adding .py if necessary) and load it into the
-          editor. It will execute its contents with execfile() when you exit,
-          loading any code in the file into your interactive namespace.
-
-        Unlike in the terminal, this is designed to use a GUI editor, and we do
-        not know when it has closed. So the file you edit will not be
-        automatically executed or printed.
-
-        Note that %edit is also available through the alias %ed.
-        """
-        last_call = last_call or ["", ""]
-        opts, args = self.parse_options(parameter_s, "prn:")
-
-        try:
-            filename, lineno, _ = CodeMagics._find_edit_target(self.shell, args, opts, last_call)
-        except MacroToEdit:
-            # TODO: Implement macro editing over 2 processes.
-            print("Macro editing not yet implemented in 2-process model.")
-            return
-
-        # Make sure we send to the client an absolute path, in case the working
-        # directory of client and kernel don't match
-        filename = str(Path(filename).resolve())
-
-        payload = {"source": "edit_magic", "filename": filename, "line_number": lineno}
-
-        self.shell.payload_manager.write_payload(payload)
-
-    # A few magics that are adapted to the specifics of using pexpect and a
-    # remote terminal
-
-    @line_magic
-    def clear(self, arg_s):
-        """Clear the terminal."""
-
-        if os.name == "posix":
-            self.shell.system("clear")
-        else:
-            self.shell.system("cls")
-
-    if os.name == "nt":
-        # This is the usual name in windows
-        cls = line_magic("cls")(clear)
-
-    # Terminal pagers won't work over pexpect, but we do have our own pager
-
-    @line_magic
-    def less(self, arg_s):
-        """Show a file through the pager.
-
-        Files ending in .py are syntax-highlighted."""
-        if not arg_s:
-            msg = "Missing filename."
-            raise UsageError(msg)
-
-        if arg_s.endswith(".py"):
-            cont = self.shell.pycolorize(openpy.read_py_file(arg_s, skip_encoding_cookie=False))
-        else:
-            with open(arg_s) as fid:
-                cont = fid.read()
-        page.page(cont)
-
-    more = line_magic("more")(less)
-
-    # Man calls a pager, so we also need to redefine it
-    if os.name == "posix":
-
-        @line_magic
-        def man(self, arg_s):
-            """Find the man page for the given command and display in pager."""
-
-            page.page(self.shell.getoutput("man %s | col -b" % arg_s, split=False))
-
-    @line_magic
-    def connect_info(self, arg_s):
-        """Print information for connecting other clients to this kernel
-
-        It will print the contents of this session's connection file, as well as
-        shortcuts for local clients.
-
-        In the simplest case, when called from the most recently launched kernel,
-        secondary clients can be connected, simply with:
-
-        $> jupyter <app> --existing
-
-        """
-
-        try:
-            connection_file = get_connection_file()
-            info = get_connection_info(unpack=False)
-        except Exception as e:
-            warnings.warn("Could not get connection info: %r" % e, stacklevel=2)
-            return
-
-        # if it's in the default dir, truncate to basename
-        if jupyter_runtime_dir() == str(Path(connection_file).parent):
-            connection_file = Path(connection_file).name
-
-        assert isinstance(info, str)
-        print(info + "\n")
-        print(
-            f"Paste the above JSON into a file, and connect with:\n"
-            f"    $> jupyter <app> --existing <file>\n"
-            f"or, if you are local, you can connect with just:\n"
-            f"    $> jupyter <app> --existing {connection_file}\n"
-            f"or even just:\n"
-            f"    $> jupyter <app> --existing\n"
-            f"if this is the most recent Jupyter kernel you have started."
-        )
-
-    @line_magic
-    def autosave(self, arg_s):
-        """Set the autosave interval in the notebook (in seconds).
-
-        The default value is 120, or two minutes.
-        ``%autosave 0`` will disable autosave.
-
-        This magic only has an effect when called from the notebook interface.
-        It has no effect when called in a startup file.
-        """
-
-        try:
-            interval = int(arg_s)
-        except ValueError as e:
-            raise UsageError("%%autosave requires an integer, got %r" % arg_s) from e
-
-        # javascript wants milliseconds
-        milliseconds = 1000 * interval
-        display(
-            Javascript("IPython.notebook.set_autosave_interval(%i)" % milliseconds),
-            include=["application/javascript"],
-        )
-        if interval:
-            print("Autosaving every %i seconds" % interval)
-        else:
-            print("Autosave disabled")
-
-
 class ZMQInteractiveShell(InteractiveShell):
     """A subclass of InteractiveShell for ZMQ."""
 
-    @override
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # tqdm has an incorrect detection of ZMQInteractiveShell when launch via
-        # a scheduler that bypass IPKernelApp Think of JupyterHub cluster
-        # spawners and co. as of end of Feb 2025, the maintainer has been
-        # unresponsive for 5 months, to our fix, so we implement a workaround. I
-        # don't like it but we have few other choices.
-        # See https://github.com/tqdm/tqdm/pull/1628
-        if "IPKernelApp" not in self.config:
-            self.config.IPKernelApp.tqdm = "dummy value for https://github.com/tqdm/tqdm/pull/1628"
-
     displayhook_class = Type(ZMQShellDisplayHook)
     display_pub_class = Type(ZMQDisplayPublisher)
-    data_pub_class = Any()  # type:ignore[assignment]
-    kernel = Any()
-    parent_header = Any()
+    displayhook: Instance[ZMQShellDisplayHook]
+    display_pub: Instance[ZMQDisplayPublisher]
+    # data_pub_class = Any()  # type:ignore[assignment]
+    kernel: Instance[Kernel] = Instance("ipykernel.kernelbase.Kernel")
+    parent_header = Dict()
 
     @default("banner1")
     def _default_banner1(self):
@@ -466,13 +231,11 @@ class ZMQInteractiveShell(InteractiveShell):
     def _update_exit_now(self, change):
         """stop eventloop when exit_now fires"""
         if change["new"]:
-            if hasattr(self.kernel, "io_loop"):
-                loop = self.kernel.io_loop
-                loop.call_later(0.1, loop.stop)
-            if self.kernel.eventloop:
-                exit_hook = getattr(self.kernel.eventloop, "exit_hook", None)
-                if exit_hook:
-                    exit_hook(self.kernel)
+            kernel = self.kernel
+            if kernel is kernel.main_kernel:
+                kernel.main_kernel.stop()
+            else:
+                kernel.main_kernel.close_subshell(kernel.ident)
 
     keepkernel_on_exit = None
 
@@ -491,61 +254,40 @@ class ZMQInteractiveShell(InteractiveShell):
         env["PAGER"] = "cat"
         env["GIT_PAGER"] = "cat"
 
-    def payloadpage_page(self, strg, start=0, screen_lines=0, pager_cmd=None):
-        """Print a string, piping through a pager.
+    # def payloadpage_page(self, strg, start=0, screen_lines=0, pager_cmd=None):
+    #     """Print a string, piping through a pager.
 
-        This version ignores the screen_lines and pager_cmd arguments and uses
-        IPython's payload system instead.
+    #     This version ignores the screen_lines and pager_cmd arguments and uses
+    #     IPython's payload system instead.
 
-        Parameters
-        ----------
-        strg : str or mime-dict
-            Text to page, or a mime-type keyed dict of already formatted data.
-        start : int
-            Starting line at which to place the display.
-        """
+    #     Parameters
+    #     ----------
+    #     strg : str or mime-dict
+    #         Text to page, or a mime-type keyed dict of already formatted data.
+    #     start : int
+    #         Starting line at which to place the display.
+    #     """
 
-        # Some routines may auto-compute start offsets incorrectly and pass a
-        # negative value.  Offset to 0 for robustness.
-        start = max(0, start)
+    #     # Some routines may auto-compute start offsets incorrectly and pass a
+    #     # negative value.  Offset to 0 for robustness.
+    #     start = max(0, start)
 
-        data = strg if isinstance(strg, dict) else {"text/plain": strg}
+    #     data = strg if isinstance(strg, dict) else {"text/plain": strg}
 
-        payload = {"source": "page", "data": data, "start": start}
-        assert self.payload_manager is not None
-        self.payload_manager.write_payload(payload)
+    #     payload = {"source": "page", "data": data, "start": start}
+    #     assert self.payload_manager is not None
+    #     self.payload_manager.write_payload(payload)
 
-    def init_hooks(self):
-        """Initialize hooks."""
-        super().init_hooks()
-        self.set_hook("show_in_pager", page.as_hook(self.payloadpage_page), 99)
+    # def init_hooks(self):
+    #     """Initialize hooks."""
+    #     super().init_hooks()
+    #     self.set_hook("show_in_pager", page.as_hook(self.payloadpage_page), 99)
 
-    def init_data_pub(self):
-        """Delay datapub init until request, for deprecation warnings"""
-
-    @property
-    def data_pub(self):
-        if not hasattr(self, "_data_pub"):
-            warnings.warn(
-                "InteractiveShell.data_pub is deprecated outside IPython parallel.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-            self._data_pub = self.data_pub_class(parent=self)  # type:ignore[has-type]
-            self._data_pub.session = self.display_pub.session
-            self._data_pub.pub_socket = self.display_pub.pub_socket
-        return self._data_pub
-
-    @data_pub.setter
-    def data_pub(self, pub):
-        self._data_pub = pub
-
-    def ask_exit(self):
-        """Engage the exit actions."""
-        self.exit_now = not self.keepkernel_on_exit
-        payload = {"source": "ask_exit", "keepkernel": self.keepkernel_on_exit}
-        self.payload_manager.write_payload(payload)  # type:ignore[union-attr]
+    # def ask_exit(self):
+    #     """Engage the exit actions."""
+    #     self.exit_now = not self.keepkernel_on_exit
+    #     payload = {"source": "ask_exit", "keepkernel": self.keepkernel_on_exit}
+    #     self.payload_manager.write_payload(payload)  # type:ignore[union-attr]
 
     def run_cell(self, *args, **kwargs):
         """Run a cell."""
@@ -553,10 +295,6 @@ class ZMQInteractiveShell(InteractiveShell):
         return super().run_cell(*args, **kwargs)
 
     def _showtraceback(self, etype, evalue, stb):
-        # try to preserve ordering of tracebacks and print statements
-        sys.stdout.flush()
-        sys.stderr.flush()
-
         # For Keyboard interrupt, remove the kernel source code from the
         # traceback.
         ename = str(etype.__name__)
@@ -583,88 +321,18 @@ class ZMQInteractiveShell(InteractiveShell):
             dh.parent_header,
             ident=topic,
         )
-
-        # FIXME - Once we rely on Python 3, the traceback is stored on the
-        # exception object, so we shouldn't need to store it here.
+        # store the formatted traceback
         self._last_traceback = stb
-
-    def set_next_input(self, text, replace=False):
-        """Send the specified text to the frontend to be presented at the next
-        input cell."""
-        payload = {
-            "source": "set_next_input",
-            "text": text,
-            "replace": replace,
-        }
-        self.payload_manager.write_payload(payload)  # type:ignore[union-attr]
 
     def set_parent(self, parent):
         """Set the parent header for associating output with its triggering input"""
         self.parent_header = parent
         self.displayhook.set_parent(parent)
         self.display_pub.set_parent(parent)
-        if hasattr(self, "_data_pub"):
-            self.data_pub.set_parent(parent)
-        if hasattr(sys.stdout, "set_parent"):
-            sys.stdout.set_parent(parent)
-        if hasattr(sys.stderr, "set_parent"):
-            sys.stderr.set_parent(parent)
 
     def get_parent(self):
         """Get the parent header."""
         return self.parent_header
-
-    def init_magics(self):
-        """Initialize magics."""
-        super().init_magics()
-        self.register_magics(KernelMagics)
-        if self.magics_manager:
-            self.magics_manager.register_alias("ed", "edit")
-
-    def init_virtualenv(self):
-        """Initialize virtual environment."""
-        # Overridden not to do virtualenv detection, because it's probably
-        # not appropriate in a kernel. To use a kernel in a virtualenv, install
-        # it inside the virtualenv.
-        # https://ipython.readthedocs.io/en/latest/install/kernel_install.html
-
-    def system_piped(self, cmd):
-        """Call the given cmd in a subprocess, piping stdout/err
-
-        Parameters
-        ----------
-        cmd : str
-            Command to execute (can not end in '&', as background processes are
-            not supported.  Should not be a command that expects input
-            other than simple text.
-        """
-        if cmd.rstrip().endswith("&"):
-            # this is *far* from a rigorous test
-            # We do not support backgrounding processes because we either use
-            # pexpect or pipes to read from.  Users can always just call
-            # os.system() or use ip.system=ip.system_raw
-            # if they really want a background process.
-            msg = "Background processes not supported."
-            raise OSError(msg)
-
-        # we explicitly do NOT return the subprocess status code, because
-        # a non-None value would trigger :func:`sys.displayhook` calls.
-        # Instead, we store the exit_code in user_ns.
-        # Also, protect system call from UNC paths on Windows here too
-        # as is done in InteractiveShell.system_raw
-        if sys.platform == "win32":
-            cmd = self.var_expand(cmd, depth=1)
-            from IPython.utils._process_win32 import AvoidUNCPath
-
-            with AvoidUNCPath() as path:
-                if path is not None:
-                    cmd = f"pushd {path} &&{cmd}"
-                self.user_ns["_exit_code"] = system(cmd)
-        else:
-            self.user_ns["_exit_code"] = system(self.var_expand(cmd, depth=1))
-
-    # Ensure new system_piped implementation is used
-    system = system_piped
 
 
 InteractiveShellABC.register(ZMQInteractiveShell)
