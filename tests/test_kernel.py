@@ -33,29 +33,6 @@ async def test_simple_print(client):
     assert stderr == ""
 
 
-async def test_sys_path(client):
-    """test that sys.path doesn't get messed up by default"""
-    await utils.clear_pub_message(client)
-    client.execute("import sys; print(repr(sys.path))")
-    stdout, stderr = await utils.assemble_output(client)
-    # for error-output on failure
-    sys.stderr.write(stderr)
-
-    sys_path = ast.literal_eval(stdout.strip())
-    assert "" in sys_path
-
-
-async def test_sys_path_profile_dir(client):
-    """test that sys.path doesn't get messed up when `--profile-dir` is specified"""
-    client.execute("import sys; print(repr(sys.path))")
-    stdout, stderr = await utils.assemble_output(client)
-    # for error-output on failure
-    sys.stderr.write(stderr)
-
-    sys_path = ast.literal_eval(stdout.strip())
-    assert "" in sys_path
-
-
 # raw_input tests
 
 

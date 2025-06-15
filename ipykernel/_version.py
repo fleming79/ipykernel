@@ -18,5 +18,5 @@ if match["rest"]:
     parts.append(match["rest"])
 version_info = tuple(parts)
 
-kernel_protocol_version_info = (5, 3)
+kernel_protocol_version_info = (5, 4)
 kernel_protocol_version = "{}.{}".format(*kernel_protocol_version_info)

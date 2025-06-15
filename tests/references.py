@@ -151,7 +151,7 @@ class CompleteReply(Reply):
     matches = List(Unicode())
     cursor_start = Integer()
     cursor_end = Integer()
-    status = Unicode()  # type:ignore
+    status = Unicode()
 
 
 class LanguageInfo(Reference):
@@ -160,9 +160,9 @@ class LanguageInfo(Reference):
 
 
 class KernelInfoReply(Reply):
-    protocol_version = Version(min="5.0")
-    implementation = Unicode("ipython")
-    implementation_version = Version(min="2.1")
+    protocol_version = Version(min="5.4")
+    implementation = Unicode("asynckernel")
+    implementation_version = Version(min="0.1")
     language_info = Dict()
     banner = Unicode()
 

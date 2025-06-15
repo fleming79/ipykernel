@@ -6,12 +6,14 @@ import pytest
 
 from ipykernel.iostream import OutStream
 
-pytestmark = pytest.mark.anyio
 
-
-async def test_io_api(kernel):
+def test_io_api():
     """Test that wrapped stdout has the same API as a normal TextIO object"""
-    stream = OutStream(kernel, "stdout")
+
+    def flusher(string: str):
+        "" + string  # type: ignore[operator]
+
+    stream = OutStream("stdout", flusher)
 
     assert stream.errors is None
     assert not stream.isatty()
@@ -28,11 +30,11 @@ async def test_io_api(kernel):
     with pytest.raises(io.UnsupportedOperation):
         stream.tell()
     with pytest.raises(TypeError):
-        stream.write(b"")  # type: ignore[arg-type]
+        stream.write(b" ")  # type: ignore[arg-type]
 
 
-async def test_io_isatty(kernel):
-    stream = OutStream(kernel, "stdout", isatty=True)
+def test_io_isatty():
+    stream = OutStream("stdout", lambda _: None, isatty=True)
     assert stream.isatty()
 
 

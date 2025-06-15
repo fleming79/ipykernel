@@ -646,8 +646,6 @@ class Kernel(LoggingConfigurable):
 
         content = parent["content"]
         target_name = content.get("target_name", None)
-
-        # Should this be moved to kernelbase?
         if hasattr(self, "comm_manager"):
             comms = {
                 k: {"target_name": v.target_name}

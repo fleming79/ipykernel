@@ -60,13 +60,9 @@ def anyio_backend():
 
 @pytest.fixture(scope="session")
 async def app(anyio_backend):
-    app = MainKernel()
-    try:
-        async with app.start_in_context():
-            yield app
-    finally:
-        # Clean up
-        SingletonConfigurable.clear_instance()
+    kernel = MainKernel.instance()
+    async with kernel.start_in_context():
+        yield kernel
 
 
 @pytest.fixture(scope="session")

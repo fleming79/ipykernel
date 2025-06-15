@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Literal, Self, cast
 
 import anyio
 import anyio.from_thread
-import anyio.to_thread
 import zmq
 import zmq_anyio
 from anyio import to_thread
@@ -26,6 +25,7 @@ from anyio.from_thread import BlockingPortal
 from jupyter_client.connect import ConnectionFileMixin
 from jupyter_core.paths import jupyter_runtime_dir
 from traitlets import Bool, Container, Dict, DottedObjectName, Instance, Integer, Set, Type, Unicode, default
+from traitlets.config import SingletonConfigurable
 from traitlets.utils.importstring import import_item
 
 from ipykernel.iostream import OutStream, SocketID
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from anyio.abc import TaskStatus
 
 
-class MainKernel(ConnectionFileMixin, Kernel):
+class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
     """The IPYKernel application class."""
 
     # the kernel class, as an importstring
@@ -62,6 +62,7 @@ class MainKernel(ConnectionFileMixin, Kernel):
     zmq_context = Instance(zmq.Context)
     shell_interrupt: Container[set[threading.Event]] = Set()
     _stopped = Instance(anyio.Event, ())
+    _portal = Instance(BlockingPortal)
 
     def __new__(cls) -> Self:
         #  There is only one instance.
@@ -127,66 +128,6 @@ class MainKernel(ConnectionFileMixin, Kernel):
         """Handle an exception."""
         # write uncaught traceback to 'real' stderr, not zmq-forwarder
         traceback.print_exception(etype, evalue, tb, file=sys.__stderr__)
-
-    # def write_connection_file(self, **kwargs: t.Any) -> None:
-    #     """write connection info to JSON file"""
-
-    #     cf = self.abs_connection_file
-    #     connection_info = {
-    #         "ip": self.ip,
-    #         "key": self.session.key,
-    #         "transport": self.transport,
-    #         "shell_port": self.shell_port,
-    #         "stdin_port": self.stdin_port,
-    #         "hb_port": self.hb_port,
-    #         "iopub_port": self.iopub_port,
-    #         "control_port": self.control_port,
-    #         "kernel_name": self.kernel_name,
-    #     }
-    #     if Path(cf).exists():
-    #         # If the file exists, merge our info into it. For example, if the
-    #         # original file had port number 0, we update with the actual port
-    #         # used.
-    #         existing_connection_info = get_connection_info(cf, unpack=True)
-    #         assert isinstance(existing_connection_info, dict)
-    #         connection_info = dict(existing_connection_info, **connection_info)
-    #         if connection_info == existing_connection_info:
-    #             self.log.debug("Connection file %s with current information already exists", cf)
-    #             return
-
-    #     self.log.debug("Writing connection file: %s", cf)
-    #     write_connection_file(cf, **connection_info)
-
-    # def cleanup_connection_file(self):
-    #     """Clean up our connection file."""
-    #     cf = self.abs_connection_file
-    #     self.log.debug("Cleaning up connection file: %s", cf)
-    #     try:
-    #         Path(cf).unlink()
-    #     except OSError:
-    #         pass
-
-    #     self.cleanup_ipc_files()
-
-    # def init_connection_file(self):
-    #     """Initialize our connection file."""
-    #     if not self.connection_file:
-    #         self.connection_file = f"kernel-{os.getpid()}.json"
-    #     try:
-    #         self.connection_file = filefind(self.connection_file, [".", self.connection_dir])
-    #     except OSError:
-    #         self.log.debug("Connection file not found: %s", self.connection_file)
-    #         # This means I own it, and I'll create it in this directory:
-    #         Path(self.abs_connection_file).parent.mkdir(mode=0o700, exist_ok=True, parents=True)
-    #         # Also, I will clean it up:
-    #         atexit.register(self.cleanup_connection_file)
-    #         return
-    #     try:
-    #         self.load_connection_file()
-    #     except Exception:
-    #         self.log.error(
-    #             "Failed to load connection file: %r", self.connection_file, exc_info=True
-    #         )
 
     def log_connection_info(self):
         """display connection info, and store ports"""
@@ -294,13 +235,11 @@ class MainKernel(ConnectionFileMixin, Kernel):
         """Start inside the current anyio event loop.
 
         ``` python
-        MainKernel()
-        async app.start_here():
+        kernel = MainKernel.instance()
+        async kernel.start_in_context():
             await anyio.sleep_forever()
-        # app has closed
         ```
         """
-        # TODO: convert to a classmethod, start the instance and accept configuration
         if self.sockets:  # TODO: Make change to cls._instance
             msg = "Already started"
             raise RuntimeError(msg)
@@ -313,7 +252,7 @@ class MainKernel(ConnectionFileMixin, Kernel):
                 self.get_socket(SocketID.iopub, zmq.SocketType.PUB, 1000) as iopub_socket,
                 self.get_socket(SocketID.stdin, zmq.SocketType.ROUTER, 1000),
             ):
-                self._shell_portal = portal
+                self._portal = portal
                 tg.cancel_scope.shield = True
                 self._tg_main = tg
                 try:
@@ -341,7 +280,7 @@ class MainKernel(ConnectionFileMixin, Kernel):
                     sys.stdout.flush()
                     sys.stderr.flush()
                     self.comm_manager.kernel = self
-                    yield self
+                    yield
                 finally:
                     # enable a message to be sent incase anyone is waiting
                     self._stopped.set()
@@ -350,46 +289,49 @@ class MainKernel(ConnectionFileMixin, Kernel):
                     tg.cancel_scope.cancel()
 
         finally:
-            # while self.sockets:
-            #     await anyio.sleep(0.01)
-            #     for socket in self.sockets.values():
-            #         socket.close(linger=0)
             self.zmq_context.destroy(linger=0)
             self.reset_io()
             self.cleanup_connection_file()
-            self.__class__._instance = None
 
     def start_soon(self, func, *args, name: str | None = None):
         "Run a coroutine in the main thread taskgroup."
         try:
-            if self._shell_portal._event_loop_thread_id == threading.get_ident():
+            if self._portal._event_loop_thread_id == threading.get_ident():
                 self._tg_main.start_soon(func, *args, name=name)
             else:
-                self._shell_portal.start_task_soon(func, *args, name=name)
+                self._portal.start_task_soon(func, *args, name=name)
         except Exception:
             self.log.exception("portal call failed")
             raise
 
-    def start(self, backend: Literal["trio", "asyncio", "asyncio_eager"] = "asyncio") -> None:
+    @classmethod
+    def start(cls, backend: Literal["trio", "asyncio", "asyncio_eager"] = "asyncio") -> None:
         """Start the application."""
 
-        # if backend == "asyncio" and sys.platform == "win32":
-        #     import asyncio
+        if backend == "asyncio" and sys.platform == "win32":
+            import asyncio
 
-        #     policy = asyncio.get_event_loop_policy()
-        #     if policy.__class__.__name__ == "WindowsProactorEventLoopPolicy":
-        #         from anyio._core._asyncio_selector_thread import get_selector
+            policy = asyncio.get_event_loop_policy()
+            if policy.__class__.__name__ == "WindowsProactorEventLoopPolicy":
+                from anyio._core._asyncio_selector_thread import get_selector
 
-        #         selector = get_selector()
-        #         selector._thread.pydev_do_not_trace = True
+                selector = get_selector()
+                selector._thread.pydev_do_not_trace = True
 
         async def _start() -> None:
             """ """
-            async with self.start_in_context():
+            if backend == "asyncio_eager" and sys.version_info >= (3, 11):
+                import asyncio
+
+                loop = asyncio.get_running_loop()
+                loop.set_task_factory(asyncio.eager_task_factory)
+            main_kernel = cls.instance()
+            async with main_kernel.start_in_context():
                 # Block forever
                 await anyio.Event().wait()
+                sys.exit()
 
-        anyio.run(_start, backend=backend)
+        anyio.run(_start, backend="asyncio" if backend == "asyncio_eager" else backend)
 
     def stop(self):
         self._stop_event.set()
@@ -485,7 +427,7 @@ class MainKernel(ConnectionFileMixin, Kernel):
         process_message: Callable[[zmq.Socket, list[bytes | bytearray], dict | None], CoroutineType],
         socket: zmq_anyio.Socket,
     ):
-        """Receive messages from the socket, unpack themm and pass them to be processed with process_message.
+        """Receive messages from the socket, unpack them and pass them to be processed with process_message.
 
         Intended to be used with:
          - shell socket
@@ -501,7 +443,6 @@ class MainKernel(ConnectionFileMixin, Kernel):
             idents, msg_ = self.session.feed_identities(msg_, copy=copy)
             msg = self.session.deserialize(msg_, content=True, copy=copy)
             await process_message(socket, idents, msg)
-
 
     async def shutdown_request(self, socket, ident, parent):
         """Handle a shutdown request."""
@@ -521,7 +462,7 @@ class MainKernel(ConnectionFileMixin, Kernel):
         return {"status": "ok", "restart": restart}
 
     def _run_control_loop(self, ready_event):
-        # This code runs in a different thread with a different event loop
+        # This code runs in a different thread having its own event loop
 
         async def start_control():
             async def _process_control(socket, idents, msg):
@@ -555,32 +496,6 @@ class MainKernel(ConnectionFileMixin, Kernel):
                 tg.cancel_scope.cancel()
 
         anyio.run(start_control)
-
-        # self.log.debug("Control received: %s", msg)
-        # self._publish_status("busy", msg)
-        # header = msg["header"]
-        # msg_type = header["msg_type"]
-
-        # handler = self.control_handlers.get(msg_type, None)
-        # if handler is None:
-        #     self.log.error("UNKNOWN CONTROL MESSAGE TYPE: %r", msg_type)
-        # else:
-        #     try:
-        #         result = handler(self.control_socket, idents, msg)
-        #         if inspect.isawaitable(result):
-        #             await result
-        #         else:
-        #             # If the handler is not awaitable, ensure it completes before proceeding
-        #             time.sleep(0.00001)  # Small delay to ensure sequential processing
-        #     except Exception:
-        #         self.log.error("Exception in control handler:", exc_info=True)
-        # if sys.stdout is not None:
-        #     sys.stdout.flush()
-        # if sys.stderr is not None:
-        #     sys.stderr.flush()
-        # self._publish_status("idle", msg)
-
-        # Wait for the control thread to be ready
 
     def _heartbeat_thread(self, ready_event: threading.Event):
         """The heartbeat run in its own thread.
