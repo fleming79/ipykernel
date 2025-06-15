@@ -38,20 +38,20 @@ if TYPE_CHECKING:
     from anyio.abc import TaskStatus
 
 
-async def start_in_thread(
+def run_in_thread(
     func: Callable[[TaskStatus], CoroutineType],
     stop_event: threading.Event,
     tg: TaskGroup,
     *,
-    task_status: TaskStatus,
+    backend: Literal["anyio", "trio", ""] = "",
 ):
-    """Start a function in a separate thread and manage its lifecycle using AnyIO.
+    """Run a coroutine function in a separate thread (and event loop) and manage its lifecycle using AnyIO.
 
     This function takes an asynchronous function, a stop event, and a task group,
     and starts the function in a separate thread. It ensures that the function
     is properly started and can be stopped gracefully.
 
-    The task returns once `func` indicates it is ready and `func` will continue
+    This coroutine returns once `task_status.started()`is called inside `func`
     running until the `stop_event` is set.
 
     Args:
@@ -61,8 +61,12 @@ async def start_in_thread(
         tg: The AnyIO TaskGroup to use for managing the function's task.
         task_status: An AnyIO TaskStatus object to signal when the function has started.
     """
-    ready_event = threading.Event()
 
+    import sniffio
+
+    backend = backend or sniffio.current_async_library()  # type: ignore[no-any-return]
+
+    ready_event = threading.Event()
     def run_func():
         async def run_until_stop_event():
             async with anyio.create_task_group() as tg:
@@ -71,12 +75,10 @@ async def start_in_thread(
                 await to_thread.run_sync(stop_event.wait)
                 tg.cancel_scope.cancel()
 
-        anyio.run(run_until_stop_event)
+        anyio.run(run_until_stop_event, backend=backend)
 
     tg.start_soon(to_thread.run_sync, run_func)
-    await to_thread.run_sync(ready_event.wait)
-    task_status.started()
-    await anyio.sleep_forever()
+    return to_thread.run_sync(ready_event.wait)
 
 
 class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
@@ -297,8 +299,8 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
                 tg.cancel_scope.shield = True
                 self._tg_main = tg
                 try:
-                    await tg.start(start_in_thread, self._run_control_loop, self._stop_event, tg)
-                    await tg.start(start_in_thread, self._heartbeat, self._stop_event, tg)
+                    await run_in_thread(self._run_control_loop, self._stop_event, tg)
+                    await run_in_thread(self._heartbeat, self._stop_event, tg)
                     self.init_pubio(iopub_socket)
                     # Ensure sockets are created
                     if missing_sockets := set(SocketID).difference(self.sockets):
@@ -502,7 +504,7 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
         return {"status": "ok", "restart": restart}
 
     # Control thread
-    async def _run_control_loop(self, *, task_status: TaskStatus):
+    async def _run_control_loop(self, task_status: TaskStatus):
         # This code runs in a different thread having its own event loop
         async with self.get_socket(SocketID.control, zmq.SocketType.ROUTER, 1000) as control_socket:
             task_status.started()
@@ -532,7 +534,7 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
                 self._publish_status("idle", msg)
 
     # Heartbeat thread
-    async def _heartbeat(self, *, task_status: TaskStatus):
+    async def _heartbeat(self, task_status: TaskStatus):
         """The heartbeat.
 
         Reference: https://jupyter-client.readthedocs.io/en/stable/messaging.html#heartbeat-for-kernels

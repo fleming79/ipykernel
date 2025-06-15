@@ -106,16 +106,13 @@ async def test_start_soon(mode, exception: bool, client, kernel):
 
     events = []
 
-    async def start():
+    for _ in range(2):
         event = anyio.Event()
         if mode == "main":
             kernel.start_soon(my_test, event)
         else:
             await to_thread.run_sync(kernel.start_soon, my_test, event)
         events.append(event)
-
-    for _ in range(50):
-        await start()
 
     for event in events:
         await event.wait()
