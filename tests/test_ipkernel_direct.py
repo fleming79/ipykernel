@@ -19,9 +19,7 @@ async def test_properties(kernel) -> None:
     kernel.user_ns = {}
 
 
-async def test_direct_kernel_info_request(
-    client,
-):
+async def test_direct_kernel_info_request(client):
     reply = await send_shell_message(client, "kernel_info_request")
     assert reply["header"]["msg_type"] == "kernel_info_reply"
 

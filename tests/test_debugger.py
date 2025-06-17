@@ -12,7 +12,6 @@ if TYPE_CHECKING:
 
     from ipykernel.kernelapp import MainKernel
 
-seq = 0
 
 # Tests support debugpy not being installed, in which case the tests don't do anything useful
 # functionally as the debug message replies are usually empty dictionaries, but they confirm that
@@ -34,13 +33,12 @@ async def wait_for_debug_request(
 
     It does not check if the request was successful.
     """
-    global seq
-    seq += 1
+
     msg = kernel.session.msg(
         "debug_request",
         {
             "type": "request",
-            "seq": seq,
+            "seq": 1,
             "command": command,
             "arguments": arguments or {},
         },

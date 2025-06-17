@@ -137,7 +137,7 @@ class ZMQInteractiveShell(InteractiveShell):
             if kernel is kernel.main_kernel:
                 kernel.main_kernel.stop()
             else:
-                kernel.main_kernel.close_subshell(kernel.ident)
+                kernel.main_kernel.close_subshell(kernel.ident)  # TODO
 
     keepkernel_on_exit = None
 
