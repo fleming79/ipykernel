@@ -288,14 +288,20 @@ class Kernel(LoggingConfigurable):
                 try:
                     if received_time < self._stop_on_error_time:
                         self.log.info("Aborting execute_request: %s", msg["header"]["msg_id"])
+                        self._send_error_reply(
+                            socket=socket,
+                            idents=idents,
+                            msg=msg,
+                            evalue="Aborting due to prior exception",
+                        )
                         continue
                     await self._execute_request(socket, idents, msg)
                 except BaseException as e:
                     self.log.exception("Execute request", exc_info=e)
                     self._send_error_reply(
-                        socket,
-                        idents,
-                        msg,
+                        socket=socket,
+                        idents=idents,
+                        msg=msg,
                         ename=str(type(e).__name__),
                         evalue=str(e),
                         traceback=traceback.format_stack(),
@@ -324,20 +330,18 @@ class Kernel(LoggingConfigurable):
                 )
             # Call do_execute with the appropriate arguments
             reply_content = await self._do_execute(**content)
+            if not silent and stop_on_error and reply_content.get("status") == "error":
+                self._stop_on_error_time = time.monotonic()
+                self.log.info("An error occurred in a non-silent execution request at %s", self._stop_on_error_time)
 
             # Send the reply.
-            reply_msg = self.session.send(
+            self.session.send(
                 stream=socket,
                 msg_or_type="execute_reply",
                 content=reply_content,
                 parent=parent,
                 ident=ident,
             )
-            if reply_content.get("status") == "error":
-                self.log.exception("Execution failed %s", reply_msg)
-                if not silent and stop_on_error:
-                    self._stop_on_error_time = time.monotonic()
-                    self.log.info("An error occurred in a non-silent execution request at %s", self._stop_on_error_time)
         except Exception as e:
             self._send_error_reply(socket, parent, ident, ename=e.__class__.__name__, evalue=str(e))
         finally:

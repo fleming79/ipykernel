@@ -156,6 +156,7 @@ class ZMQInteractiveShell(InteractiveShell):
         env["PAGER"] = "cat"
         env["GIT_PAGER"] = "cat"
 
+
     def run_cell(self, *args, **kwargs):
         """Run a cell."""
         self._last_traceback = None
