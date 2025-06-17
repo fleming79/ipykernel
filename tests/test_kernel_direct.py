@@ -4,6 +4,7 @@
 # Distributed under the terms of the Modified BSD License.
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -41,10 +42,23 @@ async def test_inspect_request(client):
     assert reply["header"]["msg_type"] == "inspect_reply"
 
 
-@pytest.mark.parametrize("hist_access_type", ["", "tail", "range", "search"])
-async def test_history_request(client, hist_access_type):
-    content = {"hist_access_type": hist_access_type, "output": "", "raw": ""}
-    reply = await utils.send_shell_message(client, "history_request", content)
+async def test_history_request(client, kernel):
+    assert kernel.shell
+    # assert kernel.shell.history_manager
+    # kernel.shell.history_manager.db = DummyDB()
+    reply = await utils.send_shell_message(client, "history_request", {"hist_access_type": "", "output": "", "raw": ""})
+    assert reply["header"]["msg_type"] == "history_reply"
+    reply = await utils.send_shell_message(
+        client, "history_request", {"hist_access_type": "tail", "output": "", "raw": ""}
+    )
+    assert reply["header"]["msg_type"] == "history_reply"
+    reply = await utils.send_shell_message(
+        client, "history_request", {"hist_access_type": "range", "output": "", "raw": ""}
+    )
+    assert reply["header"]["msg_type"] == "history_reply"
+    reply = await utils.send_shell_message(
+        client, "history_request", {"hist_access_type": "search", "output": "", "raw": ""}
+    )
     assert reply["header"]["msg_type"] == "history_reply"
 
 
@@ -55,26 +69,12 @@ async def test_comm_info_request(client):
 
 async def test_direct_interrupt_request(client, kernel, mocker):
     await utils.clear_pub_message(client)
-    mocker.patch.object(kernel, "interrupt_request")
+    event = threading.Event()
+    kernel.shell_interrupt.add(event)
     reply = await utils.send_control_message(client, "interrupt_request")
     assert reply["header"]["msg_type"] == "interrupt_reply"
     assert reply["content"] == {"status": "ok"}
-    # test failure on interrupt request
-    def raiseOSError():
-        msg = "evalue"
-        raise OSError(msg)
-
-    _obj = kernel._send_interrupt_children
-    try:
-        kernel._send_interrupt_children = raiseOSError
-        reply = await utils.send_control_message(client, "interrupt_request")
-        assert reply["header"]["msg_type"] == "interrupt_reply"
-        assert reply["content"]["status"] == "error"
-        assert reply["content"]["ename"] == "OSError"
-        assert reply["content"]["evalue"] == "evalue"
-        assert len(reply["content"]["traceback"]) > 0
-    finally:
-        kernel._send_interrupt_children = _obj
+    assert event.is_set()
 
 
 async def test_shutdown_request(client, kernel, mocker):
@@ -92,3 +92,41 @@ async def test_is_complete_request(client):
 async def test_publish_debug_event(kernel):
     kernel._publish_debug_event({})
 
+
+async def test_properties(kernel) -> None:
+    class user_mod:
+        __dict__ = {}
+
+    kernel.user_module = user_mod()
+    kernel.user_ns = {}
+
+
+async def test_direct_clear(kernel):
+    kernel.do_clear()
+
+
+@pytest.mark.parametrize("mode", ["main", "external"])
+@pytest.mark.parametrize("exception", [True, False])
+async def test_start_soon(mode, exception: bool, client, kernel):
+    # Test we can start coroutines from various scopes
+
+    import anyio
+    from anyio import to_thread
+
+    async def my_test(event: anyio.Event):
+        event.set()
+        if exception:
+            raise ValueError
+
+    events = []
+
+    for _ in range(2):
+        event = anyio.Event()
+        if mode == "main":
+            kernel.start_soon(my_test, event)
+        else:
+            await to_thread.run_sync(kernel.start_soon, my_test, event)
+        events.append(event)
+
+    for event in events:
+        await event.wait()

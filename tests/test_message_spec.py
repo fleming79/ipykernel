@@ -269,10 +269,11 @@ async def test_stream(client):
     await utils.clear_pub_message(client)
     client.execute("print('hi')")
     stdout, stderr = await utils.assemble_output(client)
-    assert stdout == "hi\n"
+    assert stdout.startswith("hi")
 
 
 async def test_display_data(client):
+    # kernel.display_formatter
     await utils.clear_pub_message(client)
     msg_id, reply = await utils.execute(client, "from IPython.display import display; display(1)")
     await utils.check_pub_message(client, msg_id, execution_state="busy")

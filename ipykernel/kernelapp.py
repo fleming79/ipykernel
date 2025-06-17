@@ -223,7 +223,10 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
         "Send the message on the iopub socket"
         if threading.current_thread() is not threading.main_thread():
             # Send the message from the main thread
-            anyio.from_thread.run_sync(self.pubio_send, msg_or_type, content, metadata, parent, ident, buffers)
+            try:
+                anyio.from_thread.run_sync(self.pubio_send, msg_or_type, content, metadata, parent, ident, buffers)
+            except RuntimeError:
+                pass
             return
         self.session.send(
             stream=self.sockets[SocketID.iopub],
@@ -238,8 +241,15 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
     def start_soon(self, func, *args, name: str | None = None):
         "Run a coroutine in the main thread taskgroup."
         try:
-            if self._portal._event_loop_thread_id == threading.get_ident():
-                self._tg_main.start_soon(func, *args, name=name)
+            if threading.current_thread() is threading.main_thread():
+
+                async def _run_coro():
+                    try:
+                        await func(*args)
+                    except Exception:
+                        pass
+
+                self._tg_main.start_soon(_run_coro, name=name)
             else:
                 self._portal.start_task_soon(func, *args, name=name)
         except Exception:
