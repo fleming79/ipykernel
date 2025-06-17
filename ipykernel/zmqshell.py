@@ -72,11 +72,12 @@ class ZMQDisplayPublisher(DisplayPublisher):
             Transient data should not be persisted to documents.
         update : bool, optional, keyword-only
             If True, send an update_display_data message instead of display_data.
+
+        Ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#update-display-data
         """
         self.main_kernel.pubio_send(
             msg_or_type="update_display_data" if update else "display_data",
-            content={"data": data, "transient": transient or {}} | kwargs,
-            metadata=metadata,
+            content={"data": data, "metadata": metadata or {}, "transient": transient or {}} | kwargs,
             parent=self.parent_header,
             ident=self.topic,
         )
