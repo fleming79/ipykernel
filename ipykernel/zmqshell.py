@@ -156,6 +156,8 @@ class ZMQInteractiveShell(InteractiveShell):
         env["PAGER"] = "cat"
         env["GIT_PAGER"] = "cat"
 
+    def ask_exit(self):
+        self.exit_now = True
 
     def run_cell(self, *args, **kwargs):
         """Run a cell."""
