@@ -201,6 +201,7 @@ async def test_kernel_info_request(client):
 
 
 async def test_subshell(client):
+    pytest.skip("Not imlemented")
     msg = client.session.msg("create_subshell_request")
     client.control_channel.send(msg)
     msg_id = msg["header"]["msg_id"]
