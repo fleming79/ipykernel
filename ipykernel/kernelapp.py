@@ -4,16 +4,15 @@
 # Distributed under the terms of the Modified BSD License.
 from __future__ import annotations
 
+import enum
 import errno
-import functools
-import os
 import sys
 import threading
 import traceback
 import typing as t
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Self, cast
+from typing import TYPE_CHECKING, Literal, Self
 
 import anyio
 import anyio.from_thread
@@ -24,18 +23,24 @@ from anyio.abc import TaskGroup
 from anyio.from_thread import BlockingPortal
 from jupyter_client.connect import ConnectionFileMixin
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import Bool, Container, Dict, DottedObjectName, Instance, Integer, Set, Type, Unicode, default
+from traitlets import Bool, Container, Dict, DottedObjectName, Instance, Set, Type, Unicode
 from traitlets.config import SingletonConfigurable
 from traitlets.utils.importstring import import_item
 
 from ipykernel.iostream import OutStream, SocketID
 from ipykernel.kernelbase import Kernel
+from ipykernel.kernelspec import KERNEL_NAME
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import CoroutineType
 
     from anyio.abc import TaskStatus
+
+class AsyncMode(enum.StrEnum):
+    asyncio = "asyncio"
+    trio = "trio"
+    asyncio_eager = "asyncio_eager"
 
 
 def run_in_thread(
@@ -44,6 +49,9 @@ def run_in_thread(
     tg: TaskGroup,
     *,
     backend: Literal["anyio", "trio", ""] = "",
+    name="",
+    pydev_do_not_trace=False,
+    is_pydev_daemon_thread=False,
 ):
     """Run a coroutine function in a separate thread (and event loop) and manage its lifecycle using AnyIO.
 
@@ -67,7 +75,14 @@ def run_in_thread(
     backend = backend or sniffio.current_async_library()  # type: ignore[no-any-return]
 
     ready_event = threading.Event()
+
     def run_func():
+        thread = threading.current_thread()
+        if name:
+            thread.name = name
+        thread.pydev_do_not_trace = pydev_do_not_trace  # type: ignore  # noqa: PGH003
+        thread.is_pydev_daemon_thread = is_pydev_daemon_thread  # type: ignore  # noqa: PGH003
+
         async def run_until_stop_event():
             async with anyio.create_task_group() as tg:
                 await tg.start(func)
@@ -84,22 +99,13 @@ def run_in_thread(
 class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
     """The IPYKernel application class."""
 
-    # the kernel class, as an importstring
-    kernel_class = Type(
-        cast("type[Kernel]", "ipykernel.kernelbase.Kernel"),
-        klass=Kernel,
-        help="""The Kernel used  for subshells.""",
-    ).tag(config=True)
+    kernel_name = Unicode(KERNEL_NAME)
     _ports = Dict()
     sockets: Dict[SocketID, zmq_anyio.Socket] = Dict()
     _socket_threads: Dict[zmq_anyio.Socket, threading.Thread] = Dict()
 
     _log_map: Dict[int, t.Any] = Dict()
     _io_modified = Bool(False)
-    _running = False
-    # connection info:
-    connection_dir = Unicode()
-    _instance = None
     _tg_main = Instance(TaskGroup)
     _stop_event = Instance(threading.Event, ())
     zmq_context = Instance(zmq.Context)
@@ -107,7 +113,7 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
     _stopped = Instance(anyio.Event, ())
     _portal = Instance(BlockingPortal)
 
-    def __new__(cls) -> Self:
+    def __new__(cls, **kwargs) -> Self:  # noqa: ARG003
         #  There is only one instance.
         if not cls._instance:
             cls._instance = super().__new__(cls)
@@ -122,18 +128,7 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
             "debug_request": self.debug_request,
             "execute_request": self._execute_request,  # bypass
         }
-        # self.init_connection_file()
         self.init_crash_handler()
-
-    @default("connection_dir")
-    def _default_connection_dir(self):
-        return jupyter_runtime_dir()
-
-    @property
-    def abs_connection_file(self):
-        if Path(self.connection_file).name == self.connection_file and self.connection_dir:
-            return str(Path(str(self.connection_dir)) / self.connection_file)
-        return self.connection_file
 
     @property
     def ports(self):
@@ -155,14 +150,6 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
         "ipykernel.displayhook.ZMQDisplayHook", help="The importstring for the DisplayHook factory"
     ).tag(config=True)
 
-    # polling
-    parent_handle = Integer(
-        int(os.environ.get("JPY_PARENT_PID") or 0),
-        help="""kill this process if its parent dies.  On Windows, the argument
-        specifies the HANDLE of the parent process, otherwise it is simply boolean.
-        """,
-    ).tag(config=True)
-
     def init_crash_handler(self):
         """Initialize the crash handler."""
         sys.excepthook = self.excepthook
@@ -172,31 +159,11 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
         # write uncaught traceback to 'real' stderr, not zmq-forwarder
         traceback.print_exception(etype, evalue, tb, file=sys.__stderr__)
 
-    def log_connection_info(self):
-        """display connection info, and store ports"""
-        basename = Path(self.connection_file).name
-        if basename == self.connection_file or str(Path(self.connection_file).parent) == self.connection_dir:
-            # use shortname
-            tail = basename
-        else:
-            tail = self.connection_file
-        lines = [
-            "To connect another client to this kernel, use:",
-            "    --existing %s" % tail,
-        ]
-        # log connection info
-        # info-level, so often not shown.
-        # frontends should use the %connect_info magic
-        # to see the connection info
-        for line in lines:
-            self.log.info(line)
-
     def init_pubio(self, iopub_socket: zmq.Socket):
         """Redirect input streams."""
         if threading.current_thread() != threading.main_thread():
             msg = "pubio expects to be running in the main thread"
             raise RuntimeError(msg)
-        main_thread = threading.main_thread()
 
         self._save_io()
         if self.outstream_class:
@@ -208,25 +175,11 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
 
                 def flusher(string: str, name=name):
                     "Publish stdio or stderr when flush is called"
-                    if threading.current_thread() != main_thread:
-                        anyio.from_thread.run_sync(
-                            functools.partial(
-                                self.session.send,
-                                stream=iopub_socket,
-                                msg_or_type="stream",
-                                content={"name": name, "text": string},
-                                parent=self.parent_msg,
-                                ident=self._topic("status"),
-                            )
-                        )
-                    else:
-                        self.session.send(
-                            stream=iopub_socket,
-                            msg_or_type="stream",
-                            content={"name": name, "text": string},
-                            parent=self.parent_msg,
-                            ident=self._topic("status"),
-                        )
+                    self.pubio_send(
+                        msg_or_type="stream",
+                        content={"name": name, "text": string},
+                        ident=self._topic("status"),
+                    )
 
                 wrapper = cls(name=name, flusher=flusher)  # type: ignore[call-arg]
                 setattr(sys, name, wrapper)
@@ -257,6 +210,30 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
             if isinstance(stdout, outstream_factory):
                 stdout.close()
 
+    def pubio_send(
+        self,
+        msg_or_type: dict[str, t.Any] | str,
+        content: dict[str, t.Any] | None = None,
+        metadata: dict[str, t.Any] | None = None,
+        parent: dict[str, t.Any] | None = None,
+        ident: bytes | list[bytes] | None = None,
+        buffers: list[bytes | bytearray] | None = None,
+    ):
+        "Send the message on the iopub socket"
+        if threading.current_thread() is not threading.main_thread():
+            # Send the message from the main thread
+            anyio.from_thread.run_sync(self.pubio_send, msg_or_type, content, metadata, parent, ident, buffers)
+            return
+        self.session.send(
+            stream=self.sockets[SocketID.iopub],
+            msg_or_type=msg_or_type,
+            content=content,
+            metadata=metadata,
+            parent=parent or self.parent_msg,
+            ident=ident,
+            buffers=buffers,
+        )
+
     async def init_pdb(self):
         """Replace pdb with IPython's version that is interruptible.
 
@@ -286,6 +263,8 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
         if self.sockets:  # TODO: Make change to cls._instance
             msg = "Already started"
             raise RuntimeError(msg)
+        if self.connection_file and Path(self.connection_file).exists():
+            self.load_connection_file()
         self.zmq_context = zmq.Context()
         try:
             async with (
@@ -299,24 +278,27 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
                 tg.cancel_scope.shield = True
                 self._tg_main = tg
                 try:
-                    await run_in_thread(self._run_control_loop, self._stop_event, tg)
-                    await run_in_thread(self._heartbeat, self._stop_event, tg)
                     self.init_pubio(iopub_socket)
+                    await run_in_thread(self._heartbeat, self._stop_event, tg, name="Heartbeat")
+                    await run_in_thread(self._run_control_loop, self._stop_event, tg, name="Control")
                     # Ensure sockets are created
                     if missing_sockets := set(SocketID).difference(self.sockets):
                         msg = f"Failed to create sockets: {missing_sockets}"
                         raise RuntimeError(msg)
 
                     # writing/displaying connection info must be *after* init_sockets/heartbeat
+                    if not self.connection_file:
+                        self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{self.ident}.json"))
                     self.write_connection_file()
                     # Log connection info after writing connection file, so that the connection
                     # file is definitely available at the time someone reads the log.
-                    self.log_connection_info()
+                    self.log.info(
+                        'To connect another client to this kernel, use:\n      --existing "%s"', {self.connection_file}
+                    )
 
                     tg.start_soon(self._receive_msg_loop, self._process_shell, shell_socket)
                     tg.start_soon(self._shell_execute_request_loop)
                     tg.start_soon(self.init_pdb)
-                    self.init_shell(iopub_socket)
 
                     # flush stdout/stderr, so that anything written to these streams during
                     # initialization do not get associated with the first execution request
@@ -348,10 +330,41 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
             raise
 
     @classmethod
-    def start(cls, backend: Literal["trio", "asyncio", "asyncio_eager"] = "asyncio") -> None:
-        """Start the application."""
+    def start(cls, connection_file="", async_mode=AsyncMode.asyncio) -> int:
+        """Start the application.
 
-        if backend == "asyncio" and sys.platform == "win32":
+        Other options:
+
+        Using stored config.
+
+        ``` python
+        MainKernel.launch_instance()
+        ```
+
+        Or if there is already an anyio event loop running you can use
+
+        ``` python
+        async with MainKernel.instance().start_in_context() as kernel:
+        ...
+
+        """
+        async_mode = AsyncMode(async_mode)
+
+        async def _start() -> None:
+            """ """
+            if async_mode is AsyncMode.asyncio_eager and sys.version_info >= (3, 11):
+                import asyncio
+
+                loop = asyncio.get_running_loop()
+                loop.set_task_factory(asyncio.eager_task_factory)
+
+            async with kernel.start_in_context():
+                await anyio.sleep_forever()
+
+        kernel = cls.instance()
+        kernel.connection_file = connection_file
+
+        if async_mode in [AsyncMode.asyncio, AsyncMode.asyncio_eager] and sys.platform == "win32":
             import asyncio
 
             policy = asyncio.get_event_loop_policy()
@@ -360,21 +373,11 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
 
                 selector = get_selector()
                 selector._thread.pydev_do_not_trace = True
-
-        async def _start() -> None:
-            """ """
-            if backend == "asyncio_eager" and sys.version_info >= (3, 11):
-                import asyncio
-
-                loop = asyncio.get_running_loop()
-                loop.set_task_factory(asyncio.eager_task_factory)
-            main_kernel = cls.instance()
-            async with main_kernel.start_in_context():
-                # Block forever
-                await anyio.Event().wait()
-                sys.exit()
-
-        anyio.run(_start, backend="asyncio" if backend == "asyncio_eager" else backend)
+        try:
+            anyio.run(_start, backend="trio" if async_mode is AsyncMode.trio else "asyncio")
+        finally:
+            pass
+        return 0
 
     def stop(self):
         self._stop_event.set()
@@ -503,15 +506,15 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
         await self._stopped.wait()
         return {"status": "ok", "restart": restart}
 
-    # Control thread
     async def _run_control_loop(self, task_status: TaskStatus):
+        # Inside control thread
         # This code runs in a different thread having its own event loop
         async with self.get_socket(SocketID.control, zmq.SocketType.ROUTER, 1000) as control_socket:
             task_status.started()
             await self._receive_msg_loop(self._process_control, socket=control_socket)
 
-    # Control thread
     async def _process_control(self, socket, idents, msg):
+        # Inside control thread
         msg_type = msg["header"]["msg_type"]
 
         self.log.debug("\n*** MESSAGE TYPE:%s***", msg_type)
@@ -533,13 +536,12 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
             finally:
                 self._publish_status("idle", msg)
 
-    # Heartbeat thread
     async def _heartbeat(self, task_status: TaskStatus):
         """The heartbeat.
 
         Reference: https://jupyter-client.readthedocs.io/en/stable/messaging.html#heartbeat-for-kernels
         """
-        # threading.current_thread()
+        # Inside heartbeat thread
         socket = self.get_socket(SocketID.heartbeat, zmq.SocketType.ROUTER, 1000)
         await anyio.sleep(1)
         async with socket:

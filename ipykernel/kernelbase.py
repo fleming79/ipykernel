@@ -66,7 +66,6 @@ class Kernel(LoggingConfigurable):
     log = Instance(logging.LoggerAdapter)
     ident = Unicode()
     shell_handlers = Dict()
-    sockets: Dict[SocketID, zmq_anyio.Socket] = Dict()
 
     @default("log")
     def _default_log(self):
@@ -208,17 +207,14 @@ class Kernel(LoggingConfigurable):
             "kernel_info_request": self.kernel_info_request,
             "is_complete_request": self.is_complete_request,
             "interrupt_request": self.interrupt_request,
-            "comm_open": self.comm_manager.comm_open,
-            "comm_msg": self.comm_manager.comm_msg,
-            "comm_close": self.comm_manager.comm_close,
+            "comm_open": self.comm_open,
+            "comm_msg": self.comm_msg,
+            "comm_close": self.comm_close,
         }
         self._exec_send_stream, self._exec_receive_stream = create_memory_object_stream[
             tuple[float, zmq_anyio.Socket, list[bytes | bytearray], dict]
         ](max_buffer_size=1000)
-
-    def init_shell(self, iopub_socket: zmq_anyio.Socket):
-        # Initialize the InteractiveShell subclass
-        shell = self.shell_class.instance(
+        self.shell = self.shell_class.instance(
             parent=self,
             profile_dir=self.profile_dir,
             user_module=self.user_module,
@@ -226,11 +222,6 @@ class Kernel(LoggingConfigurable):
             kernel=self,
             compiler_class=self.compiler_class,
         )
-        shell.display_pub.session = self.session
-        shell.displayhook.session = self.session
-        shell.displayhook.pub_socket = iopub_socket
-        shell.display_pub.pub_socket = iopub_socket
-        self.set_trait("shell", shell)
         jupyter_session_name = os.environ.get("JPY_SESSION_NAME")
         if jupyter_session_name:
             self.shell.user_ns["__session__"] = jupyter_session_name
@@ -241,8 +232,7 @@ class Kernel(LoggingConfigurable):
 
     def _publish_status(self, status: Literal["busy", "idle"], parent):
         """send status (busy/idle) on IOPub"""
-        self.session.send(
-            stream=self.sockets[SocketID.iopub],
+        self.main_kernel.pubio_send(
             msg_or_type="status",
             content={"execution_state": status},
             parent=parent,
@@ -250,8 +240,7 @@ class Kernel(LoggingConfigurable):
         )
 
     def _publish_debug_event(self, event):
-        self.session.send(
-            stream=self.sockets[SocketID.iopub],
+        self.main_kernel.pubio_send(
             msg_or_type="debug_event",
             content=event,
             parent=self.parent_msg,
@@ -327,8 +316,7 @@ class Kernel(LoggingConfigurable):
             if not silent:
                 self._set_parent_ident(parent, ident)
                 self.execution_count += 1
-                self.session.send(
-                    stream=self.sockets[SocketID.iopub],
+                self.main_kernel.pubio_send(
                     msg_or_type="execute_input",
                     content={"code": content["code"], "execution_count": self.execution_count},
                     parent=parent,
@@ -437,20 +425,29 @@ class Kernel(LoggingConfigurable):
         }
         self.session.send(stream=socket, msg_or_type=msg_or_type, content=content, ident=idents, parent=msg)
 
-    async def interrupt_request(self, socket_id, ident, parent):
+    async def interrupt_request(self, socket, ident, parent):
         """Handle an interrupt request."""
 
         content: dict[str, t.Any] = {"status": "ok"}
         for event in self.main_kernel.shell_interrupt:
             event.set()
         self.session.send(
-            stream=socket_id,
+            stream=socket,
             msg_or_type="interrupt_reply",
             content=content,
             parent=parent,
             ident=ident,
         )
         return
+
+    async def comm_open(self, socket, ident, parent):
+        self.comm_manager.comm_open(socket, ident, parent)
+
+    async def comm_msg(self, socket, ident, parent):
+        self.comm_manager.comm_msg(socket, ident, parent)
+
+    async def comm_close(self, socket, ident, parent):
+        self.comm_manager.comm_close(socket, ident, parent)
 
     async def is_complete_request(self, socket, ident, parent):
         """Handle an is_complete request."""

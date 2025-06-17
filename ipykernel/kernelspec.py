@@ -22,7 +22,7 @@ from traitlets.config import Application
 
 pjoin = os.path.join
 
-KERNEL_NAME = "python%i" % sys.version_info[0]
+KERNEL_NAME = "python-akernel"
 
 # path to kernelspec resources
 RESOURCES = pjoin(Path(__file__).parent, "resources")
@@ -107,7 +107,7 @@ def write_kernel_spec(
 def install(
     kernel_spec_manager: KernelSpecManager | None = None,
     user: bool = False,
-    kernel_name: str = KERNEL_NAME,
+    kernel_name=KERNEL_NAME,
     display_name: str | None = None,
     prefix: str | None = None,
     profile: str | None = None,
@@ -148,8 +148,7 @@ def install(
     -------
     The path where the kernelspec was installed.
     """
-    if kernel_spec_manager is None:
-        kernel_spec_manager = KernelSpecManager()
+    kernel_spec_manager_ = kernel_spec_manager or KernelSpecManager()
 
     if env is None:
         env = {}
@@ -184,7 +183,7 @@ def install(
     if env:
         overrides["env"] = env
     path = write_kernel_spec(overrides=overrides, extra_arguments=extra_arguments, python_arguments=python_arguments)
-    dest = kernel_spec_manager.install_kernel_spec(path, kernel_name=kernel_name, user=user, prefix=prefix)
+    dest = kernel_spec_manager_.install_kernel_spec(path, kernel_name=kernel_name, user=user, prefix=prefix)
     # cleanup afterward
     shutil.rmtree(path)
     return dest

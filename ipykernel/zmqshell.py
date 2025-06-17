@@ -16,20 +16,19 @@ machinery.  This should thus be thought of as scaffolding.
 from __future__ import annotations
 
 import os
-import sys
-import threading
 from typing import TYPE_CHECKING
 
 from IPython.core.autocall import ZMQExitAutocall
 from IPython.core.displaypub import DisplayPublisher
 from IPython.core.interactiveshell import InteractiveShell, InteractiveShellABC
 from IPython.core.usage import default_banner
-from jupyter_client.session import Session, extract_header
-from traitlets import Any, CBool, CBytes, Dict, Instance, Type, default, observe
+from jupyter_client.session import extract_header
+from traitlets import CBool, CBytes, Dict, Instance, Type, default, observe
 
 from ipykernel.displayhook import ZMQShellDisplayHook
 
 if TYPE_CHECKING:
+    from ipykernel.kernelapp import MainKernel
     from ipykernel.kernelbase import Kernel
 
 # -----------------------------------------------------------------------------
@@ -40,36 +39,13 @@ if TYPE_CHECKING:
 class ZMQDisplayPublisher(DisplayPublisher):
     """A display publisher that publishes data using a ZeroMQ PUB socket."""
 
-    session = Instance(Session, allow_none=True)
-    pub_socket = Any(allow_none=True)
+    main_kernel: Instance[MainKernel] = Instance("ipykernel.kernelapp.MainKernel", ())
     parent_header = Dict({})
     topic = CBytes(b"display_data")
-
-    # thread_local:
-    # An attribute used to ensure the correct output message
-    # is processed. See ipykernel Issue 113 for a discussion.
-    _thread_local = Any()
 
     def set_parent(self, parent):
         """Set the parent for outbound messages."""
         self.parent_header = extract_header(parent)
-
-    def _flush_streams(self):
-        """flush IO Streams prior to display"""
-        sys.stdout.flush()
-        sys.stderr.flush()
-
-    @default("_thread_local")
-    def _default_thread_local(self):
-        """Initialize our thread local storage"""
-        return threading.local()
-
-    @property
-    def _hooks(self):
-        if not hasattr(self._thread_local, "hooks"):
-            # create new list for a new thread
-            self._thread_local.hooks = []
-        return self._thread_local.hooks
 
     # Feb: 2025 IPython has a deprecated, `source` parameter, marked for removal that
     # triggers typing errors.
@@ -97,36 +73,11 @@ class ZMQDisplayPublisher(DisplayPublisher):
         update : bool, optional, keyword-only
             If True, send an update_display_data message instead of display_data.
         """
-        self._flush_streams()
-        if metadata is None:
-            metadata = {}
-        if transient is None:
-            transient = {}
-        self._validate_data(data, metadata)
-        content = {}
-        content["data"] = data
-        content["metadata"] = metadata
-        content["transient"] = transient
-
-        msg_type = "update_display_data" if update else "display_data"
-
-        # Use 2-stage process to send a message,
-        # in order to put it through the transform
-        # hooks before potentially sending.
-        assert self.session is not None
-        msg = self.session.msg(msg_type, content, parent=self.parent_header)
-
-        # Each transform either returns a new
-        # message or None. If None is returned,
-        # the message has been 'used' and we return.
-        for hook in self._hooks:
-            msg = hook(msg)
-            if msg is None:
-                return  # type:ignore[unreachable]
-
-        self.session.send(
-            self.pub_socket,
-            msg,
+        self.main_kernel.pubio_send(
+            msg_or_type="update_display_data" if update else "display_data",
+            content={"data": data, "transient": transient or {}} | kwargs,
+            metadata=metadata,
+            parent=self.parent_header,
             ident=self.topic,
         )
 
@@ -141,61 +92,12 @@ class ZMQDisplayPublisher(DisplayPublisher):
             This reduces bounce during repeated clear & display loops.
 
         """
-        content = {"wait": wait}
-        self._flush_streams()
-        assert self.session is not None
-        msg = self.session.msg("clear_output", content, parent=self.parent_header)
-
-        # see publish() for details on how this works
-        for hook in self._hooks:
-            msg = hook(msg)
-            if msg is None:
-                return  # type:ignore[unreachable]
-
-        self.session.send(
-            self.pub_socket,
-            msg,
+        self.main_kernel.pubio_send(
+            msg_or_type="clear_output",
+            content={"wait": wait},
+            parent=self.parent_header,
             ident=self.topic,
         )
-
-    def register_hook(self, hook):
-        """
-        Registers a hook with the thread-local storage.
-
-        Parameters
-        ----------
-        hook : Any callable object
-
-        Returns
-        -------
-        Either a publishable message, or `None`.
-        The DisplayHook objects must return a message from
-        the __call__ method if they still require the
-        `session.send` method to be called after transformation.
-        Returning `None` will halt that execution path, and
-        session.send will not be called.
-        """
-        self._hooks.append(hook)
-
-    def unregister_hook(self, hook):
-        """
-        Un-registers a hook with the thread-local storage.
-
-        Parameters
-        ----------
-        hook : Any callable object which has previously been
-            registered as a hook.
-
-        Returns
-        -------
-        bool - `True` if the hook was removed, `False` if it wasn't
-            found.
-        """
-        try:
-            self._hooks.remove(hook)
-            return True
-        except ValueError:
-            return False
 
 
 class ZMQInteractiveShell(InteractiveShell):
@@ -254,41 +156,6 @@ class ZMQInteractiveShell(InteractiveShell):
         env["PAGER"] = "cat"
         env["GIT_PAGER"] = "cat"
 
-    # def payloadpage_page(self, strg, start=0, screen_lines=0, pager_cmd=None):
-    #     """Print a string, piping through a pager.
-
-    #     This version ignores the screen_lines and pager_cmd arguments and uses
-    #     IPython's payload system instead.
-
-    #     Parameters
-    #     ----------
-    #     strg : str or mime-dict
-    #         Text to page, or a mime-type keyed dict of already formatted data.
-    #     start : int
-    #         Starting line at which to place the display.
-    #     """
-
-    #     # Some routines may auto-compute start offsets incorrectly and pass a
-    #     # negative value.  Offset to 0 for robustness.
-    #     start = max(0, start)
-
-    #     data = strg if isinstance(strg, dict) else {"text/plain": strg}
-
-    #     payload = {"source": "page", "data": data, "start": start}
-    #     assert self.payload_manager is not None
-    #     self.payload_manager.write_payload(payload)
-
-    # def init_hooks(self):
-    #     """Initialize hooks."""
-    #     super().init_hooks()
-    #     self.set_hook("show_in_pager", page.as_hook(self.payloadpage_page), 99)
-
-    # def ask_exit(self):
-    #     """Engage the exit actions."""
-    #     self.exit_now = not self.keepkernel_on_exit
-    #     payload = {"source": "ask_exit", "keepkernel": self.keepkernel_on_exit}
-    #     self.payload_manager.write_payload(payload)  # type:ignore[union-attr]
-
     def run_cell(self, *args, **kwargs):
         """Run a cell."""
         self._last_traceback = None
@@ -300,26 +167,10 @@ class ZMQInteractiveShell(InteractiveShell):
         ename = str(etype.__name__)
         if ename == "KeyboardInterrupt":
             stb.pop(-2)
-
-        exc_content = {
-            "traceback": stb,
-            "ename": ename,
-            "evalue": str(evalue),
-        }
-
-        dh = self.displayhook
-        # Send exception info over pub socket for other clients than the caller
-        # to pick up
-        topic = None
-        if dh.topic:
-            topic = dh.topic.replace(b"execute_result", b"error")
-
-        dh.session.send(
-            dh.pub_socket,
-            "error",
-            exc_content,
-            dh.parent_header,
-            ident=topic,
+        self.kernel.main_kernel.pubio_send(
+            msg_or_type="error",
+            content={"traceback": stb, "ename": ename, "evalue": str(evalue)},
+            parent=self.parent_header,
         )
         # store the formatted traceback
         self._last_traceback = stb

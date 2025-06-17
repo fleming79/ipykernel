@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 from jupyter_client.asynchronous.client import AsyncKernelClient
-from traitlets.config import SingletonConfigurable
 
 from ipykernel.kernelapp import MainKernel
 
@@ -60,7 +59,8 @@ def anyio_backend():
 
 @pytest.fixture(scope="session")
 async def app(anyio_backend):
-    kernel = MainKernel.instance()
+    # Set a blank connection_file
+    kernel = MainKernel.instance(connection_file="")
     async with kernel.start_in_context():
         yield kernel
 
