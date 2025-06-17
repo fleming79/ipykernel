@@ -4,6 +4,7 @@
 # Distributed under the terms of the Modified BSD License.
 from __future__ import annotations
 
+import atexit
 import enum
 import errno
 import sys
@@ -23,7 +24,7 @@ from anyio.abc import TaskGroup
 from anyio.from_thread import BlockingPortal
 from jupyter_client.connect import ConnectionFileMixin
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import Bool, Container, Dict, DottedObjectName, Instance, Set, Type, Unicode
+from traitlets import Bool, Container, Dict, DottedObjectName, Instance, Set, Unicode
 from traitlets.config import SingletonConfigurable
 from traitlets.utils.importstring import import_item
 
@@ -234,6 +235,17 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
             buffers=buffers,
         )
 
+    def start_soon(self, func, *args, name: str | None = None):
+        "Run a coroutine in the main thread taskgroup."
+        try:
+            if self._portal._event_loop_thread_id == threading.get_ident():
+                self._tg_main.start_soon(func, *args, name=name)
+            else:
+                self._portal.start_task_soon(func, *args, name=name)
+        except Exception:
+            self.log.exception("portal call failed")
+            raise
+
     async def init_pdb(self):
         """Replace pdb with IPython's version that is interruptible.
 
@@ -281,53 +293,28 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
                     self.init_pubio(iopub_socket)
                     await run_in_thread(self._heartbeat, self._stop_event, tg, name="Heartbeat")
                     await run_in_thread(self._run_control_loop, self._stop_event, tg, name="Control")
-                    # Ensure sockets are created
-                    if missing_sockets := set(SocketID).difference(self.sockets):
-                        msg = f"Failed to create sockets: {missing_sockets}"
-                        raise RuntimeError(msg)
-
-                    # writing/displaying connection info must be *after* init_sockets/heartbeat
                     if not self.connection_file:
                         self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{self.ident}.json"))
                     self.write_connection_file()
+                    atexit.register(self.cleanup_connection_file)
                     # Log connection info after writing connection file, so that the connection
                     # file is definitely available at the time someone reads the log.
                     self.log.info(
                         'To connect another client to this kernel, use:\n      --existing "%s"', {self.connection_file}
                     )
-
                     tg.start_soon(self._receive_msg_loop, self._process_shell, shell_socket)
                     tg.start_soon(self._shell_execute_request_loop)
                     tg.start_soon(self.init_pdb)
-
-                    # flush stdout/stderr, so that anything written to these streams during
-                    # initialization do not get associated with the first execution request
-                    sys.stdout.flush()
-                    sys.stderr.flush()
                     self.comm_manager.kernel = self
                     yield
                 finally:
                     # enable a message to be sent incase anyone is waiting
-                    self._stopped.set()
-                    await anyio.sleep(0)
+                    self.stop()
                     self.comm_manager.kernel = None
                     tg.cancel_scope.cancel()
-
         finally:
             self.zmq_context.destroy(linger=0)
             self.reset_io()
-            self.cleanup_connection_file()
-
-    def start_soon(self, func, *args, name: str | None = None):
-        "Run a coroutine in the main thread taskgroup."
-        try:
-            if self._portal._event_loop_thread_id == threading.get_ident():
-                self._tg_main.start_soon(func, *args, name=name)
-            else:
-                self._portal.start_task_soon(func, *args, name=name)
-        except Exception:
-            self.log.exception("portal call failed")
-            raise
 
     @classmethod
     def start(cls, connection_file="", async_mode=AsyncMode.asyncio) -> int:

@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import builtins
 import getpass
-import inspect
 import logging
 import os
 import sys
@@ -683,9 +682,7 @@ class Kernel(LoggingConfigurable):
         """Handle a debug request."""
 
         content = parent["content"]
-        reply_content = self.do_debug_request(content)
-        if inspect.isawaitable(reply_content):
-            reply_content = await reply_content
+        reply_content = await  self.do_debug_request(content)
         reply_msg = self.session.send(
             stream=socket,
             msg_or_type="debug_reply",
@@ -697,10 +694,10 @@ class Kernel(LoggingConfigurable):
 
     async def do_debug_request(self, msg):
         """Handle a debug request."""
-        from ipykernel.debugger import _is_debugpy_available
+        # from ipykernel.debugger import _is_debugpy_available
 
-        if _is_debugpy_available:
-            return await self.debugger.process_request(msg)
+        # if _is_debugpy_available:
+        #     return await self.debugger.process_request(msg)
         return {}
 
     # ---------------------------------------------------------------------------
