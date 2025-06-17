@@ -58,9 +58,11 @@ def anyio_backend():
 
 
 @pytest.fixture(scope="session")
-async def app(anyio_backend):
+async def app(anyio_backend, tmp_path_factory):
     # Set a blank connection_file
-    kernel = MainKernel.instance(connection_file="")
+    connection_file = tmp_path_factory.mktemp("ipykernel") / "temp_connection.json"
+    kernel = MainKernel()
+    kernel.connection_file = connection_file.as_posix()
     async with kernel.start_in_context():
         yield kernel
 
@@ -79,7 +81,6 @@ async def client(app: MainKernel):
     try:
         yield client
     finally:
-        app.stop()
         client.stop_channels()
 
 @pytest.fixture
