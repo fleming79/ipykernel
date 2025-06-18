@@ -115,6 +115,7 @@ class Kernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
     displayhook_class = DottedObjectName(
         "ipykernel.displayhook.ZMQDisplayHook", help="The importstring for the DisplayHook factory"
     ).tag(config=True)
+
     def __new__(cls, **kwargs) -> Self:  # noqa: ARG003
         #  There is only one instance.
         if not cls._instance:

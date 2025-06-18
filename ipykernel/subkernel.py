@@ -25,7 +25,7 @@ from IPython.core.completer import rectify_completions as _rectify_completions
 from IPython.core.error import StdinNotImplementedError
 from IPython.utils.tokenutil import token_at_cursor
 from jupyter_client.session import Session
-from traitlets import Any, Bool, Dict, Float, Instance, Type, Unicode, default, observe
+from traitlets import Any, Dict, Instance, Type, Unicode, default, observe
 from traitlets.config.configurable import LoggingConfigurable
 
 from ipykernel._version import kernel_protocol_version
@@ -50,10 +50,6 @@ class Subkernel(LoggingConfigurable):
     session: Instance[Session] = Instance(Session)
     profile_dir = Instance("IPython.core.profiledir.ProfileDir", allow_none=True)
 
-    implementation: str
-    implementation_version: str
-
-    execution_count = 0
     main_kernel: Instance[Kernel] = Instance("ipykernel.kernel.Kernel", ())
     asyncio_event_loop = Instance(asyncio.AbstractEventLoop, allow_none=True, read_only=True)  # type:ignore[call-overload]
     _portal = Instance(BlockingPortal)
@@ -72,37 +68,9 @@ class Subkernel(LoggingConfigurable):
         "file_extension": ".py",
     }
 
-    # track associations with current request
-    _allow_stdin = Bool(False)
-
-    # Frequency of the kernel's event loop.
-    # Units are in seconds, kernel subclasses for GUI toolkits may need to
-    # adapt to milliseconds.
-    _poll_interval = Float(0.01).tag(config=True)
     # Kernel info fields
     implementation = "asynckernel"
     implementation_version = " 0.1"
-
-    # A reference to the Python builtin 'raw_input' function.
-    # (i.e., __builtin__.raw_input for Python 2.7, builtins.input for Python 3)
-    _sys_raw_input = Any()
-    _sys_eval_input = Any()
-
-    stop_on_error_timeout = Float(
-        0.0,
-        config=True,
-        help="""time (in seconds) to wait for messages to arrive
-        when aborting queued requests after an error.
-
-        Requests that arrive within this window after an error
-        will be cancelled.
-
-        Increase in the event of unusually slow network
-        causing significant delays,
-        which can manifest as e.g. "Run all" in a notebook
-        aborting some, but not all, messages after an error.
-        """,
-    )
 
     shell = Instance(ZMQInteractiveShell)
     shell_class = Type(ZMQInteractiveShell)
@@ -235,7 +203,7 @@ class Subkernel(LoggingConfigurable):
         msg_or_type = msg["header"]["msg_type"].replace("request", "reply")
         content = {
             "status": "error",
-            "execution_count": self.execution_count,
+            "execution_count": self.shell.execution_count,
             "ename": ename,
             "evalue": evalue,
             "traceback": traceback or [],
@@ -289,10 +257,9 @@ class Subkernel(LoggingConfigurable):
             # start computing output
             if not silent:
                 self._set_parent_ident(parent, ident)
-                self.execution_count += 1
                 self.main_kernel.pubio_send(
                     msg_or_type="execute_input",
-                    content={"code": content["code"], "execution_count": self.execution_count},
+                    content={"code": content["code"], "execution_count": self.shell.execution_count},
                     parent=parent,
                     ident=self._topic("execute_input"),
                 )
