@@ -16,8 +16,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 
-STARTUP_TIMEOUT = 60 if "debugpy" not in sys.modules else 1e6
-TIMEOUT = 10 if "debugpy" not in sys.modules else 1e6
+TIMEOUT = 5 if "debugpy" not in sys.modules else 1e6
 
 
 class ExecuteContentType(TypedDict):
