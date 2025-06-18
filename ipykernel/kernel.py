@@ -104,7 +104,17 @@ class Kernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
     sockets: Dict[SocketID, zmq_anyio.Socket] = Dict()
     zmq_context = Instance(zmq.Context)
     shell_interrupt: Container[set[threading.Event]] = Set()
-
+    quiet = Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
+    outstream_class = DottedObjectName(
+        "ipykernel.iostream.OutStream",
+        help="The importstring for the OutStream factory",
+        allow_none=True,
+    ).tag(
+        config=True,
+    )
+    displayhook_class = DottedObjectName(
+        "ipykernel.displayhook.ZMQDisplayHook", help="The importstring for the DisplayHook factory"
+    ).tag(config=True)
     def __new__(cls, **kwargs) -> Self:  # noqa: ARG003
         #  There is only one instance.
         if not cls._instance:
@@ -130,16 +140,6 @@ class Kernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
             "hb": self.hb_port,
             "control": self.control_port,
         }
-
-    quiet = Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
-    outstream_class = DottedObjectName(
-        "ipykernel.iostream.OutStream",
-        help="The importstring for the OutStream factory",
-        allow_none=True,
-    ).tag(config=True)
-    displayhook_class = DottedObjectName(
-        "ipykernel.displayhook.ZMQDisplayHook", help="The importstring for the DisplayHook factory"
-    ).tag(config=True)
 
     def init_crash_handler(self):
         """Initialize the crash handler."""
@@ -228,130 +228,6 @@ class Kernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
             buffers=buffers,
         )
 
-    def start_soon(self, func, *args, name: str | None = None):
-        "Run a coroutine in the main thread taskgroup."
-        try:
-            if threading.current_thread() is threading.main_thread():
-
-                async def _run_coro():
-                    try:
-                        await func(*args)
-                    except Exception:
-                        pass
-
-                self._tg_main.start_soon(_run_coro, name=name)
-            else:
-                self._portal.start_task_soon(func, *args, name=name)
-        except Exception:
-            self.log.exception("portal call failed")
-            raise
-
-    @asynccontextmanager
-    async def start_in_context(self):
-        """Start inside the current anyio event loop.
-
-        ``` python
-        kernel = Kernel.instance()
-        async kernel.start_in_context():
-            await anyio.sleep_forever()
-        ```
-        """
-        if self.sockets:  # TODO: Make change to cls._instance
-            msg = "Already started"
-            raise RuntimeError(msg)
-        if self.connection_file and Path(self.connection_file).exists():
-            self.load_connection_file()
-        self.zmq_context = zmq.Context()
-        try:
-            async with (
-                anyio.create_task_group() as tg,
-                BlockingPortal() as portal,
-                self.get_socket(SocketID.shell, zmq.SocketType.ROUTER, 1000) as shell_socket,
-                self.get_socket(SocketID.iopub, zmq.SocketType.PUB, 1000),
-                self.get_socket(SocketID.stdin, zmq.SocketType.ROUTER, 1000),
-            ):
-                self._portal = portal
-                tg.cancel_scope.shield = True
-                self._tg_main = tg
-                try:
-                    self.init_pubio()
-                    await run_in_thread(self._heartbeat, self._stop_event, tg, name="Heartbeat")
-                    await run_in_thread(self._run_control_loop, self._stop_event, tg, name="Control")
-                    if not self.connection_file:
-                        self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{self.ident}.json"))
-                    self.write_connection_file()
-                    atexit.register(self.cleanup_connection_file)
-                    # Log connection info after writing connection file, so that the connection
-                    # file is definitely available at the time someone reads the log.
-                    print(
-                        'To connect another client to this kernel, use:\n      --existing "%s"', {self.connection_file}
-                    )
-                    tg.start_soon(self._receive_msg_loop, self._process_shell, shell_socket)
-                    tg.start_soon(self._shell_execute_request_loop)
-                    self.comm_manager.kernel = self
-                    yield
-                finally:
-                    # enable a message to be sent incase anyone is waiting
-                    self.stop()
-                    self.comm_manager.kernel = None
-                    tg.cancel_scope.cancel()
-        finally:
-            self.zmq_context.destroy(linger=0)
-            self.reset_io()
-
-    @classmethod
-    def start(cls, connection_file="", async_mode=AsyncMode.asyncio) -> int:
-        """Start the application.
-
-        Other options:
-
-        Using stored config.
-
-        ``` python
-        Kernel.launch_instance()
-        ```
-
-        Or if there is already an anyio event loop running you can use
-
-        ``` python
-        async with Kernel.instance().start_in_context() as kernel:
-        ...
-
-        """
-        async_mode = AsyncMode(async_mode)
-
-        async def _start() -> None:
-            """ """
-            if async_mode is AsyncMode.asyncio_eager and sys.version_info >= (3, 11):
-                import asyncio
-
-                loop = asyncio.get_running_loop()
-                loop.set_task_factory(asyncio.eager_task_factory)
-
-            async with kernel.start_in_context():
-                await anyio.sleep_forever()
-
-        kernel = cls.instance()
-        kernel.connection_file = connection_file
-
-        if async_mode in [AsyncMode.asyncio, AsyncMode.asyncio_eager] and sys.platform == "win32":
-            import asyncio
-
-            policy = asyncio.get_event_loop_policy()
-            if policy.__class__.__name__ == "WindowsProactorEventLoopPolicy":
-                from anyio._core._asyncio_selector_thread import get_selector
-
-                selector = get_selector()
-                selector._thread.pydev_do_not_trace = True
-        try:
-            anyio.run(_start, backend="trio" if async_mode is AsyncMode.trio else "asyncio")
-        finally:
-            pass
-        return 0
-
-    def stop(self):
-        self._stop_event.set()
-
     def get_socket(
         self,
         socket_id: SocketID,
@@ -414,29 +290,19 @@ class Kernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
         msg = f"Failed to bind a {socket}:{port}"
         raise RuntimeError(msg)
 
-    async def _process_shell(self, socket, idents, msg):
-        msg_type = msg["header"]["msg_type"]
+    async def _heartbeat(self, task_status: TaskStatus):
+        """The heartbeat.
 
-        self.log.debug("\n*** MESSAGE TYPE:%s***", msg_type)
-        self.log.debug("   Content: %s\n   --->\n   ", msg["content"])
-
-        if msg_type == "execute_request":
-            await self.execute_request(socket, idents, msg)
-        else:
-            handler = self.shell_handlers.get(msg_type)
-            if handler is None:
-                self.log.error("Unknown message type: %r", msg_type)
-            else:
-                try:
-                    self._publish_status("busy", msg)
-                    await handler(socket, idents, msg)
-                except Exception as e:
-                    self.log.error("Exception in message handler:", exc_info=e)
-                except KeyboardInterrupt:
-                    # Ctrl-c shouldn't crash the kernel here.
-                    self.log.error("KeyboardInterrupt caught in kernel.")
-                finally:
-                    self._publish_status("idle", msg)
+        Reference: https://jupyter-client.readthedocs.io/en/stable/messaging.html#heartbeat-for-kernels
+        """
+        # Inside heartbeat thread
+        socket = self.get_socket(SocketID.heartbeat, zmq.SocketType.ROUTER, 1000)
+        await anyio.sleep(1)
+        async with socket:
+            task_status.started()
+            while True:
+                data = await socket.arecv_multipart(copy=False).wait()
+                socket.send_multipart(data)
 
     async def _receive_msg_loop(
         self,
@@ -458,6 +324,7 @@ class Kernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
             idents, msg_ = self.session.feed_identities(msg_, copy=copy)
             msg = self.session.deserialize(msg_, content=True, copy=copy)
             await process_message(socket, idents, msg)
+
 
     async def shutdown_request(self, socket, ident, parent):
         """Handle a shutdown request."""
@@ -506,16 +373,148 @@ class Kernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
             finally:
                 self._publish_status("idle", msg)
 
-    async def _heartbeat(self, task_status: TaskStatus):
-        """The heartbeat.
+    async def _process_shell(self, socket, idents, msg):
+        msg_type = msg["header"]["msg_type"]
 
-        Reference: https://jupyter-client.readthedocs.io/en/stable/messaging.html#heartbeat-for-kernels
+        self.log.debug("\n*** MESSAGE TYPE:%s***", msg_type)
+        self.log.debug("   Content: %s\n   --->\n   ", msg["content"])
+
+        if msg_type == "execute_request":
+            await self.execute_request(socket, idents, msg)
+        else:
+            handler = self.shell_handlers.get(msg_type)
+            if handler is None:
+                self.log.error("Unknown message type: %r", msg_type)
+            else:
+                try:
+                    self._publish_status("busy", msg)
+                    await handler(socket, idents, msg)
+                except Exception as e:
+                    self.log.error("Exception in message handler:", exc_info=e)
+                except KeyboardInterrupt:
+                    # Ctrl-c shouldn't crash the kernel here.
+                    self.log.error("KeyboardInterrupt caught in kernel.")
+                finally:
+                    self._publish_status("idle", msg)
+
+    @classmethod
+    def start(cls, connection_file="", async_mode=AsyncMode.asyncio) -> int:
+        """Start the application.
+
+        Other options:
+
+        Using stored config.
+
+        ``` python
+        Kernel.launch_instance()
+        ```
+
+        Or if there is already an anyio event loop running you can use
+
+        ``` python
+        async with Kernel.instance().start_in_context() as kernel:
+        ...
+
         """
-        # Inside heartbeat thread
-        socket = self.get_socket(SocketID.heartbeat, zmq.SocketType.ROUTER, 1000)
-        await anyio.sleep(1)
-        async with socket:
-            task_status.started()
-            while True:
-                data = await socket.arecv_multipart(copy=False).wait()
-                socket.send_multipart(data)
+        async_mode = AsyncMode(async_mode)
+
+        async def _start() -> None:
+            """ """
+            if async_mode is AsyncMode.asyncio_eager and sys.version_info >= (3, 12):
+                import asyncio
+
+                loop = asyncio.get_running_loop()
+                loop.set_task_factory(asyncio.eager_task_factory)
+
+            async with kernel.start_in_context():
+                await anyio.sleep_forever()
+
+        kernel = cls.instance()
+        kernel.connection_file = connection_file
+
+        if async_mode in [AsyncMode.asyncio, AsyncMode.asyncio_eager] and sys.platform == "win32":
+            import asyncio
+
+            policy = asyncio.get_event_loop_policy()
+            if policy.__class__.__name__ == "WindowsProactorEventLoopPolicy":
+                from anyio._core._asyncio_selector_thread import get_selector
+
+                selector = get_selector()
+                selector._thread.pydev_do_not_trace = True
+        try:
+            anyio.run(_start, backend="trio" if async_mode is AsyncMode.trio else "asyncio")
+        finally:
+            pass
+        return 0
+
+    @asynccontextmanager
+    async def start_in_context(self):
+        """Start the Kernel in a context with necessary resources.
+
+        This function initializes the kernel's sockets, sets up the ZMQ context,
+        creates task groups for asynchronous operations, and starts the main loops
+        for handling messages and execution requests. It also manages the
+        connection file and performs cleanup operations.
+        """
+        if self.sockets:
+            msg = "Already started"
+            raise RuntimeError(msg)
+        if self.connection_file and Path(self.connection_file).exists():
+            self.load_connection_file()
+        self.zmq_context = zmq.Context()
+        try:
+            async with (
+                anyio.create_task_group() as tg,
+                BlockingPortal() as portal,
+                self.get_socket(SocketID.shell, zmq.SocketType.ROUTER, 1000) as shell_socket,
+                self.get_socket(SocketID.iopub, zmq.SocketType.PUB, 1000),
+                self.get_socket(SocketID.stdin, zmq.SocketType.ROUTER, 1000),
+            ):
+                self._portal = portal
+                tg.cancel_scope.shield = True
+                self._tg_main = tg
+                try:
+                    self.init_pubio()
+                    await run_in_thread(self._heartbeat, self._stop_event, tg, name="Heartbeat")
+                    await run_in_thread(self._run_control_loop, self._stop_event, tg, name="Control")
+                    tg.start_soon(self._receive_msg_loop, self._process_shell, shell_socket)
+                    tg.start_soon(self._shell_execute_request_loop)
+
+                    if not self.connection_file:
+                        self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{self.ident}.json"))
+                    self.write_connection_file()
+                    self.log.info(
+                        'To connect another client to this kernel, use:\n      --existing "%s"', {self.connection_file}
+                    )
+                    atexit.register(self.cleanup_connection_file)
+                    self.comm_manager.kernel = self
+                    yield self
+                finally:
+                    # enable a message to be sent incase anyone is waiting
+                    self.stop()
+                    self.comm_manager.kernel = None
+                    tg.cancel_scope.cancel()
+        finally:
+            self.zmq_context.destroy(linger=0)
+            self.reset_io()
+
+    def stop(self):
+        self._stop_event.set()
+
+    def start_soon(self, func, *args, name: str | None = None):
+        "Run a coroutine in the main thread taskgroup."
+        try:
+            if threading.current_thread() is threading.main_thread():
+
+                async def _run_coro():
+                    try:
+                        await func(*args)
+                    except Exception:
+                        pass
+
+                self._tg_main.start_soon(_run_coro, name=name)
+            else:
+                self._portal.start_task_soon(func, *args, name=name)
+        except Exception:
+            self.log.exception("portal call failed")
+            raise

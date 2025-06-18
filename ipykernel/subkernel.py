@@ -62,14 +62,6 @@ class Subkernel(LoggingConfigurable):
     ident = Unicode()
     shell_handlers = Dict()
 
-    @default("log")
-    def _default_log(self):
-        return logging.LoggerAdapter(logging.getLogger(self.__class__.__name__))
-
-    @default("ident")
-    def _default_ident(self):
-        return str(uuid.uuid4())
-
     language_info = {
         "name": "python",
         "version": sys.version.split()[0],
@@ -87,6 +79,14 @@ class Subkernel(LoggingConfigurable):
     # Units are in seconds, kernel subclasses for GUI toolkits may need to
     # adapt to milliseconds.
     _poll_interval = Float(0.01).tag(config=True)
+    # Kernel info fields
+    implementation = "asynckernel"
+    implementation_version = " 0.1"
+
+    # A reference to the Python builtin 'raw_input' function.
+    # (i.e., __builtin__.raw_input for Python 2.7, builtins.input for Python 3)
+    _sys_raw_input = Any()
+    _sys_eval_input = Any()
 
     stop_on_error_timeout = Float(
         0.0,
@@ -108,38 +108,8 @@ class Subkernel(LoggingConfigurable):
     shell_class = Type(ZMQInteractiveShell)
 
     user_module = Any()
-
-    @observe("user_module")
-    def _user_module_changed(self, change):
-        if self.shell is not None:
-            self.shell.user_module = change["new"]
-
     user_ns = Dict()
-
-    @observe("user_ns")
-    def _user_ns_changed(self, change):
-        if self.trait_has_value("shell"):
-            self.shell.user_ns = change["new"]
-            self.shell.init_user_ns()
-            self.shell.set_completer_frame()
-
     comm_manager: Instance[CommManager] = Instance("ipykernel.comm.CommManager")
-
-    @default("comm_manager")
-    def _default_comm_manager(self):
-        import ipykernel.comm
-
-        ipykernel.comm.set_comm()
-        return ipykernel.comm.get_comm_manager()
-
-    # Kernel info fields
-    implementation = "asynckernel"
-    implementation_version = " 0.1"
-
-    # A reference to the Python builtin 'raw_input' function.
-    # (i.e., __builtin__.raw_input for Python 2.7, builtins.input for Python 3)
-    _sys_raw_input = Any()
-    _sys_eval_input = Any()
 
     def __init__(self, **kwargs):
         """Initialize the kernel."""
@@ -171,9 +141,63 @@ class Subkernel(LoggingConfigurable):
         if jupyter_session_name:
             self.shell.user_ns["__session__"] = jupyter_session_name
 
-    # ---------------------------------------------------------------------------
-    # Kernel request handlers
-    # ---------------------------------------------------------------------------
+    @property
+    def parent_msg(self):
+        """The message of the most recent execution request."""
+        try:
+            return self._parent_msg
+        except AttributeError:
+            return {}
+
+    @property
+    def parent_ident(self):
+        """The ident of the most recent execution request."""
+        try:
+            return self._parent_ident
+        except AttributeError:
+            return []
+
+    @property
+    def kernel_info(self):
+        supported_features: list[str] = []
+        if self._supports_kernel_subshells:
+            supported_features.append("kernel subshells")
+
+        return {
+            "protocol_version": kernel_protocol_version,
+            "implementation": self.implementation,
+            "implementation_version": self.implementation_version,
+            "language_info": self.language_info,
+            "banner": self.shell.banner,
+            "supported_features": supported_features,
+        }
+
+    @observe("user_module")
+    def _user_module_changed(self, change):
+        if self.shell is not None:
+            self.shell.user_module = change["new"]
+
+    @observe("user_ns")
+    def _user_ns_changed(self, change):
+        if self.trait_has_value("shell"):
+            self.shell.user_ns = change["new"]
+            self.shell.init_user_ns()
+            self.shell.set_completer_frame()
+
+    @default("log")
+    def _default_log(self):
+        return logging.LoggerAdapter(logging.getLogger(self.__class__.__name__))
+
+    @default("ident")
+    def _default_ident(self):
+        return str(uuid.uuid4())
+
+    @default("comm_manager")
+    def _default_comm_manager(self):
+        import ipykernel.comm
+
+        ipykernel.comm.set_comm()
+        return ipykernel.comm.get_comm_manager()
 
     def _publish_status(self, status: Literal["busy", "idle"], parent):
         """send status (busy/idle) on IOPub"""
@@ -197,27 +221,26 @@ class Subkernel(LoggingConfigurable):
         self._parent_ident = ident
         self.shell.set_parent(parent)
 
-    @property
-    def parent_msg(self):
-        """The message of the most recent execution request.
-
-        .. versionadded:: 7
-        """
-        try:
-            return self._parent_msg
-        except AttributeError:
-            return {}
-
-    @property
-    def parent_ident(self):
-        """The ident of the most recent execution request.
-
-        .. versionadded:: 7
-        """
-        try:
-            return self._parent_ident
-        except AttributeError:
-            return []
+    def _send_error_reply(
+        self,
+        socket: zmq_anyio.Socket,
+        idents,
+        msg: dict,
+        *,
+        ename="RuntimeError",
+        evalue="",
+        traceback: list[str] | None = None,
+    ):
+        "Send a reply to the request"
+        msg_or_type = msg["header"]["msg_type"].replace("request", "reply")
+        content = {
+            "status": "error",
+            "execution_count": self.execution_count,
+            "ename": ename,
+            "evalue": evalue,
+            "traceback": traceback or [],
+        }
+        self.session.send(stream=socket, msg_or_type=msg_or_type, content=content, ident=idents, parent=msg)
 
     async def execute_request(self, socket, ident, parent):
         content = parent["content"]
@@ -352,27 +375,6 @@ class Subkernel(LoggingConfigurable):
             shell.user_expressions(user_expressions) if not err and user_expressions else {}
         )
         return reply_content
-
-    def _send_error_reply(
-        self,
-        socket: zmq_anyio.Socket,
-        idents,
-        msg: dict,
-        *,
-        ename="RuntimeError",
-        evalue="",
-        traceback: list[str] | None = None,
-    ):
-        "Send a reply to the request"
-        msg_or_type = msg["header"]["msg_type"].replace("request", "reply")
-        content = {
-            "status": "error",
-            "execution_count": self.execution_count,
-            "ename": ename,
-            "evalue": evalue,
-            "traceback": traceback or [],
-        }
-        self.session.send(stream=socket, msg_or_type=msg_or_type, content=content, ident=idents, parent=msg)
 
     async def interrupt_request(self, socket, ident, parent):
         """Handle an interrupt request."""
@@ -551,21 +553,6 @@ class Subkernel(LoggingConfigurable):
         return {
             "status": "ok",
             "history": list(hist),
-        }
-
-    @property
-    def kernel_info(self):
-        supported_features: list[str] = []
-        if self._supports_kernel_subshells:
-            supported_features.append("kernel subshells")
-
-        return {
-            "protocol_version": kernel_protocol_version,
-            "implementation": self.implementation,
-            "implementation_version": self.implementation_version,
-            "language_info": self.language_info,
-            "banner": self.shell.banner,
-            "supported_features": supported_features,
         }
 
     async def kernel_info_request(self, socket, ident, parent):
