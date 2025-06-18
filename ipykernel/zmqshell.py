@@ -1,21 +1,7 @@
-"""A ZMQ-based subclass of InteractiveShell.
-
-This code is meant to ease the refactoring of the base InteractiveShell into
-something with a cleaner architecture for 2-process use, without actually
-breaking InteractiveShell itself.  So we're doing something a bit ugly, where
-we subclass and override what we want to fix.  Once this is working well, we
-can go back to the base class and refactor the code for a cleaner inheritance
-implementation that doesn't rely on so much monkeypatching.
-
-But this lets us maintain a fully working IPython as we develop the new
-machinery.  This should thus be thought of as scaffolding.
-"""
-
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 from IPython.core.autocall import ZMQExitAutocall
@@ -24,16 +10,13 @@ from IPython.core.interactiveshell import InteractiveShell, InteractiveShellABC
 from IPython.core.usage import default_banner
 from jupyter_client.session import extract_header
 from traitlets import CBool, CBytes, Dict, Instance, Type, default, observe
+from typing_extensions import override
 
 from ipykernel.displayhook import ZMQShellDisplayHook
 
 if TYPE_CHECKING:
-    from ipykernel.kernel import Kernel, Subkernel
-
-
-# -----------------------------------------------------------------------------
-# Functions and classes
-# -----------------------------------------------------------------------------
+    from ipykernel.kernel import Kernel
+    from ipykernel.subkernel import Subkernel
 
 
 class ZMQDisplayPublisher(DisplayPublisher):
@@ -47,9 +30,8 @@ class ZMQDisplayPublisher(DisplayPublisher):
         """Set the parent for outbound messages."""
         self.parent_header = extract_header(parent)
 
-    # Feb: 2025 IPython has a deprecated, `source` parameter, marked for removal that
-    # triggers typing errors.
-    def publish(  # type: ignore [override]
+    @override
+    def publish(
         self,
         data,
         metadata=None,
@@ -82,6 +64,7 @@ class ZMQDisplayPublisher(DisplayPublisher):
             ident=self.topic,
         )
 
+    @override
     def clear_output(self, wait=False):
         """Clear output associated with the current execution (cell).
 
@@ -108,7 +91,6 @@ class ZMQInteractiveShell(InteractiveShell):
     display_pub_class = Type(ZMQDisplayPublisher)
     displayhook: Instance[ZMQShellDisplayHook]
     display_pub: Instance[ZMQDisplayPublisher]
-    # data_pub_class = Any()  # type:ignore[assignment]
     kernel: Instance[Subkernel] = Instance("ipykernel.kernel.Subkernel")
     parent_header = Dict()
 
@@ -142,29 +124,16 @@ class ZMQInteractiveShell(InteractiveShell):
 
     keepkernel_on_exit = None
 
-    def init_environment(self):
-        """Configure the user's environment."""
-        env = os.environ
-        # These two ensure 'ls' produces nice coloring on BSD-derived systems
-        env["TERM"] = "xterm-color"
-        env["CLICOLOR"] = "1"
-        # These two add terminal color in tools that support it.
-        env["FORCE_COLOR"] = "1"
-        env["CLICOLOR_FORCE"] = "1"
-        # Since normal pagers don't work at all (over pexpect we don't have
-        # single-key control of the subprocess), try to disable paging in
-        # subprocesses as much as possible.
-        env["PAGER"] = "cat"
-        env["GIT_PAGER"] = "cat"
-
     def ask_exit(self):
         self.exit_now = True
 
+    @override
     def run_cell(self, *args, **kwargs):
         """Run a cell."""
         self._last_traceback = None
         return super().run_cell(*args, **kwargs)
 
+    @override
     def _showtraceback(self, etype, evalue, stb):
         # For Keyboard interrupt, remove the kernel source code from the
         # traceback.
