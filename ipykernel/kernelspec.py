@@ -55,7 +55,7 @@ def write_kernel_spec(
     spec.display_name = f"Python ({kernel_name})"
     spec.language = "python"
     spec.interrupt_mode = "message"
-    spec.metadata = {"debugger": True}
+    spec.metadata = {}
 
     # write kernel.json
     with path.joinpath("kernel.json").open("w") as f:

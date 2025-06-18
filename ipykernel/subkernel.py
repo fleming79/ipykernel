@@ -29,7 +29,6 @@ from traitlets import Any, Bool, Dict, Float, Instance, Type, Unicode, default, 
 from traitlets.config.configurable import LoggingConfigurable
 
 from ipykernel._version import kernel_protocol_version
-from ipykernel.compiler import XCachingCompiler
 from ipykernel.iostream import SocketID
 from ipykernel.zmqshell import ZMQInteractiveShell
 
@@ -37,7 +36,6 @@ if t.TYPE_CHECKING:
     from IPython.core.interactiveshell import ExecutionResult
 
     from ipykernel.comm import CommManager
-    from ipykernel.debugger import Debugger
     from ipykernel.kernel import Kernel
 
 
@@ -82,15 +80,6 @@ class Subkernel(LoggingConfigurable):
         "file_extension": ".py",
     }
 
-    # Experimental option to break in non-user code.
-    # The ipykernel source is in the call stack, so the user
-    # has to manipulate the step-over and step-into in a wize way.
-    debug_just_my_code = Bool(
-        True,
-        help="""Set to False if you want to debug python standard and dependent libraries.
-        """,
-    ).tag(config=True)
-
     # track associations with current request
     _allow_stdin = Bool(False)
 
@@ -118,14 +107,6 @@ class Subkernel(LoggingConfigurable):
     shell = Instance(ZMQInteractiveShell)
     shell_class = Type(ZMQInteractiveShell)
 
-    # use fully-qualified name to ensure lazy import and prevent the issue from
-    # https://github.com/ipython/ipykernel/issues/1198
-    debugger_class: Type[type[Debugger], type[Debugger]] = Type("ipykernel.debugger.Debugger")
-
-    compiler_class = Type(XCachingCompiler)
-
-    debugpy_socket = Instance(zmq.Socket)
-
     user_module = Any()
 
     @observe("user_module")
@@ -147,6 +128,7 @@ class Subkernel(LoggingConfigurable):
     @default("comm_manager")
     def _default_comm_manager(self):
         import ipykernel.comm
+
         ipykernel.comm.set_comm()
         return ipykernel.comm.get_comm_manager()
 
@@ -184,7 +166,6 @@ class Subkernel(LoggingConfigurable):
             user_module=self.user_module,
             user_ns=self.user_ns,
             kernel=self,
-            compiler_class=self.compiler_class,
         )
         jupyter_session_name = os.environ.get("JPY_SESSION_NAME")
         if jupyter_session_name:
@@ -452,15 +433,13 @@ class Subkernel(LoggingConfigurable):
 
             comps = []
             for comp in completions:
-                comps.append(
-                    {
-                        "start": comp.start,
-                        "end": comp.end,
-                        "text": comp.text,
-                        "type": comp.type,
-                        "signature": comp.signature,
-                    }
-                )
+                comps.append({
+                    "start": comp.start,
+                    "end": comp.end,
+                    "text": comp.text,
+                    "type": comp.type,
+                    "signature": comp.signature,
+                })
 
         if completions:
             s = completions[0].start
@@ -576,13 +555,9 @@ class Subkernel(LoggingConfigurable):
 
     @property
     def kernel_info(self):
-        from ipykernel.debugger import _is_debugpy_available
-
         supported_features: list[str] = []
         if self._supports_kernel_subshells:
             supported_features.append("kernel subshells")
-        if _is_debugpy_available:
-            supported_features.append("debugger")
 
         return {
             "protocol_version": kernel_protocol_version,
@@ -643,28 +618,6 @@ class Subkernel(LoggingConfigurable):
         if self.shell:
             self.shell.reset(False)
         return {"status": "ok"}
-
-    async def debug_request(self, socket, ident, parent):
-        """Handle a debug request."""
-
-        content = parent["content"]
-        reply_content = await self.do_debug_request(content)
-        reply_msg = self.session.send(
-            stream=socket,
-            msg_or_type="debug_reply",
-            content=reply_content,
-            parent=parent,
-            ident=ident,
-        )
-        self.log.debug("%s", reply_msg)
-
-    async def do_debug_request(self, msg):
-        """Handle a debug request."""
-        # from ipykernel.debugger import _is_debugpy_available
-
-        # if _is_debugpy_available:
-        #     return await self.debugger.process_request(msg)
-        return {}
 
     # ---------------------------------------------------------------------------
     # Protected interface
@@ -776,43 +729,6 @@ class Subkernel(LoggingConfigurable):
     @property
     def _supports_kernel_subshells(self):
         return True
-
-    async def process_debugpy(self):
-        async with self.debug_shell_socket, self.debugpy_socket, create_task_group() as tg:
-            tg.start_soon(self.receive_debugpy_messages)
-            tg.start_soon(self.poll_stopped_queue)
-            self.debugpy_stop = threading.Event()
-            await to_thread.run_sync(self.debugpy_stop.wait)
-            tg.cancel_scope.cancel()
-
-    async def receive_debugpy_messages(self):
-        from ipykernel.debugger import _is_debugpy_available
-
-        if not _is_debugpy_available:
-            return
-
-        while True:
-            await self.receive_debugpy_message()
-
-    async def receive_debugpy_message(self, msg=None):
-        from ipykernel.debugger import _is_debugpy_available
-
-        if not _is_debugpy_available:
-            return
-
-        if msg is None:
-            assert self.debugpy_socket is not None
-            msg = await self.debugpy_socket.arecv_multipart().wait()
-        # The first frame is the socket id, we can drop it
-        if msg and isinstance(data := msg[1], bytes):
-            frame = data.decode("utf-8")
-            self.log.debug("Debugpy received: %s", frame)
-            self.debugger.tcp_client.receive_dap_frame(frame)
-
-    async def poll_stopped_queue(self):
-        """Poll the stopped queue."""
-        while True:
-            await self.debugger.handle_stopped_event()
 
     def _forward_input(self, allow_stdin=False):
         """Forward raw_input and getpass to the current frontend.

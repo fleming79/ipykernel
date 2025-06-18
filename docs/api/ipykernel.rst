@@ -13,12 +13,6 @@ Submodules
 ----------
 
 
-.. automodule:: ipykernel.compiler
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-
 .. automodule:: ipykernel.connect
    :members:
    :undoc-members:
@@ -31,22 +25,11 @@ Submodules
    :show-inheritance:
 
 
-.. automodule:: ipykernel.debugger
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-
 .. automodule:: ipykernel.displayhook
    :members:
    :undoc-members:
    :show-inheritance:
 
-
-.. automodule:: ipykernel.embed
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
 .. automodule:: ipykernel.heartbeat
    :members:
@@ -61,6 +44,12 @@ Submodules
 
 
 .. automodule:: ipykernel.kernel
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+
+.. automodule:: ipykernel.subkernel
    :members:
    :undoc-members:
    :show-inheritance:
@@ -82,23 +71,6 @@ Submodules
    :undoc-members:
    :show-inheritance:
 
-
-.. automodule:: ipykernel.subshell
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-
-.. automodule:: ipykernel.subshell_manager
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-
-.. automodule:: ipykernel.thread
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
 
 .. automodule:: ipykernel.zmqshell

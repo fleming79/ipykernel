@@ -19,7 +19,6 @@ classifiers = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "debugpy>=1.8.1",
     "ipython>=7.23.1",
     "comm>=0.1.1",
     "traitlets>=5.4.0",
@@ -85,7 +84,7 @@ path = "ipykernel/_version.py"
 features = ["docs"]
 [tool.hatch.envs.docs.scripts]
 build = "make -C docs html SPHINXOPTS='-W'"
-api = "sphinx-apidoc -o docs/api -f -E ipykernel tests ipykernel/datapub.py ipykernel/pickleutil.py ipykernel/serialize.py ipykernel/gui"
+api = "sphinx-apidoc -o docs/api -f"
 
 [tool.hatch.envs.test]
 features = ["test"]
@@ -181,14 +180,7 @@ exclude_lines = [
 [tool.coverage.run]
 relative_files = true
 source = ["ipykernel"]
-omit = [
-  "tests/*",
-  "ipykernel/datapub.py",
-  "ipykernel/debugger.py",
-  "ipykernel/log.py",
-  "ipykernel/pickleutil.py",
-  "ipykernel/serialize.py",
-]
+omit = ["tests/*"]
 
 [tool.ruff]
 line-length = 120

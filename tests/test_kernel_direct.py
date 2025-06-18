@@ -16,7 +16,7 @@ async def test_direct_kernel_info_request(client):
     reply = await utils.send_shell_message(client, "kernel_info_request")
     assert reply["header"]["msg_type"] == "kernel_info_reply"
     supported_features = reply["content"]["supported_features"]
-    assert supported_features == ["kernel subshells", "debugger"]
+    assert supported_features == ["kernel subshells"]
 
 
 async def test_direct_execute_request(client):

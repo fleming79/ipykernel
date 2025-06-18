@@ -105,7 +105,7 @@ class Kernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
     zmq_context = Instance(zmq.Context)
     shell_interrupt: Container[set[threading.Event]] = Set()
 
-    def __new__(cls, **kwargs) -> Self:
+    def __new__(cls, **kwargs) -> Self:  # noqa: ARG003
         #  There is only one instance.
         if not cls._instance:
             cls._instance = super().__new__(cls)
@@ -117,7 +117,6 @@ class Kernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
         super().__init__(**kwargs)
         self.control_handlers = {
             "shutdown_request": self.shutdown_request,
-            "debug_request": self.debug_request,
             "execute_request": self._execute_request,  # bypass
         }
         self.init_crash_handler()
@@ -247,22 +246,6 @@ class Kernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
             self.log.exception("portal call failed")
             raise
 
-    async def init_pdb(self):
-        """Replace pdb with IPython's version that is interruptible.
-
-        With the non-interruptible version, stopping pdb() locks up the kernel in a
-        non-recoverable state.
-        """
-        import pdb
-
-        from IPython.core import debugger
-
-        if hasattr(debugger, "InterruptiblePdb"):
-            # Only available in newer IPython releases:
-            debugger.Pdb = debugger.InterruptiblePdb  # type:ignore[misc]
-            pdb.Pdb = debugger.Pdb  # type:ignore[assignment,misc]
-            pdb.set_trace = debugger.set_trace
-
     @asynccontextmanager
     async def start_in_context(self):
         """Start inside the current anyio event loop.
@@ -305,7 +288,6 @@ class Kernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
                     )
                     tg.start_soon(self._receive_msg_loop, self._process_shell, shell_socket)
                     tg.start_soon(self._shell_execute_request_loop)
-                    tg.start_soon(self.init_pdb)
                     self.comm_manager.kernel = self
                     yield
                 finally:

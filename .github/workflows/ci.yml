@@ -117,7 +117,7 @@ jobs:
           echo "API docs done"
       - run: hatch run docs:build
 
-  test_without_debugpy:
+  test_without:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -131,10 +131,10 @@ jobs:
       - name: Base Setup
         uses: jupyterlab/maintainer-tools/.github/actions/base-setup@v1
 
-      - name: Install the Python dependencies without debugpy
+      - name: Install the Python dependencies
         run: |
           pip install .[test]
-          pip uninstall --yes debugpy
+          pip uninstall --yes
 
       - name: List installed packages
         run: |
