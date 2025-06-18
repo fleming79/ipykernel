@@ -20,7 +20,6 @@ async def test_simple_print(client):
     assert stderr == ""
 
 
-
 async def test_raw_input(client):
     """test input"""
 

@@ -83,6 +83,7 @@ async def client(app: Kernel):
     finally:
         client.stop_channels()
 
+
 @pytest.fixture
 def tracemalloc_resource_warning(recwarn, N=10):
     """fixture to enable tracemalloc for a single test, and report the

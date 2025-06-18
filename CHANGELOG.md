@@ -4,7 +4,7 @@
 
 ## 0.0.0a1
 
-([Full Changelog]())
+([Full Changelog](<>))
 
 Kernel - Derived from an discontinued version branching from Ipython version 6.29.4.
 
@@ -26,8 +26,8 @@ Kernel - Derived from an discontinued version branching from Ipython version 6.2
 
 ## 0.1.0a0
 
-([Full Changelog]())
+([Full Changelog](<>))
 
-See  Ipython [changelog](https://ipykernel.readthedocs.io/en/stable/changelog.html#id2) for all the hard work done to get here.
+See Ipython [changelog](https://ipykernel.readthedocs.io/en/stable/changelog.html#id2) for all the hard work done to get here.
 
 Forked from IPykernel commit [#8322a7684b004ee95f07b2f86f61e28146a5996d](https://github.com/ipython/ipykernel/commit/8322a7684b004ee95f07b2f86f61e28146a5996d)

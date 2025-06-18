@@ -199,7 +199,6 @@ async def test_kernel_info_request(client):
     assert "kernel subshells" in reply["content"]["supported_features"]
 
 
-
 async def test_subshell(client):
     pytest.skip("Not imlemented")
     msg = client.session.msg("create_subshell_request")

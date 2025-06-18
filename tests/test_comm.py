@@ -85,4 +85,3 @@ async def test_comm_manager(kernel) -> None:
     assert len(msgs) == 3
 
     assert comm._closed
-

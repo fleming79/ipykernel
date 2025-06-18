@@ -36,5 +36,3 @@ def test_io_api():
 def test_io_isatty():
     stream = OutStream("stdout", lambda _: None, isatty=True)
     assert stream.isatty()
-
-

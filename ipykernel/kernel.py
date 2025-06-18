@@ -43,7 +43,6 @@ from traitlets import (
     DottedObjectName,
     Float,
     Instance,
-    List,
     Set,
     Type,
     Unicode,
@@ -70,6 +69,7 @@ if TYPE_CHECKING:
     from ipykernel.comm import CommManager
     from ipykernel.debugger import Debugger
     from ipykernel.kernel import Kernel
+
 
 def run_in_thread(
     func: Callable[[TaskStatus], CoroutineType],
@@ -164,38 +164,6 @@ class Subkernel(LoggingConfigurable):
         "nbconvert_exporter": "python",
         "file_extension": ".py",
     }
-
-    # any links that should go in the help menu
-    help_links = List([
-        {
-            "text": "Python Reference",
-            "url": "https://docs.python.org/%i.%i" % sys.version_info[:2],
-        },
-        {
-            "text": "IPython Reference",
-            "url": "https://ipython.org/documentation.html",
-        },
-        {
-            "text": "NumPy Reference",
-            "url": "https://docs.scipy.org/doc/numpy/reference/",
-        },
-        {
-            "text": "SciPy Reference",
-            "url": "https://docs.scipy.org/doc/scipy/reference/",
-        },
-        {
-            "text": "Matplotlib Reference",
-            "url": "https://matplotlib.org/contents.html",
-        },
-        {
-            "text": "SymPy Reference",
-            "url": "http://docs.sympy.org/latest/index.html",
-        },
-        {
-            "text": "pandas Reference",
-            "url": "https://pandas.pydata.org/pandas-docs/stable/",
-        },
-    ]).tag(config=True)
 
     # Experimental option to break in non-user code.
     # The ipykernel source is in the call stack, so the user
@@ -568,13 +536,15 @@ class Subkernel(LoggingConfigurable):
 
             comps = []
             for comp in completions:
-                comps.append({
-                    "start": comp.start,
-                    "end": comp.end,
-                    "text": comp.text,
-                    "type": comp.type,
-                    "signature": comp.signature,
-                })
+                comps.append(
+                    {
+                        "start": comp.start,
+                        "end": comp.end,
+                        "text": comp.text,
+                        "type": comp.type,
+                        "signature": comp.signature,
+                    }
+                )
 
         if completions:
             s = completions[0].start
@@ -704,7 +674,6 @@ class Subkernel(LoggingConfigurable):
             "implementation_version": self.implementation_version,
             "language_info": self.language_info,
             "banner": self.shell.banner,
-            "help_links": self.help_links,
             "supported_features": supported_features,
         }
 
@@ -857,7 +826,6 @@ class Subkernel(LoggingConfigurable):
             ident=self.parent_ident,
         )
 
-
         # Await a response.
         while True:
             try:
@@ -966,7 +934,7 @@ class Kernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
     zmq_context = Instance(zmq.Context)
     shell_interrupt: Container[set[threading.Event]] = Set()
 
-    def __new__(cls, **kwargs) -> Self:  # noqa: ARG003
+    def __new__(cls, **kwargs) -> Self:
         #  There is only one instance.
         if not cls._instance:
             cls._instance = super().__new__(cls)
