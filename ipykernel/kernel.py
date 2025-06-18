@@ -325,7 +325,6 @@ class Kernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
             msg = self.session.deserialize(msg_, content=True, copy=copy)
             await process_message(socket, idents, msg)
 
-
     async def shutdown_request(self, socket, ident, parent):
         """Handle a shutdown request."""
         content = await self.do_shutdown(parent["content"]["restart"])
