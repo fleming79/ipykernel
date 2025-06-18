@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable
 from io import TextIOBase
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
-import zmq
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    import zmq
 
 
 class SocketID(enum.StrEnum):

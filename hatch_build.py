@@ -14,23 +14,19 @@ class CustomHook(BuildHookInterface):
         """Initialize the hook."""
         here = Path(__file__).parent.resolve()
         sys.path.insert(0, str(here))
-        from ipykernel.kernelspec import make_ipkernel_cmd, write_kernel_spec
+        from ipykernel.kernelspec import AsyncMode, write_kernel_spec
 
-        overrides = {}
-
-        # When building a standard wheel, the executable specified in the kernelspec is simply 'python'.
-        if version == "standard":
-            overrides["metadata"] = {"debugger": True}
-            argv = make_ipkernel_cmd(executable="python")
-
-        # When installing an editable wheel, the full `sys.executable` can be used.
-        else:
-            argv = make_ipkernel_cmd()
-
-        overrides["argv"] = argv
-
-        dest = Path(here) / "data_kernelspec"
-        if Path(dest).exists():
-            shutil.rmtree(dest)
-
-        write_kernel_spec(dest, overrides=overrides)
+        python_args = ("python", "-m", f"{self.metadata.name}.__main__:launch")
+        modes = [AsyncMode.asyncio, AsyncMode.trio]
+        if sys.version_info >= (3, 12):
+            modes.append(AsyncMode.asyncio_eager)
+        base = Path(here) / "data_kernelspec"
+        if base.exists():
+            shutil.rmtree(base)
+        for async_mode in modes:
+            if async_mode is AsyncMode.asyncio:
+                kernel_name = self.metadata.name
+            else:
+                kernel_name = f"{self.metadata.name}-{async_mode}"
+            dest = base / kernel_name
+            write_kernel_spec(dest, kernel_name=kernel_name, async_mode=async_mode, python_args=python_args)

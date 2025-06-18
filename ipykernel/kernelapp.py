@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import atexit
-import enum
 import errno
 import sys
 import threading
@@ -24,25 +23,19 @@ from anyio.abc import TaskGroup
 from anyio.from_thread import BlockingPortal
 from jupyter_client.connect import ConnectionFileMixin
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import Bool, Container, Dict, DottedObjectName, Instance, Set, Unicode
+from traitlets import Bool, Container, Dict, DottedObjectName, Instance, Set
 from traitlets.config import SingletonConfigurable
 from traitlets.utils.importstring import import_item
 
 from ipykernel.iostream import OutStream, SocketID
 from ipykernel.kernelbase import Kernel
-from ipykernel.kernelspec import KERNEL_NAME
+from ipykernel.kernelspec import AsyncMode
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import CoroutineType
 
     from anyio.abc import TaskStatus
-
-class AsyncMode(enum.StrEnum):
-    asyncio = "asyncio"
-    trio = "trio"
-    asyncio_eager = "asyncio_eager"
-
 
 def run_in_thread(
     func: Callable[[TaskStatus], CoroutineType],
@@ -100,7 +93,6 @@ def run_in_thread(
 class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
     """The IPYKernel application class."""
 
-    kernel_name = Unicode(KERNEL_NAME)
     _ports = Dict()
     sockets: Dict[SocketID, zmq_anyio.Socket] = Dict()
     _socket_threads: Dict[zmq_anyio.Socket, threading.Thread] = Dict()
@@ -160,27 +152,27 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
         # write uncaught traceback to 'real' stderr, not zmq-forwarder
         traceback.print_exception(etype, evalue, tb, file=sys.__stderr__)
 
-    def init_pubio(self, iopub_socket: zmq.Socket):
+    def init_pubio(self):
         """Redirect input streams."""
         if threading.current_thread() != threading.main_thread():
             msg = "pubio expects to be running in the main thread"
             raise RuntimeError(msg)
-
         self._save_io()
         if self.outstream_class:
             cls: type[OutStream] = import_item(self.outstream_class)
             for name in ["stdout", "stderr"]:
-                echo = None if self.quiet else getattr(sys, name)
-                if echo is not None:
-                    echo.flush()
+                echo = getattr(sys, name)
 
-                def flusher(string: str, name=name):
+                def flusher(string: str, name=name, echo=echo):
                     "Publish stdio or stderr when flush is called"
                     self.pubio_send(
                         msg_or_type="stream",
                         content={"name": name, "text": string},
                         ident=self._topic("status"),
                     )
+                    if not self.quiet and echo:
+                        echo.write(string)
+                        echo.flush()
 
                 wrapper = cls(name=name, flusher=flusher)  # type: ignore[call-arg]
                 setattr(sys, name, wrapper)
@@ -293,14 +285,14 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
                 anyio.create_task_group() as tg,
                 BlockingPortal() as portal,
                 self.get_socket(SocketID.shell, zmq.SocketType.ROUTER, 1000) as shell_socket,
-                self.get_socket(SocketID.iopub, zmq.SocketType.PUB, 1000) as iopub_socket,
+                self.get_socket(SocketID.iopub, zmq.SocketType.PUB, 1000),
                 self.get_socket(SocketID.stdin, zmq.SocketType.ROUTER, 1000),
             ):
                 self._portal = portal
                 tg.cancel_scope.shield = True
                 self._tg_main = tg
                 try:
-                    self.init_pubio(iopub_socket)
+                    self.init_pubio()
                     await run_in_thread(self._heartbeat, self._stop_event, tg, name="Heartbeat")
                     await run_in_thread(self._run_control_loop, self._stop_event, tg, name="Control")
                     if not self.connection_file:
@@ -309,7 +301,7 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
                     atexit.register(self.cleanup_connection_file)
                     # Log connection info after writing connection file, so that the connection
                     # file is definitely available at the time someone reads the log.
-                    self.log.info(
+                    print(
                         'To connect another client to this kernel, use:\n      --existing "%s"', {self.connection_file}
                     )
                     tg.start_soon(self._receive_msg_loop, self._process_shell, shell_socket)

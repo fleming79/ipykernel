@@ -62,7 +62,7 @@ async def app(anyio_backend, tmp_path_factory):
     # Set a blank connection_file
     connection_file = tmp_path_factory.mktemp("ipykernel") / "temp_connection.json"
     kernel = MainKernel()
-    kernel.connection_file = connection_file.as_posix()
+    kernel.connection_file = str(connection_file.resolve())
     async with kernel.start_in_context():
         yield kernel
 

@@ -30,7 +30,8 @@ dependencies = [
     "packaging>=22",
     "anyio>=4.8.0,<5.0.0",
     "zmq-anyio >=0.3.6",
-    "typing_extensions"
+    "typing_extensions",
+    "trio",
 ]
 
 [project.urls]
@@ -38,6 +39,9 @@ Homepage = "https://ipython.org"
 Documentation = "https://ipykernel.readthedocs.io"
 Source = "https://github.com/ipython/ipykernel"
 Tracker = "https://github.com/ipython/ipykernel/issues"
+
+[project.scripts]
+ipykernel = "ipykernel.__main__:launch"
 
 [project.optional-dependencies]
 docs = [
@@ -74,10 +78,8 @@ path = "ipykernel/_version.py"
 [tool.hatch.build.hooks.custom]
 
 [tool.hatch.build.targets.wheel.shared-data]
-"data_kernelspec" = "share/jupyter/kernels/python3"
+"data_kernelspec" = "share/jupyter/kernels"
 
-[tool.hatch.build.force-include]
-"./ipykernel_launcher.py" = "ipykernel_launcher.py"
 
 [tool.hatch.envs.docs]
 features = ["docs"]
