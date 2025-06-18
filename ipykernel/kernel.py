@@ -69,7 +69,7 @@ if TYPE_CHECKING:
 
     from ipykernel.comm import CommManager
     from ipykernel.debugger import Debugger
-    from ipykernel.kernelapp import Kernel
+    from ipykernel.kernel import Kernel
 
 def run_in_thread(
     func: Callable[[TaskStatus], CoroutineType],
@@ -139,7 +139,7 @@ class Subkernel(LoggingConfigurable):
     implementation_version: str
 
     execution_count = 0
-    main_kernel: Instance[Kernel] = Instance("ipykernel.kernelapp.Kernel", ())
+    main_kernel: Instance[Kernel] = Instance("ipykernel.kernel.Kernel", ())
     asyncio_event_loop = Instance(asyncio.AbstractEventLoop, allow_none=True, read_only=True)  # type:ignore[call-overload]
     _portal = Instance(BlockingPortal)
 

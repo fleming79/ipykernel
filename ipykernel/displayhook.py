@@ -11,7 +11,7 @@ from jupyter_client.session import extract_header
 from traitlets import Dict, Instance
 
 if t.TYPE_CHECKING:
-    from ipykernel.kernelapp import Kernel
+    from ipykernel.kernel import Kernel
 
 
 class ZMQShellDisplayHook(DisplayHook):
@@ -19,7 +19,7 @@ class ZMQShellDisplayHook(DisplayHook):
     to work with an InteractiveShell instance. It sends a dict of different
     representations of the object."""
 
-    main_kernel: Instance[Kernel] = Instance("ipykernel.kernelapp.Kernel", ())
+    main_kernel: Instance[Kernel] = Instance("ipykernel.kernel.Kernel", ())
     parent_header = Dict()
     msg: dict[str, t.Any] | None = None
 

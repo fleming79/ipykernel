@@ -10,7 +10,7 @@ from tests.utils import TIMEOUT, execute, get_reply
 if TYPE_CHECKING:
     from jupyter_client.asynchronous.client import AsyncKernelClient
 
-    from ipykernel.kernelapp import Kernel
+    from ipykernel.kernel import Kernel
 
 
 # Tests support debugpy not being installed, in which case the tests don't do anything useful

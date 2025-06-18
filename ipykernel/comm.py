@@ -11,7 +11,7 @@ import comm
 import traitlets
 from typing_extensions import override
 
-from ipykernel.kernelapp import Kernel
+from ipykernel.kernel import Kernel
 
 __all__ = ["Comm"]
 

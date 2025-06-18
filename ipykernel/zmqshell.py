@@ -28,7 +28,7 @@ from traitlets import CBool, CBytes, Dict, Instance, Type, default, observe
 from ipykernel.displayhook import ZMQShellDisplayHook
 
 if TYPE_CHECKING:
-    from ipykernel.kernelapp import Kernel, Subkernel
+    from ipykernel.kernel import Kernel, Subkernel
 
 
 # -----------------------------------------------------------------------------
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 class ZMQDisplayPublisher(DisplayPublisher):
     """A display publisher that publishes data using a ZeroMQ PUB socket."""
 
-    main_kernel: Instance[Kernel] = Instance("ipykernel.kernelapp.Kernel", ())
+    main_kernel: Instance[Kernel] = Instance("ipykernel.kernel.Kernel", ())
     parent_header = Dict({})
     topic = CBytes(b"display_data")
 
@@ -109,7 +109,7 @@ class ZMQInteractiveShell(InteractiveShell):
     displayhook: Instance[ZMQShellDisplayHook]
     display_pub: Instance[ZMQDisplayPublisher]
     # data_pub_class = Any()  # type:ignore[assignment]
-    kernel: Instance[Subkernel] = Instance("ipykernel.kernelapp.Subkernel")
+    kernel: Instance[Subkernel] = Instance("ipykernel.kernel.Subkernel")
     parent_header = Dict()
 
     @default("banner1")

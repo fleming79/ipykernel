@@ -8,7 +8,7 @@ def launch():
     import pathlib
     import sys
 
-    from ipykernel.kernelapp import Kernel
+    from ipykernel.kernel import Kernel
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-f", "--file", dest="connection_file", default="")

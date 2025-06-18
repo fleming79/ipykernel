@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 from jupyter_client.asynchronous.client import AsyncKernelClient
 
-from ipykernel.kernelapp import Kernel
+from ipykernel.kernel import Kernel
 
 if TYPE_CHECKING:
     pytest_plugins = ["anyio.pytest_plugin"]
