@@ -10,7 +10,7 @@ from tests.utils import TIMEOUT, execute, get_reply
 if TYPE_CHECKING:
     from jupyter_client.asynchronous.client import AsyncKernelClient
 
-    from ipykernel.kernelapp import MainKernel
+    from ipykernel.kernelapp import Kernel
 
 
 # Tests support debugpy not being installed, in which case the tests don't do anything useful
@@ -27,7 +27,7 @@ if True:
 
 
 async def wait_for_debug_request(
-    kernel: MainKernel, client: AsyncKernelClient, command, arguments: dict | None = None, full_reply=False
+    kernel: Kernel, client: AsyncKernelClient, command, arguments: dict | None = None, full_reply=False
 ):
     """Carry out a debug request and return the reply content.
 

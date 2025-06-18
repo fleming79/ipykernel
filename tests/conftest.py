@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 from jupyter_client.asynchronous.client import AsyncKernelClient
 
-from ipykernel.kernelapp import MainKernel
+from ipykernel.kernelapp import Kernel
 
 if TYPE_CHECKING:
     pytest_plugins = ["anyio.pytest_plugin"]
@@ -61,20 +61,20 @@ def anyio_backend():
 async def app(anyio_backend, tmp_path_factory):
     # Set a blank connection_file
     connection_file = tmp_path_factory.mktemp("ipykernel") / "temp_connection.json"
-    kernel = MainKernel()
+    kernel = Kernel()
     kernel.connection_file = str(connection_file.resolve())
     async with kernel.start_in_context():
         yield kernel
 
 
 @pytest.fixture(scope="session")
-async def kernel(app: MainKernel, client: AsyncKernelClient):
+async def kernel(app: Kernel, client: AsyncKernelClient):
     # We require client for it to send shutdown
     return app
 
 
 @pytest.fixture(scope="session")
-async def client(app: MainKernel):
+async def client(app: Kernel):
     client: AsyncKernelClient = AsyncKernelClient()
     client.load_connection_info(app.get_connection_info())
     client.start_channels()

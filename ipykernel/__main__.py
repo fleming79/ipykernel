@@ -8,7 +8,7 @@ def launch():
     import pathlib
     import sys
 
-    from ipykernel.kernelapp import MainKernel
+    from ipykernel.kernelapp import Kernel
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-f", "--file", dest="connection_file", default="")
@@ -24,7 +24,7 @@ def launch():
         return
     print("starting kernel")
     try:
-        MainKernel.start(
+        Kernel.start(
             connection_file=str(pathlib.Path(args.connection_file).resolve()),
             async_mode=AsyncMode(args.async_mode),
         )

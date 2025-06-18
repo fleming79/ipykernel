@@ -11,7 +11,7 @@ import comm
 import traitlets
 from typing_extensions import override
 
-from ipykernel.kernelapp import MainKernel
+from ipykernel.kernelapp import Kernel
 
 __all__ = ["Comm"]
 
@@ -36,7 +36,7 @@ class Comm(comm.base_comm.BaseComm):
         "target_name",
         "topic",
     ]
-    kernel: MainKernel | None = None
+    kernel: Kernel | None = None
 
     def publish_msg(
         self,
@@ -83,13 +83,13 @@ class CommManager(comm.base_comm.CommManager, traitlets.HasTraits):
     - Kernel, sets the kerenel this once it has been started.
     """
 
-    kernel: traitlets.Instance[MainKernel | None] = traitlets.Instance(MainKernel, allow_none=True)  # type: ignore[assignment]
+    kernel: traitlets.Instance[Kernel | None] = traitlets.Instance(Kernel, allow_none=True)  # type: ignore[assignment]
     comms: traitlets.Dict[str, comm.base_comm.BaseComm] = traitlets.Dict()
     targets: traitlets.Dict[str, comm.base_comm.CommTargetCallback] = traitlets.Dict()
 
     @traitlets.observe("kernel")
     def _observe_kernel(self, change: dict):
-        kernel: MainKernel = change["new"]
+        kernel: Kernel = change["new"]
         for c in self.comms.values():
             if isinstance(c, Comm):
                 c.kernel = kernel

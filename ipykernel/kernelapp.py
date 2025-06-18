@@ -69,7 +69,7 @@ if TYPE_CHECKING:
 
     from ipykernel.comm import CommManager
     from ipykernel.debugger import Debugger
-    from ipykernel.kernelapp import MainKernel
+    from ipykernel.kernelapp import Kernel
 
 def run_in_thread(
     func: Callable[[TaskStatus], CoroutineType],
@@ -139,7 +139,7 @@ class Subkernel(LoggingConfigurable):
     implementation_version: str
 
     execution_count = 0
-    main_kernel: Instance[MainKernel] = Instance("ipykernel.kernelapp.MainKernel", ())
+    main_kernel: Instance[Kernel] = Instance("ipykernel.kernelapp.Kernel", ())
     asyncio_event_loop = Instance(asyncio.AbstractEventLoop, allow_none=True, read_only=True)  # type:ignore[call-overload]
     _portal = Instance(BlockingPortal)
 
@@ -949,7 +949,7 @@ class Subkernel(LoggingConfigurable):
         getpass.getpass = self._save_getpass
 
 
-class MainKernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
+class Kernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
     """The IPYKernel application class."""
 
     _io_modified = Bool(False)
@@ -1128,7 +1128,7 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
         """Start inside the current anyio event loop.
 
         ``` python
-        kernel = MainKernel.instance()
+        kernel = Kernel.instance()
         async kernel.start_in_context():
             await anyio.sleep_forever()
         ```
@@ -1186,13 +1186,13 @@ class MainKernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
         Using stored config.
 
         ``` python
-        MainKernel.launch_instance()
+        Kernel.launch_instance()
         ```
 
         Or if there is already an anyio event loop running you can use
 
         ``` python
-        async with MainKernel.instance().start_in_context() as kernel:
+        async with Kernel.instance().start_in_context() as kernel:
         ...
 
         """
