@@ -857,6 +857,7 @@ class Subkernel(LoggingConfigurable):
             ident=self.parent_ident,
         )
 
+
         # Await a response.
         while True:
             try:
@@ -868,7 +869,7 @@ class Subkernel(LoggingConfigurable):
                 # get noticed fairly quickly by human response time standards.
                 rlist, _, xlist = zmq.select([socket], [], [socket], 0.01)
                 if rlist or xlist:
-                    ident, reply = self.recv(socket)
+                    ident, reply = self.session.recv(socket)
                     if (ident, reply) != (None, None):
                         break
             except KeyboardInterrupt:
