@@ -28,7 +28,7 @@ from traitlets import CBool, CBytes, Dict, Instance, Type, default, observe
 from ipykernel.displayhook import ZMQShellDisplayHook
 
 if TYPE_CHECKING:
-    from ipykernel.kernelapp import Kernel, MainKernel
+    from ipykernel.kernelapp import MainKernel, Subkernel
 
 
 # -----------------------------------------------------------------------------
@@ -109,7 +109,7 @@ class ZMQInteractiveShell(InteractiveShell):
     displayhook: Instance[ZMQShellDisplayHook]
     display_pub: Instance[ZMQDisplayPublisher]
     # data_pub_class = Any()  # type:ignore[assignment]
-    kernel: Instance[Kernel] = Instance("ipykernel.kernelapp.Kernel")
+    kernel: Instance[Subkernel] = Instance("ipykernel.kernelapp.Subkernel")
     parent_header = Dict()
 
     @default("banner1")

@@ -124,7 +124,7 @@ def run_in_thread(
     return to_thread.run_sync(ready_event.wait)
 
 
-class Kernel(LoggingConfigurable):
+class Subkernel(LoggingConfigurable):
     """The base kernel class."""
 
     _stop_on_error_time: float = time.monotonic()
@@ -949,7 +949,7 @@ class Kernel(LoggingConfigurable):
         getpass.getpass = self._save_getpass
 
 
-class MainKernel(SingletonConfigurable, ConnectionFileMixin, Kernel):
+class MainKernel(SingletonConfigurable, ConnectionFileMixin, Subkernel):
     """The IPYKernel application class."""
 
     _io_modified = Bool(False)
