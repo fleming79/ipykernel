@@ -60,18 +60,7 @@ Submodules
    :show-inheritance:
 
 
-.. automodule:: ipykernel.kernelbase
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 .. automodule:: ipykernel.kernelapp
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-
-.. automodule:: ipykernel.kernelbase
    :members:
    :undoc-members:
    :show-inheritance:
