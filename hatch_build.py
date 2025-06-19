@@ -14,7 +14,7 @@ class CustomHook(BuildHookInterface):
         """Initialize the hook."""
         here = Path(__file__).parent.resolve()
         sys.path.insert(0, str(here))
-        from ipykernel.kernelspec import AsyncMode, write_kernel_spec
+        from ipykernel.kernelspec import AsyncMode, write_kernel_spec  # noqa: PLC0415
 
         python_args = ("python", "-m", f"{self.metadata.name}.__main__:launch")
         modes = [AsyncMode.asyncio, AsyncMode.trio]

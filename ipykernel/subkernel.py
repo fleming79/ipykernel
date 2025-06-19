@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import enum
 import getpass
 import logging
 import os
@@ -30,7 +31,6 @@ from jupyter_client.session import Session
 from traitlets import Any, Dict, HasTraits, Instance, Type, Unicode, default, observe
 
 from ipykernel._version import kernel_protocol_version
-from ipykernel.iostream import SocketID
 from ipykernel.zmqshell import ZMQInteractiveShell
 
 if t.TYPE_CHECKING:
@@ -41,6 +41,14 @@ if t.TYPE_CHECKING:
 
     from ipykernel.comm import CommManager
     from ipykernel.kernel import Kernel
+
+
+class SocketID(enum.StrEnum):
+    heartbeat = "hb"
+    shell = "shell"
+    iopub = "iopub"
+    stdin = "stdin"
+    control = "control"
 
 
 class Subkernel(HasTraits):

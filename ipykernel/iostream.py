@@ -15,13 +15,6 @@ if TYPE_CHECKING:
     import zmq
 
 
-class SocketID(enum.StrEnum):
-    heartbeat = "hb"
-    shell = "shell"
-    iopub = "iopub"
-    stdin = "stdin"
-    control = "control"
-
 
 class OutStream(TextIOBase):
     """A file like object that calls flusher with the string output when flush is called."""

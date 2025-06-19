@@ -9,12 +9,6 @@ import pytest
 
 from tests import utils
 
-# -----------------------------------------------------------------------------
-# Tests
-# -----------------------------------------------------------------------------
-
-# Shell channel
-
 
 async def test_execute(client, kernel):
     msg_id = client.execute(code="x=1")

@@ -26,15 +26,16 @@ from traitlets import Bool, Container, Dict, DottedObjectName, Instance, Set
 from traitlets.utils.importstring import import_item
 from typing_extensions import override
 
-from ipykernel.iostream import OutStream, SocketID
 from ipykernel.kernelspec import AsyncMode
-from ipykernel.subkernel import Subkernel
+from ipykernel.subkernel import SocketID, Subkernel
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import CoroutineType
 
     from anyio.abc import TaskGroup, TaskStatus
+
+    from ipykernel.iostream import OutStream
 
 
 def start_anyio_thread(

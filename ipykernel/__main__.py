@@ -1,14 +1,14 @@
 """The cli entry point for ipykernel."""
 
+import argparse
+import pathlib
+import sys
+
+from ipykernel.kernel import Kernel
 from ipykernel.kernelspec import AsyncMode
 
 
 def launch():
-    import argparse
-    import pathlib
-    import sys
-
-    from ipykernel.kernel import Kernel
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-f", "--file", dest="connection_file", default="")

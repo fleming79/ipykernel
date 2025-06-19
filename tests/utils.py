@@ -47,11 +47,6 @@ async def get_reply(
                 return reply
 
 
-# -----------------------------------------------------------------------------
-# Specifications of `content` part of the reply messages.
-# -----------------------------------------------------------------------------
-
-
 def validate_message(msg: Mapping[str, Any], msg_type=None, parent=None):
     """validate a message.
 
