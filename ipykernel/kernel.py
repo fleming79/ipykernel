@@ -35,7 +35,7 @@ from IPython.utils.tokenutil import token_at_cursor
 from jupyter_client.connect import ConnectionFileMixin
 from jupyter_client.session import Session
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import Dict, Instance, Unicode, default, observe
+from traitlets import Dict, Instance, default, observe
 from traitlets.utils.importstring import import_item
 
 from ipykernel import _version
@@ -80,7 +80,6 @@ def start_anyio_thread(
     """
 
     backend = backend or sniffio.current_async_library()  # type: ignore[no-any-return]
-
     ready_event = threading.Event()
 
     def run_func():
@@ -119,7 +118,24 @@ class SocketID(enum.StrEnum):
 
 
 class Kernel(ConnectionFileMixin):
-    """A kernel without sockets."""
+    """An async kernel with an anyio backend providing an IPython InteractiveShell with zmq.
+
+    To start the kernel
+
+    Direct
+
+    ``` python
+    Kernel.start()
+    ```
+
+    Inside an already running asycio context.
+
+    ``` python
+    async with Kernel().start_in_context() as kernel:
+        await anyio.sleep_forever()
+    ```
+
+    """
 
     _instance: Self | None = None
     _io_modified = traitlets.Bool(False)
@@ -129,6 +145,8 @@ class Kernel(ConnectionFileMixin):
     _interrupt_events: traitlets.Container[set[threading.Event]] = traitlets.Set()
     _zmq_context = Instance(zmq.Context, ())
     _sockets: Dict[SocketID, zmq_anyio.Socket] = Dict()
+    _shell_handlers = Dict()
+    _control_handlers = Dict()
 
     quiet = traitlets.Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
     outstream_class = traitlets.DottedObjectName(
@@ -151,7 +169,6 @@ class Kernel(ConnectionFileMixin):
     shell_class = traitlets.Type(ZMQInteractiveShell)
 
     user_module = traitlets.Any()
-    shell_handlers = Dict()
     user_ns = Dict()
     comm_manager: Instance[CommManager] = Instance("ipykernel.comm.CommManager")
 
@@ -163,11 +180,11 @@ class Kernel(ConnectionFileMixin):
 
     def __init__(self, **kwargs):
         """Initialize the kernel."""
-        if self.shell_handlers:
+        if self._shell_handlers:
             return  # Only initialize once
         super().__init__(**kwargs)
-        self.session = self._session_default()
-        self.shell_handlers = {
+        self.session = Session(parent=self)
+        self._shell_handlers = {
             "execute_request": self.execute_request,
             "complete_request": self.complete_request,
             "inspect_request": self.inspect_request,
@@ -193,7 +210,7 @@ class Kernel(ConnectionFileMixin):
         jupyter_session_name = os.environ.get("JPY_SESSION_NAME")
         if jupyter_session_name:
             self.shell.user_ns["__session__"] = jupyter_session_name
-        self.control_handlers = {
+        self._control_handlers = {
             "shutdown_request": self.shutdown_request,
             "execute_request": self._execute_request,  # no task queue
         }
@@ -203,13 +220,7 @@ class Kernel(ConnectionFileMixin):
     def start(cls, connection_file="", async_mode=AsyncMode.asyncio) -> int:
         """Start the kernel.
 
-        Or if there is already an anyio event loop running you can use
-
-        ``` python
-        async with Kernel().start_in_context() as kernel:
-           await anyio.sleep_forever()
-        ...
-
+        See also: `start_in_context`
         """
         async_mode = AsyncMode(async_mode)
 
@@ -243,12 +254,13 @@ class Kernel(ConnectionFileMixin):
 
     @asynccontextmanager
     async def start_in_context(self):
-        """Start the Kernel in a context with necessary resources.
+        """Start the Kernel in an already running  anyio event loop.
 
-        This function initializes the kernel's sockets, sets up the ZMQ context,
-        creates task groups for asynchronous operations, and starts the main loops
-        for handling messages and execution requests. It also manages the
-        connection file and performs cleanup operations.
+        ``` python
+        async with Kernel().start_in_context() as kernel:
+           await anyio.sleep_forever()
+        ...
+
         """
         if self._sockets:
             msg = "Already started"
@@ -392,7 +404,7 @@ class Kernel(ConnectionFileMixin):
         if msg_type == "execute_request":
             await self.execute_request(socket, idents, msg)
         else:
-            handler = self.shell_handlers.get(msg_type)
+            handler = self._shell_handlers.get(msg_type)
             if handler is None:
                 self.log.error("Unknown message type: %r", msg_type)
             else:
@@ -1095,7 +1107,7 @@ class Kernel(ConnectionFileMixin):
         # Inside control thread
 
         # Execute_requests
-        handler = self.control_handlers.get(msg_type) or self.shell_handlers.get(msg_type)
+        handler = self._control_handlers.get(msg_type) or self._shell_handlers.get(msg_type)
         if not handler:
             self.log.error("Unknown message type: %r", msg_type)
         else:
