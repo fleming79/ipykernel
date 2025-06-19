@@ -124,8 +124,7 @@ class Kernel(ConnectionFileMixin):
     _instance: Self | None = None
     _io_modified = traitlets.Bool(False)
     _stopped = Instance(anyio.Event, ())
-    _stop_thread_event = Instance(threading.Event, ())
-    _stop_event = Instance(anyio.Event, ())
+    _stop_event = Instance(threading.Event, ())
     _stop_on_error_time: float = 0
     _interrupt_events: traitlets.Container[set[threading.Event]] = traitlets.Set()
     _zmq_context = Instance(zmq.Context, ())
@@ -265,10 +264,11 @@ class Kernel(ConnectionFileMixin):
                 self.get_socket(SocketID.stdin, zmq.SocketType.ROUTER, 1000),
             ):
                 try:
-                    await start_anyio_thread(self._heartbeat, self._stop_thread_event, tg, name="Heartbeat")
-                    await start_anyio_thread(self._run_control_loop, self._stop_thread_event, tg, name="Control")
+                    await start_anyio_thread(self._heartbeat, self._stop_event, tg, name="Heartbeat")
+                    await start_anyio_thread(self._run_control_loop, self._stop_event, tg, name="Control")
                     tg.start_soon(self._receive_msg_loop, self._process_shell, shell_socket)
-                    tg.start_soon(self._start_async)
+                    await tg.start(self._shell_execute_request_loop)
+                    await tg.start(self._start_soon_scheduler, tg)
                     self.init_pubio()
                     if not self.connection_file:
                         self.connection_file = str(
@@ -769,20 +769,8 @@ class Kernel(ConnectionFileMixin):
         self.shell.reset(False)
         return {"status": "ok"}
 
-    async def _start_async(self):
-        async with anyio.create_task_group() as tg:
-            await tg.start(self._shell_execute_request_loop)
-            await tg.start(self._start_soon_scheduler, tg)
-            await self._stop_event.wait()
-            tg.cancel_scope.cancel()
-
     def stop(self):
-        self._stop_thread_event.set()
-        if not self._stop_event.is_set():
-            if threading.current_thread() is threading.main_thread():
-                self._stop_event.set()
-            else:
-                self.start_soon(self._stop_event.set)
+        self._stop_event.set()
 
     async def _start_soon_scheduler(self, tg: TaskGroup, *, task_status: TaskStatus):
         "Orderly schedule starting a coroutine"
