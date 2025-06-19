@@ -127,10 +127,10 @@ class Kernel(ConnectionFileMixin):
     _stop_thread_event = Instance(threading.Event, ())
     _stop_event = Instance(anyio.Event, ())
     _stop_on_error_time: float = 0
+    _interrupt_events: traitlets.Container[set[threading.Event]] = traitlets.Set()
+    _zmq_context = Instance(zmq.Context, ())
+    _sockets: Dict[SocketID, zmq_anyio.Socket] = Dict()
 
-    sockets: Dict[SocketID, zmq_anyio.Socket] = Dict()
-    zmq_context = Instance(zmq.Context, ())
-    shell_interrupt: traitlets.Container[set[threading.Event]] = traitlets.Set()
     quiet = traitlets.Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
     outstream_class = traitlets.DottedObjectName(
         "ipykernel.iostream.OutStream",
@@ -143,19 +143,16 @@ class Kernel(ConnectionFileMixin):
         "ipykernel.displayhook.ZMQDisplayHook", help="The importstring for the DisplayHook factory"
     ).tag(config=True)
 
-    session: Instance[Session] = Instance(Session)
+    session = Instance(Session)
     profile_dir = Instance("IPython.core.profiledir.ProfileDir", allow_none=True)
 
-    asyncio_event_loop = Instance(asyncio.AbstractEventLoop, allow_none=True, read_only=True)  # type:ignore[call-overload]
-
     log = Instance(logging.LoggerAdapter)
-    ident = Unicode()
-    shell_handlers = Dict()
 
     shell = Instance(ZMQInteractiveShell)
     shell_class = traitlets.Type(ZMQInteractiveShell)
 
     user_module = traitlets.Any()
+    shell_handlers = Dict()
     user_ns = Dict()
     comm_manager: Instance[CommManager] = Instance("ipykernel.comm.CommManager")
 
@@ -254,13 +251,13 @@ class Kernel(ConnectionFileMixin):
         for handling messages and execution requests. It also manages the
         connection file and performs cleanup operations.
         """
-        if self.sockets:
+        if self._sockets:
             msg = "Already started"
             raise RuntimeError(msg)
         if self.connection_file and Path(self.connection_file).exists():
             self.load_connection_file()
 
-        with self.zmq_context:
+        with self._zmq_context:
             async with (
                 anyio.create_task_group() as tg,
                 self.get_socket(SocketID.shell, zmq.SocketType.ROUTER, 1000) as shell_socket,
@@ -274,7 +271,9 @@ class Kernel(ConnectionFileMixin):
                     tg.start_soon(self._start_async)
                     self.init_pubio()
                     if not self.connection_file:
-                        self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{self.ident}.json"))
+                        self.connection_file = str(
+                            Path(jupyter_runtime_dir()).joinpath(f"kernel-{self.kernel_name}.json")
+                        )
                     self.write_connection_file()
                     self.log.info(
                         'To connect another client to this kernel, use:\n      --existing "%s"', {self.connection_file}
@@ -330,8 +329,8 @@ class Kernel(ConnectionFileMixin):
     def _default_log(self):
         return logging.LoggerAdapter(logging.getLogger(self.__class__.__name__))
 
-    @default("ident")
-    def _default_ident(self):
+    @default("kernel_name")
+    def _default_kernel_name(self):
         return str(uuid.uuid4())
 
     @default("comm_manager")
@@ -499,7 +498,7 @@ class Kernel(ConnectionFileMixin):
         result: list[ExecutionResult] = []
         interrupt = threading.Event()
         if not silent:
-            self.shell_interrupt.add(interrupt)
+            self._interrupt_events.add(interrupt)
         try:
 
             async def run() -> None:
@@ -518,7 +517,7 @@ class Kernel(ConnectionFileMixin):
                 if not result:
                     tg.cancel_scope.cancel()
         finally:
-            self.shell_interrupt.discard(interrupt)
+            self._interrupt_events.discard(interrupt)
             self._restore_input()
 
         reply_content = {}
@@ -546,7 +545,7 @@ class Kernel(ConnectionFileMixin):
         """Handle an interrupt request."""
 
         content: dict[str, Any] = {"status": "ok"}
-        for event in self.shell_interrupt:
+        for event in self._interrupt_events:
             event.set()
         self.session.send(
             stream=socket,
@@ -815,7 +814,7 @@ class Kernel(ConnectionFileMixin):
 
     def _topic(self, topic):
         """prefixed topic for IOPub messages"""
-        return (f"kernel.{self.ident}.{topic}").encode()
+        return (f"kernel.{self.kernel_name}.{topic}").encode()
 
     def _no_raw_input(self):
         """Raise StdinNotImplementedError if active frontend doesn't support
@@ -848,7 +847,7 @@ class Kernel(ConnectionFileMixin):
             msg = "Input request is only allowed from the main thread (eg: not from the control thread)."
             raise RuntimeError(msg)
         # flush the stdin socket, to purge stale replies
-        socket = self.sockets[SocketID.stdin]
+        socket = self._sockets[SocketID.stdin]
         while True:
             try:
                 socket.recv_multipart(zmq.NOBLOCK)
@@ -978,7 +977,7 @@ class Kernel(ConnectionFileMixin):
                 pass
             return
         self.session.send(
-            stream=self.sockets[SocketID.iopub],
+            stream=self._sockets[SocketID.iopub],
             msg_or_type=msg_or_type,
             content=content,
             metadata=metadata,
@@ -997,14 +996,14 @@ class Kernel(ConnectionFileMixin):
     ):
         "Open the socket for comms, it will be closed when the context is exited"
         # Create socket
-        assert socket_id not in self.sockets
-        socket = zmq_anyio.Socket(context or self.zmq_context, socket_type)
+        assert socket_id not in self._sockets
+        socket = zmq_anyio.Socket(context or self._zmq_context, socket_type)
         socket.linger = linger
         # Bind port
         port_name = f"{socket_id}_port"
         port = self._bind_socket(socket, getattr(self, port_name, 0), max_attempts)
         setattr(self, port_name, port)
-        self.sockets[socket_id] = socket
+        self._sockets[socket_id] = socket
         self.log.debug("{%} {%} Channel on port: %i", socket_id, socket_type.name, port)
         return socket
 
