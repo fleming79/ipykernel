@@ -227,21 +227,6 @@ class HistoryReply(Reply):
     history = List(List())
 
 
-# Subshell control messages
-
-
-class CreateSubshellReply(Reply):
-    subshell_id = Unicode()
-
-
-class DeleteSubshellReply(Reply):
-    pass
-
-
-class ListSubshellReply(Reply):
-    subshell_id = List(Unicode())
-
-
 references = {
     "execute_reply": ExecuteReply(),
     "inspect_reply": InspectReply(),
@@ -258,7 +243,4 @@ references = {
     "stream": Stream(),
     "display_data": DisplayData(),
     "header": RHeader(),
-    "create_subshell_reply": CreateSubshellReply(),
-    "delete_subshell_reply": DeleteSubshellReply(),
-    "list_subshell_reply": ListSubshellReply(),
 }

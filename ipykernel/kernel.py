@@ -9,7 +9,6 @@ import sys
 import threading
 import traceback
 import typing as t
-import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Self
@@ -27,7 +26,7 @@ from traitlets.utils.importstring import import_item
 from typing_extensions import override
 
 from ipykernel.kernelspec import AsyncMode
-from ipykernel.subkernel import SocketID, Subkernel
+from ipykernel.subkernel import Kernelbase, SocketID
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -96,7 +95,7 @@ def start_anyio_thread(
     return to_thread.run_sync(ready_event.wait)
 
 
-class Kernel(ConnectionFileMixin, Subkernel):
+class Kernel(ConnectionFileMixin, Kernelbase):
     """The IPYKernel application class."""
 
     _instance: Self | None = None
@@ -105,7 +104,7 @@ class Kernel(ConnectionFileMixin, Subkernel):
 
     _stopped = Instance(anyio.Event, ())
     _stop_thread_event = Instance(threading.Event, ())
-    _subkernels: Dict[str, Subkernel] = Dict()
+    _Kernelbases: Dict[str, Kernelbase] = Dict()
 
     sockets: Dict[SocketID, zmq_anyio.Socket] = Dict()
     zmq_context = Instance(zmq.Context)
@@ -132,13 +131,10 @@ class Kernel(ConnectionFileMixin, Subkernel):
         if self.shell_handlers:
             return  # Only initialize once
         super().__init__(**kwargs)
-        self._subkernels.pop(self.ident, None)
+        self._Kernelbases.pop(self.ident, None)
         self.control_handlers = {
             "shutdown_request": self.shutdown_request,
             "execute_request": self._execute_request,  # no task queue
-            "create_subshell_request": self.create_subshell_request,
-            "list_subshell_request": self.list_subshell_request,
-            "delete_subshell_request": self.delete_subshell_request,
         }
         self.init_crash_handler()
 
@@ -344,10 +340,6 @@ class Kernel(ConnectionFileMixin, Subkernel):
         await self._stopped.wait()
         return {"status": "ok", "restart": restart}
 
-    async def _process_shell(self, socket, idents, msg, msg_type):
-        kernel = self._subkernels.get(msg["header"].get("subshell_id"), self)
-        await kernel.process_shell(socket, idents, msg, msg_type)
-
     async def _run_control_loop(self, task_status: TaskStatus):
         # Inside control thread
         # This code runs in a different thread having its own event loop
@@ -373,39 +365,6 @@ class Kernel(ConnectionFileMixin, Subkernel):
                 self.log.error("KeyboardInterrupt caught in kernel.")
             finally:
                 self._publish_status("idle", msg)
-
-    async def create_subshell_request(self, socket, idents, msg):
-        # Control thread
-        subshell_id = str(uuid.uuid4())
-        subkernel = Subkernel(ident=subshell_id, session=self.session.clone())
-        self.start_soon(subkernel._start_async)
-        self.session.send(
-            stream=socket,
-            msg_or_type="create_subshell_reply",
-            content={"status": "ok", "subshell_id": subshell_id},
-            parent=msg,
-            ident=idents,
-        )
-
-    async def list_subshell_request(self, socket, idents, msg):
-        self.session.send(
-            stream=socket,
-            msg_or_type="list_subshell_reply",
-            content={"status": "ok", "subshell_id": list(self._subkernels)},
-            parent=msg,
-            ident=idents,
-        )
-
-    async def delete_subshell_request(self, socket, idents, msg):
-        if subkernel := self._subkernels.pop(msg["content"]["subshell_id"], None):
-            subkernel.stop()
-        self.session.send(
-            stream=socket,
-            msg_or_type="delete_subshell_reply",
-            content={"status": "ok"},
-            parent=msg,
-            ident=idents,
-        )
 
     @classmethod
     def start(cls, connection_file="", async_mode=AsyncMode.asyncio) -> int:

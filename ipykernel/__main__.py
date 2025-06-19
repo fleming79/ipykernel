@@ -9,7 +9,6 @@ from ipykernel.kernelspec import AsyncMode
 
 
 def launch():
-
     parser = argparse.ArgumentParser()
     parser.add_argument("-f", "--file", dest="connection_file", default="")
     parser.add_argument(

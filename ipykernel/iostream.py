@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import enum
 from io import TextIOBase
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
@@ -13,7 +12,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     import zmq
-
 
 
 class OutStream(TextIOBase):

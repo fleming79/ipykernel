@@ -19,7 +19,6 @@ from collections.abc import Callable
 from typing import Literal
 
 import anyio.from_thread
-import anyio.to_thread
 import zmq
 import zmq_anyio
 from anyio import create_task_group, to_thread
@@ -51,7 +50,7 @@ class SocketID(enum.StrEnum):
     control = "control"
 
 
-class Subkernel(HasTraits):
+class Kernelbase(HasTraits):
     """A kernel without sockets."""
 
     _stop_on_error_time: float = 0
@@ -104,7 +103,7 @@ class Subkernel(HasTraits):
             "comm_msg": self.comm_msg,
             "comm_close": self.comm_close,
         }
-        self.main_kernel._subkernels[self.ident] = self
+        self.main_kernel._Kernelbases[self.ident] = self
         self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[
             tuple[float, zmq_anyio.Socket, list[bytes | bytearray], dict]
         ](max_buffer_size=1000)
@@ -143,7 +142,7 @@ class Subkernel(HasTraits):
             "implementation_version": self.implementation_version,
             "language_info": self.language_info,
             "banner": self.shell.banner,
-            "supported_features": ["kernel subshells"],
+            "supported_features": [],
         }
 
     @observe("user_module")
@@ -167,7 +166,7 @@ class Subkernel(HasTraits):
 
     @default("comm_manager")
     def _default_comm_manager(self):
-        from ipykernel import comm
+        from ipykernel import comm  # noqa: PLC0415
 
         comm.set_comm()
         return comm.get_comm_manager()
@@ -215,7 +214,7 @@ class Subkernel(HasTraits):
         }
         self.session.send(stream=socket, msg_or_type=msg_or_type, content=content, ident=idents, parent=msg)
 
-    async def process_shell(self, socket, idents, msg, msg_type):
+    async def _process_shell(self, socket, idents, msg, msg_type):
         if msg_type == "execute_request":
             await self.execute_request(socket, idents, msg)
         else:
@@ -604,7 +603,7 @@ class Subkernel(HasTraits):
             tg.cancel_scope.cancel()
 
     def stop(self):
-        self.main_kernel._subkernels.pop(self.ident, None)
+        self.main_kernel._Kernelbases.pop(self.ident, None)
         if not self._stop_event.is_set():
             if threading.current_thread() is threading.main_thread():
                 self._stop_event.set()

@@ -190,29 +190,6 @@ async def test_kernel_info_request(client):
     reply = await utils.get_reply(client, msg_id)
     utils.validate_message(reply, "kernel_info_reply", msg_id)
     assert "supported_features" in reply["content"]
-    assert "kernel subshells" in reply["content"]["supported_features"]
-
-
-async def test_subshell(client):
-    msg = client.session.msg("create_subshell_request")
-    client.control_channel.send(msg)
-    msg_id = msg["header"]["msg_id"]
-    reply = await utils.get_reply(client, msg_id, channel="control")
-    utils.validate_message(reply, "create_subshell_reply", msg_id)
-    subshell_id = reply["content"]["subshell_id"]
-
-    msg = client.session.msg("list_subshell_request")
-    client.control_channel.send(msg)
-    msg_id = msg["header"]["msg_id"]
-    reply = await utils.get_reply(client, msg_id, channel="control")
-    utils.validate_message(reply, "list_subshell_reply", msg_id)
-    assert len(reply["content"]["subshell_id"]) == 1
-
-    msg = client.session.msg("delete_subshell_request", {"subshell_id": subshell_id})
-    client.control_channel.send(msg)
-    msg_id = msg["header"]["msg_id"]
-    reply = await utils.get_reply(client, msg_id, channel="control")
-    utils.validate_message(reply, "delete_subshell_reply", msg_id)
 
 
 async def test_comm_info_request(client):
@@ -254,9 +231,6 @@ async def test_history_search(client):
     utils.validate_message(reply, "history_reply", msg_id)
     content = reply["content"]
     assert len(content["history"]) == 1
-
-
-# IOPub channel
 
 
 async def test_stream(client):

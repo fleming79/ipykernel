@@ -16,7 +16,7 @@ from ipykernel.displayhook import ZMQShellDisplayHook
 
 if TYPE_CHECKING:
     from ipykernel.kernel import Kernel
-    from ipykernel.subkernel import Subkernel
+    from ipykernel.subkernel import Kernelbase
 
 
 class ZMQDisplayPublisher(DisplayPublisher):
@@ -91,7 +91,7 @@ class ZMQInteractiveShell(InteractiveShell):
     display_pub_class = Type(ZMQDisplayPublisher)
     displayhook: Instance[ZMQShellDisplayHook]
     display_pub: Instance[ZMQDisplayPublisher]
-    kernel: Instance[Subkernel] = Instance("ipykernel.kernel.Subkernel")
+    kernel: Instance[Kernelbase] = Instance("ipykernel.kernel.Kernelbase")
     parent_header = Dict()
 
     @default("banner1")
