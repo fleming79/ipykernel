@@ -19,7 +19,7 @@ class ZMQShellDisplayHook(DisplayHook):
     to work with an InteractiveShell instance. It sends a dict of different
     representations of the object."""
 
-    kernel: Instance[Kernel] = Instance("ipykernel.kernel.Kernel", ())
+    kernel: Instance[Kernel] = Instance("ipykernel.Kernel", ())
     parent_header = Dict()
     msg: dict[str, t.Any] | None = None
 

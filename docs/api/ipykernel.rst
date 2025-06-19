@@ -49,12 +49,6 @@ Submodules
    :show-inheritance:
 
 
-.. automodule:: ipykernel.Kernelbase
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-
 .. automodule:: ipykernel.kernelspec
    :members:
    :undoc-members:

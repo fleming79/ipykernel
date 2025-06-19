@@ -16,13 +16,12 @@ from ipykernel.displayhook import ZMQShellDisplayHook
 
 if TYPE_CHECKING:
     from ipykernel.kernel import Kernel
-    from ipykernel.kernelbase import Kernelbase
 
 
 class ZMQDisplayPublisher(DisplayPublisher):
     """A display publisher that publishes data using a ZeroMQ PUB socket."""
 
-    kernel: Instance[Kernel] = Instance("ipykernel.kernel.Kernel", ())
+    kernel: Instance[Kernel] = Instance("ipykernel.Kernel", ())
     parent_header = Dict({})
     topic = CBytes(b"display_data")
 
@@ -91,7 +90,7 @@ class ZMQInteractiveShell(InteractiveShell):
     display_pub_class = Type(ZMQDisplayPublisher)
     displayhook: Instance[ZMQShellDisplayHook]
     display_pub: Instance[ZMQDisplayPublisher]
-    kernel: Instance[Kernelbase] = Instance("ipykernel.kernel.Kernelbase")
+    kernel: Instance[Kernel] = Instance("ipykernel.Kernel", ())
     parent_header = Dict()
 
     @default("banner1")
@@ -136,7 +135,7 @@ class ZMQInteractiveShell(InteractiveShell):
         ename = str(etype.__name__)
         if ename == "KeyboardInterrupt":
             stb.pop(-2)
-        self.kernel.kernel.pubio_send(
+        self.kernel.pubio_send(
             msg_or_type="error",
             content={"traceback": stb, "ename": ename, "evalue": str(evalue)},
             parent=self.parent_header,
