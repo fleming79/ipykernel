@@ -19,7 +19,7 @@ class ZMQShellDisplayHook(DisplayHook):
     to work with an InteractiveShell instance. It sends a dict of different
     representations of the object."""
 
-    main_kernel: Instance[Kernel] = Instance("ipykernel.kernel.Kernel", ())
+    kernel: Instance[Kernel] = Instance("ipykernel.kernel.Kernel", ())
     parent_header = Dict()
     msg: dict[str, t.Any] | None = None
 
@@ -29,7 +29,7 @@ class ZMQShellDisplayHook(DisplayHook):
 
     def start_displayhook(self):
         """Start the display hook."""
-        self.msg = self.main_kernel.session.msg(
+        self.msg = self.kernel.session.msg(
             msg_type="execute_result",
             content={
                 "data": {},
@@ -52,5 +52,5 @@ class ZMQShellDisplayHook(DisplayHook):
     def finish_displayhook(self):
         """Finish up all displayhook activities."""
         if self.msg and self.msg["content"]["data"]:
-            self.main_kernel.pubio_send(self.msg, parent=self.parent_header)
+            self.kernel.pubio_send(self.msg, parent=self.parent_header)
         self.msg = None

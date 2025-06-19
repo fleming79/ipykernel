@@ -25,8 +25,8 @@ from traitlets import Bool, Container, Dict, DottedObjectName, Instance, Set
 from traitlets.utils.importstring import import_item
 from typing_extensions import override
 
+from ipykernel.kernelbase import Kernelbase, SocketID
 from ipykernel.kernelspec import AsyncMode
-from ipykernel.subkernel import Kernelbase, SocketID
 
 if TYPE_CHECKING:
     from collections.abc import Callable

@@ -58,7 +58,7 @@ class Kernelbase(HasTraits):
     session: Instance[Session] = Instance(Session)
     profile_dir = Instance("IPython.core.profiledir.ProfileDir", allow_none=True)
 
-    main_kernel: Instance[Kernel] = Instance("ipykernel.kernel.Kernel", ())
+    kernel: Instance[Kernel] = Instance("ipykernel.kernel.Kernel", ())
     asyncio_event_loop = Instance(asyncio.AbstractEventLoop, allow_none=True, read_only=True)  # type:ignore[call-overload]
     _stop_event = Instance(anyio.Event, ())
 
@@ -103,7 +103,7 @@ class Kernelbase(HasTraits):
             "comm_msg": self.comm_msg,
             "comm_close": self.comm_close,
         }
-        self.main_kernel._Kernelbases[self.ident] = self
+        self.kernel._Kernelbases[self.ident] = self
         self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[
             tuple[float, zmq_anyio.Socket, list[bytes | bytearray], dict]
         ](max_buffer_size=1000)
@@ -173,7 +173,7 @@ class Kernelbase(HasTraits):
 
     def _publish_status(self, status: Literal["busy", "idle"], parent):
         """send status (busy/idle) on IOPub"""
-        self.main_kernel.pubio_send(
+        self.kernel.pubio_send(
             msg_or_type="status",
             content={"execution_state": status},
             parent=parent,
@@ -181,7 +181,7 @@ class Kernelbase(HasTraits):
         )
 
     def _publish_debug_event(self, event):
-        self.main_kernel.pubio_send(
+        self.kernel.pubio_send(
             msg_or_type="debug_event",
             content=event,
             parent=self.parent_msg,
@@ -239,7 +239,7 @@ class Kernelbase(HasTraits):
         if not silent:
             await self._exec_send_stream.send((time.monotonic(), socket, ident, parent))
         else:
-            self.main_kernel.start_soon(self._execute_request, socket, ident, parent)
+            self.kernel.start_soon(self._execute_request, socket, ident, parent)
 
     async def _shell_execute_request_loop(self, *, task_status: TaskStatus):
         async with self._exec_receive_stream as receive_stream:
@@ -281,7 +281,7 @@ class Kernelbase(HasTraits):
             # start computing output
             if not silent:
                 self._set_parent_ident(parent, ident)
-                self.main_kernel.pubio_send(
+                self.kernel.pubio_send(
                     msg_or_type="execute_input",
                     content={"code": content["code"], "execution_count": self.shell.execution_count},
                     parent=parent,
@@ -324,7 +324,7 @@ class Kernelbase(HasTraits):
         result: list[ExecutionResult] = []
         interrupt = threading.Event()
         if not silent:
-            self.main_kernel.shell_interrupt.add(interrupt)
+            self.kernel.shell_interrupt.add(interrupt)
         try:
 
             async def run() -> None:
@@ -343,7 +343,7 @@ class Kernelbase(HasTraits):
                 if not result:
                     tg.cancel_scope.cancel()
         finally:
-            self.main_kernel.shell_interrupt.discard(interrupt)
+            self.kernel.shell_interrupt.discard(interrupt)
             self._restore_input()
 
         reply_content = {}
@@ -371,7 +371,7 @@ class Kernelbase(HasTraits):
         """Handle an interrupt request."""
 
         content: dict[str, t.Any] = {"status": "ok"}
-        for event in self.main_kernel.shell_interrupt:
+        for event in self.kernel.shell_interrupt:
             event.set()
         self.session.send(
             stream=socket,
@@ -603,7 +603,7 @@ class Kernelbase(HasTraits):
             tg.cancel_scope.cancel()
 
     def stop(self):
-        self.main_kernel._Kernelbases.pop(self.ident, None)
+        self.kernel._Kernelbases.pop(self.ident, None)
         if not self._stop_event.is_set():
             if threading.current_thread() is threading.main_thread():
                 self._stop_event.set()
@@ -673,7 +673,7 @@ class Kernelbase(HasTraits):
             msg = "Input request is only allowed from the main thread (eg: not from the control thread)."
             raise RuntimeError(msg)
         # flush the stdin socket, to purge stale replies
-        socket = self.main_kernel.sockets[SocketID.stdin]
+        socket = self.kernel.sockets[SocketID.stdin]
         while True:
             try:
                 socket.recv_multipart(zmq.NOBLOCK)

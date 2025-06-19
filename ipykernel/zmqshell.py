@@ -16,13 +16,13 @@ from ipykernel.displayhook import ZMQShellDisplayHook
 
 if TYPE_CHECKING:
     from ipykernel.kernel import Kernel
-    from ipykernel.subkernel import Kernelbase
+    from ipykernel.kernelbase import Kernelbase
 
 
 class ZMQDisplayPublisher(DisplayPublisher):
     """A display publisher that publishes data using a ZeroMQ PUB socket."""
 
-    main_kernel: Instance[Kernel] = Instance("ipykernel.kernel.Kernel", ())
+    kernel: Instance[Kernel] = Instance("ipykernel.kernel.Kernel", ())
     parent_header = Dict({})
     topic = CBytes(b"display_data")
 
@@ -57,7 +57,7 @@ class ZMQDisplayPublisher(DisplayPublisher):
 
         Ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#update-display-data
         """
-        self.main_kernel.pubio_send(
+        self.kernel.pubio_send(
             msg_or_type="update_display_data" if update else "display_data",
             content={"data": data, "metadata": metadata or {}, "transient": transient or {}} | kwargs,
             parent=self.parent_header,
@@ -76,7 +76,7 @@ class ZMQDisplayPublisher(DisplayPublisher):
             This reduces bounce during repeated clear & display loops.
 
         """
-        self.main_kernel.pubio_send(
+        self.kernel.pubio_send(
             msg_or_type="clear_output",
             content={"wait": wait},
             parent=self.parent_header,
@@ -136,7 +136,7 @@ class ZMQInteractiveShell(InteractiveShell):
         ename = str(etype.__name__)
         if ename == "KeyboardInterrupt":
             stb.pop(-2)
-        self.kernel.main_kernel.pubio_send(
+        self.kernel.kernel.pubio_send(
             msg_or_type="error",
             content={"traceback": stb, "ename": ename, "evalue": str(evalue)},
             parent=self.parent_header,
