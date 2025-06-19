@@ -14,45 +14,46 @@ import time
 import traceback
 import typing as t
 import uuid
+from collections.abc import Callable
 from typing import Literal
 
+import anyio.from_thread
+import anyio.to_thread
 import zmq
 import zmq_anyio
-from anyio import create_memory_object_stream, create_task_group, to_thread
-from anyio.from_thread import BlockingPortal
+from anyio import create_task_group, to_thread
 from IPython.core.completer import provisionalcompleter as _provisionalcompleter
 from IPython.core.completer import rectify_completions as _rectify_completions
 from IPython.core.error import StdinNotImplementedError
 from IPython.utils.tokenutil import token_at_cursor
 from jupyter_client.session import Session
-from traitlets import Any, Dict, Instance, Type, Unicode, default, observe
-from traitlets.config.configurable import LoggingConfigurable
+from traitlets import Any, Dict, HasTraits, Instance, Type, Unicode, default, observe
 
 from ipykernel._version import kernel_protocol_version
 from ipykernel.iostream import SocketID
 from ipykernel.zmqshell import ZMQInteractiveShell
 
 if t.TYPE_CHECKING:
+    from types import CoroutineType
+
+    from anyio.abc import TaskGroup, TaskStatus
     from IPython.core.interactiveshell import ExecutionResult
 
     from ipykernel.comm import CommManager
     from ipykernel.kernel import Kernel
 
 
-class Subkernel(LoggingConfigurable):
-    """The base kernel class."""
+class Subkernel(HasTraits):
+    """A kernel without sockets."""
 
-    _stop_on_error_time: float = time.monotonic()
+    _stop_on_error_time: float = 0
 
-    # ---------------------------------------------------------------------------
-    # Kernel interface
-    # ---------------------------------------------------------------------------
     session: Instance[Session] = Instance(Session)
     profile_dir = Instance("IPython.core.profiledir.ProfileDir", allow_none=True)
 
     main_kernel: Instance[Kernel] = Instance("ipykernel.kernel.Kernel", ())
     asyncio_event_loop = Instance(asyncio.AbstractEventLoop, allow_none=True, read_only=True)  # type:ignore[call-overload]
-    _portal = Instance(BlockingPortal)
+    _stop_event = Instance(anyio.Event, ())
 
     log = Instance(logging.LoggerAdapter)
     ident = Unicode()
@@ -95,7 +96,8 @@ class Subkernel(LoggingConfigurable):
             "comm_msg": self.comm_msg,
             "comm_close": self.comm_close,
         }
-        self._exec_send_stream, self._exec_receive_stream = create_memory_object_stream[
+        self.main_kernel._subkernels[self.ident] = self
+        self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[
             tuple[float, zmq_anyio.Socket, list[bytes | bytearray], dict]
         ](max_buffer_size=1000)
         self.shell = self.shell_class.instance(
@@ -127,23 +129,18 @@ class Subkernel(LoggingConfigurable):
 
     @property
     def kernel_info(self):
-        supported_features: list[str] = []
-        if self._supports_kernel_subshells:
-            supported_features.append("kernel subshells")
-
         return {
             "protocol_version": kernel_protocol_version,
             "implementation": self.implementation,
             "implementation_version": self.implementation_version,
             "language_info": self.language_info,
             "banner": self.shell.banner,
-            "supported_features": supported_features,
+            "supported_features": ["kernel subshells"],
         }
 
     @observe("user_module")
     def _user_module_changed(self, change):
-        if self.shell is not None:
-            self.shell.user_module = change["new"]
+        self.shell.user_module = change["new"]
 
     @observe("user_ns")
     def _user_ns_changed(self, change):
@@ -162,10 +159,10 @@ class Subkernel(LoggingConfigurable):
 
     @default("comm_manager")
     def _default_comm_manager(self):
-        import ipykernel.comm
+        from ipykernel import comm
 
-        ipykernel.comm.set_comm()
-        return ipykernel.comm.get_comm_manager()
+        comm.set_comm()
+        return comm.get_comm_manager()
 
     def _publish_status(self, status: Literal["busy", "idle"], parent):
         """send status (busy/idle) on IOPub"""
@@ -210,6 +207,25 @@ class Subkernel(LoggingConfigurable):
         }
         self.session.send(stream=socket, msg_or_type=msg_or_type, content=content, ident=idents, parent=msg)
 
+    async def process_shell(self, socket, idents, msg, msg_type):
+        if msg_type == "execute_request":
+            await self.execute_request(socket, idents, msg)
+        else:
+            handler = self.shell_handlers.get(msg_type)
+            if handler is None:
+                self.log.error("Unknown message type: %r", msg_type)
+            else:
+                try:
+                    self._publish_status("busy", msg)
+                    await handler(socket, idents, msg)
+                except Exception as e:
+                    self.log.error("Exception in message handler:", exc_info=e)
+                except KeyboardInterrupt:
+                    # Ctrl-c shouldn't crash the self here.
+                    self.log.error("KeyboardInterrupt caught in kernel.")
+                finally:
+                    self._publish_status("idle", msg)
+
     async def execute_request(self, socket, ident, parent):
         content = parent["content"]
         silent = content["silent"]
@@ -218,8 +234,9 @@ class Subkernel(LoggingConfigurable):
         else:
             self.main_kernel.start_soon(self._execute_request, socket, ident, parent)
 
-    async def _shell_execute_request_loop(self):
+    async def _shell_execute_request_loop(self, *, task_status: TaskStatus):
         async with self._exec_receive_stream as receive_stream:
+            task_status.started()
             async for received_time, socket, idents, msg in receive_stream:
                 try:
                     if received_time < self._stop_on_error_time:
@@ -527,12 +544,10 @@ class Subkernel(LoggingConfigurable):
     async def kernel_info_request(self, socket, ident, parent):
         """Handle a kernel info request."""
 
-        content = {"status": "ok"}
-        content.update(self.kernel_info)
         msg = self.session.send(
             stream=socket,
             msg_or_type="kernel_info_reply",
-            content=content,
+            content={"status": "ok"} | self.kernel_info,
             parent=parent,
             ident=ident,
         )
@@ -565,15 +580,52 @@ class Subkernel(LoggingConfigurable):
 
     async def do_shutdown(self, restart):
         """Handle kernel shutdown."""
-        if self.shell:
-            self.shell.exit_now = True
+        self.shell.exit_now = True
         return {"status": "ok", "restart": restart}
 
     def do_clear(self):
         """Clear the kernel."""
-        if self.shell:
-            self.shell.reset(False)
+        self.shell.reset(False)
         return {"status": "ok"}
+
+    async def _start_async(self):
+        async with anyio.create_task_group() as tg:
+            await tg.start(self._shell_execute_request_loop)
+            await tg.start(self._start_soon_scheduler, tg)
+            await self._stop_event.wait()
+            tg.cancel_scope.cancel()
+
+    def stop(self):
+        self.main_kernel._subkernels.pop(self.ident, None)
+        if not self._stop_event.is_set():
+            if threading.current_thread() is threading.main_thread():
+                self._stop_event.set()
+            else:
+                self.start_soon(self._stop_event.set)
+
+    async def _start_soon_scheduler(self, tg: TaskGroup, *, task_status: TaskStatus):
+        "Orderly schedule starting a coroutine"
+        self._start_soon_stream, scheduled = anyio.create_memory_object_stream[tuple[Callable, tuple, str | None]](
+            max_buffer_size=1000
+        )
+        task_status.started()
+        while True:
+            func, args, name = await scheduled.receive()
+            tg.start_soon(self._wrap_start_soon, func, args, name=name)
+
+    async def _wrap_start_soon(self, func: Callable[..., CoroutineType], args: tuple):
+        try:
+            await func(*args)
+        except Exception as e:
+            self.log.exception("Coroutine execution failed", exc_info=e)
+
+    def start_soon(self, func, *args, name: str | None = None):
+        "Run a coroutine in the main thread."
+        to_start = (func, args, name)
+        if threading.current_thread() is threading.main_thread():
+            self._start_soon_stream.send_nowait(to_start)
+        else:
+            anyio.from_thread.run_sync(self._start_soon_stream.send_nowait, to_start)
 
     # ---------------------------------------------------------------------------
     # Protected interface
@@ -589,24 +641,11 @@ class Subkernel(LoggingConfigurable):
         msg = "raw_input was called, but this frontend does not support stdin."
         raise StdinNotImplementedError(msg)
 
-    def getpass(self, prompt="", stream=None):
-        """Forward getpass to frontends
-
-        Raises
-        ------
-        StdinNotImplementedError if active frontend doesn't support stdin.
-        """
+    def getpass(self, prompt=""):
+        """Forward getpass to frontends"""
         if not self._allow_stdin:
             msg = "getpass was called, but this frontend does not support input requests."
             raise StdinNotImplementedError(msg)
-        if stream is not None:
-            import warnings
-
-            warnings.warn(
-                "The `stream` parameter of `getpass.getpass` will have no effect when using ipykernel",
-                UserWarning,
-                stacklevel=2,
-            )
         return self._input_request(prompt, password=True)
 
     def raw_input(self, prompt=""):
@@ -626,11 +665,6 @@ class Subkernel(LoggingConfigurable):
         if threading.current_thread() is not threading.main_thread():
             msg = "Input request is only allowed from the main thread (eg: not from the control thread)."
             raise RuntimeError(msg)
-        if sys.stdout is not None:
-            sys.stdout.flush()
-        if sys.stderr is not None:
-            sys.stderr.flush()
-
         # flush the stdin socket, to purge stale replies
         socket = self.main_kernel.sockets[SocketID.stdin]
         while True:
@@ -640,7 +674,6 @@ class Subkernel(LoggingConfigurable):
                 if e.errno == zmq.EAGAIN:
                     break
                 raise
-
         # Send the input request.
         assert self is not None
         self.session.send(
@@ -650,7 +683,6 @@ class Subkernel(LoggingConfigurable):
             parent=self.parent_msg,
             ident=self.parent_ident,
         )
-
         # Await a response.
         while True:
             try:
@@ -671,7 +703,6 @@ class Subkernel(LoggingConfigurable):
                 raise KeyboardInterrupt(msg) from None
             except Exception:
                 self.log.warning("Invalid Message:", exc_info=True)
-
         try:
             value = reply["content"]["value"]  # type:ignore[index]
         except Exception:
@@ -682,25 +713,18 @@ class Subkernel(LoggingConfigurable):
             raise EOFError
         return value
 
-    @property
-    def _supports_kernel_subshells(self):
-        return True
-
     def _forward_input(self, allow_stdin=False):
         """Forward raw_input and getpass to the current frontend.
 
         via input_request
         """
         self._allow_stdin = allow_stdin
-
         self._sys_raw_input = builtins.input
         builtins.input = self.raw_input
-
         self._save_getpass = getpass.getpass
         getpass.getpass = self.getpass
 
     def _restore_input(self):
         """Restore raw_input, getpass"""
         builtins.input = self._sys_raw_input
-
         getpass.getpass = self._save_getpass

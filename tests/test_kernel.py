@@ -10,6 +10,7 @@ import time
 
 import anyio
 import pytest
+from anyio import to_thread
 
 from tests import utils
 
@@ -196,9 +197,6 @@ async def test_clear(kernel):
 @pytest.mark.parametrize("exception", [True, False])
 async def test_start_soon(mode, exception: bool, client, kernel):
     # Test we can start coroutines from various scopes
-
-    import anyio
-    from anyio import to_thread
 
     async def my_test(event: anyio.Event):
         event.set()

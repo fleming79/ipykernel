@@ -200,7 +200,6 @@ async def test_kernel_info_request(client):
 
 
 async def test_subshell(client):
-    pytest.skip("Not imlemented")
     msg = client.session.msg("create_subshell_request")
     client.control_channel.send(msg)
     msg_id = msg["header"]["msg_id"]
@@ -213,6 +212,7 @@ async def test_subshell(client):
     msg_id = msg["header"]["msg_id"]
     reply = await utils.get_reply(client, msg_id, channel="control")
     utils.validate_message(reply, "list_subshell_reply", msg_id)
+    assert len(reply["content"]["subshell_id"]) == 1
 
     msg = client.session.msg("delete_subshell_request", {"subshell_id": subshell_id})
     client.control_channel.send(msg)

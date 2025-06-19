@@ -31,7 +31,7 @@ class ZMQDisplayPublisher(DisplayPublisher):
         self.parent_header = extract_header(parent)
 
     @override
-    def publish(
+    def publish(  # type: ignore[override]
         self,
         data,
         metadata=None,
@@ -39,7 +39,7 @@ class ZMQDisplayPublisher(DisplayPublisher):
         transient=None,
         update=False,
         **kwargs,
-    ):
+    ) -> None:
         """Publish a display-data message
 
         Parameters
@@ -115,12 +115,8 @@ class ZMQInteractiveShell(InteractiveShell):
     @observe("exit_now")
     def _update_exit_now(self, change):
         """stop eventloop when exit_now fires"""
-        if change["new"]:
-            kernel = self.kernel
-            if kernel is kernel.main_kernel:
-                kernel.main_kernel.stop()
-            else:
-                kernel.main_kernel.close_subshell(kernel.ident)  # TODO
+        if self.exit_now:
+            self.kernel.stop()
 
     keepkernel_on_exit = None
 
