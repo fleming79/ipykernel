@@ -10,7 +10,7 @@ import traitlets
 from comm.base_comm import BaseComm, BuffersType, MaybeDict
 from typing_extensions import override
 
-from ipykernel.kernel import Kernel
+from asynckernel.kernel import Kernel
 
 __all__ = ["Comm"]
 

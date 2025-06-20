@@ -3,7 +3,7 @@ requires = ["hatchling>=1.4", "jupyter_client>=8"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ipykernel"
+name = "asynckernel"
 dynamic = ["version"]
 authors = [{name = "IPython Development Team", email = "ipython-dev@python.org"}]
 license = {file = "LICENSE"}
@@ -35,13 +35,13 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://ipython.org"
-Documentation = "https://ipykernel.readthedocs.io"
-Source = "https://github.com/ipython/ipykernel"
-Tracker = "https://github.com/ipython/ipykernel/issues"
+# Homepage = "https://ipython.org"
+# Documentation = "https://asynckernel.readthedocs.io"
+# Source = "https://github.com/ipython/ipykernel"
+# Tracker = "https://github.com/ipython/ipykernel/issues"
 
 [project.scripts]
-ipykernel = "ipykernel.__main__:launch"
+asynckernel = "asynckernel.__main__:launch"
 
 [project.optional-dependencies]
 docs = [
@@ -72,7 +72,7 @@ cov = [
 ]
 
 [tool.hatch.version]
-path = "src/ipykernel/_version.py"
+path = "src/asynckernel/_version.py"
 
 # Used to call hatch_build.py
 [tool.hatch.build.hooks.custom]
@@ -97,7 +97,7 @@ nowarn = "test -W default {args}"
 [tool.hatch.envs.cov]
 features = ["test", "cov"]
 [tool.hatch.envs.cov.scripts]
-test = "python -m pytest -vv --cov ipykernel --cov-branch --cov-report term-missing:skip-covered {args}"
+test = "python -m pytest -vv --cov asynckernel --cov-branch --cov-report term-missing:skip-covered {args}"
 nowarn = "test -W default {args}"
 
 [[tool.hatch.envs.cov.matrix]]
@@ -131,7 +131,6 @@ addopts = [
   "-raXs", "--durations=10", "--color=yes", "--doctest-modules",
    "--showlocals", "--strict-markers", "--strict-config",
   "-s",
-   "--ignore=ipykernel/log.py",
 ]
 testpaths = [
     "tests"
@@ -180,7 +179,7 @@ exclude_lines = [
 
 [tool.coverage.run]
 relative_files = true
-source = ["ipykernel"]
+source = ["asynckernel"]
 omit = ["tests/*"]
 
 [tool.ruff]
@@ -253,7 +252,7 @@ fail-under=95
 exclude = ["docs", "tests"]
 
 [tool.check-wheel-contents]
-toplevel = ["ipykernel/", "ipykernel_launcher.py"]
+toplevel = ["asynckernel/"]
 ignore = ["W002"]
 
 [tool.repo-review]

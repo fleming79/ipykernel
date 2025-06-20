@@ -1,11 +1,11 @@
-"""The cli entry point for ipykernel."""
+"""The cli entry point for asynckernel."""
 
 import argparse
 import pathlib
 import sys
 
-from ipykernel.kernel import Kernel
-from ipykernel.kernelspec import AsyncMode
+from asynckernel.kernel import Kernel
+from asynckernel.kernelspec import AsyncMode
 
 
 def launch():

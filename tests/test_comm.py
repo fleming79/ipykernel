@@ -1,6 +1,6 @@
 import unittest.mock
 
-from ipykernel.comm import Comm, CommManager
+from asynckernel.comm import Comm, CommManager
 
 
 async def test_comm(kernel) -> None:

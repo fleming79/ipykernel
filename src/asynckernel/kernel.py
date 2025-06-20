@@ -38,9 +38,9 @@ from jupyter_core.paths import jupyter_runtime_dir
 from traitlets import Dict, Instance, default, observe
 from traitlets.utils.importstring import import_item
 
-from ipykernel import _version
-from ipykernel.kernelspec import AsyncMode
-from ipykernel.zmqshell import ZMQInteractiveShell
+from asynckernel import _version
+from asynckernel.kernelspec import AsyncMode
+from asynckernel.zmqshell import ZMQInteractiveShell
 
 if TYPE_CHECKING:
     from types import CoroutineType
@@ -48,8 +48,8 @@ if TYPE_CHECKING:
     from anyio.abc import TaskGroup, TaskStatus
     from IPython.core.interactiveshell import ExecutionResult
 
-    from ipykernel.comm import CommManager
-    from ipykernel.iostream import OutStream
+    from asynckernel.comm import CommManager
+    from asynckernel.iostream import OutStream
 
 
 def start_anyio_thread(
@@ -150,14 +150,14 @@ class Kernel(ConnectionFileMixin):
 
     quiet = traitlets.Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
     outstream_class = traitlets.DottedObjectName(
-        "ipykernel.iostream.OutStream",
+        "asynckernel.iostream.OutStream",
         help="The importstring for the OutStream factory",
         allow_none=True,
     ).tag(
         config=True,
     )
     displayhook_class = traitlets.DottedObjectName(
-        "ipykernel.displayhook.ZMQDisplayHook", help="The importstring for the DisplayHook factory"
+        "asynckernel.displayhook.ZMQDisplayHook", help="The importstring for the DisplayHook factory"
     ).tag(config=True)
 
     session = Instance(Session)
@@ -170,7 +170,7 @@ class Kernel(ConnectionFileMixin):
 
     user_module = traitlets.Any()
     user_ns = Dict()
-    comm_manager: Instance[CommManager] = Instance("ipykernel.comm.CommManager")
+    comm_manager: Instance[CommManager] = Instance("asynckernel.comm.CommManager")
 
     def __new__(cls, **kwargs) -> Self:  # noqa: ARG004
         #  There is only one instance.
@@ -347,7 +347,7 @@ class Kernel(ConnectionFileMixin):
 
     @default("comm_manager")
     def _default_comm_manager(self):
-        from ipykernel import comm  # noqa: PLC0415
+        from asynckernel import comm  # noqa: PLC0415
 
         comm.set_comm()
         return comm.get_comm_manager()

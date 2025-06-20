@@ -4,7 +4,7 @@ import io
 
 import pytest
 
-from ipykernel.iostream import OutStream
+from asynckernel.iostream import OutStream
 
 
 def test_io_api():
