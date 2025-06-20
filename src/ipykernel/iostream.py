@@ -6,12 +6,11 @@
 from __future__ import annotations
 
 from io import TextIOBase
-from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    import zmq
 
 
 class OutStream(TextIOBase):
@@ -68,12 +67,3 @@ class OutStream(TextIOBase):
         return True
 
 
-class SendKwgs(TypedDict):
-    stream: zmq.sugar.socket.Socket
-    msg_or_type: dict[str, Any] | str
-    content: dict[str, Any]
-    parent: NotRequired[dict[str, Any]]
-    ident: NotRequired[bytes | list[bytes]]
-    buffers: NotRequired[list[bytes | bytearray] | None]
-    track: NotRequired[bool]
-    header: NotRequired[dict[str, Any]]
