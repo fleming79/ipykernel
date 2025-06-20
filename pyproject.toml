@@ -72,7 +72,7 @@ cov = [
 ]
 
 [tool.hatch.version]
-path = "ipykernel/_version.py"
+path = "src/ipykernel/_version.py"
 
 # Used to call hatch_build.py
 [tool.hatch.build.hooks.custom]
