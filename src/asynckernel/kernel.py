@@ -382,7 +382,7 @@ class Kernel(ConnectionFileMixin):
     def _send_error_reply(
         self,
         socket: zmq_anyio.Socket,
-        idents,
+        ident,
         msg: dict,
         *,
         ename="RuntimeError",
@@ -398,11 +398,11 @@ class Kernel(ConnectionFileMixin):
             "evalue": evalue,
             "traceback": traceback or [],
         }
-        self.session.send(stream=socket, msg_or_type=msg_or_type, content=content, ident=idents, parent=msg)
+        self.session.send(stream=socket, msg_or_type=msg_or_type, content=content, ident=ident, parent=msg)
 
-    async def _process_shell(self, socket, idents, msg, msg_type):
+    async def _process_shell(self, socket, ident, msg, msg_type):
         if msg_type == "execute_request":
-            await self.execute_request(socket, idents, msg)
+            await self.execute_request(socket, ident, msg)
         else:
             handler = self._shell_handlers.get(msg_type)
             if handler is None:
@@ -410,7 +410,7 @@ class Kernel(ConnectionFileMixin):
             else:
                 try:
                     self._publish_status("busy", msg)
-                    await handler(socket, idents, msg)
+                    await handler(socket, ident, msg)
                 except Exception as e:
                     self.log.error("Exception in message handler:", exc_info=e)
                 except KeyboardInterrupt:
@@ -430,23 +430,23 @@ class Kernel(ConnectionFileMixin):
     async def _shell_execute_request_loop(self, *, task_status: TaskStatus):
         async with self._exec_receive_stream as receive_stream:
             task_status.started()
-            async for received_time, socket, idents, msg in receive_stream:
+            async for received_time, socket, ident, msg in receive_stream:
                 try:
                     if received_time < self._stop_on_error_time:
                         self.log.info("Aborting execute_request: %s", msg["header"]["msg_id"])
                         self._send_error_reply(
                             socket=socket,
-                            idents=idents,
+                            ident=ident,
                             msg=msg,
                             evalue="Aborting due to prior exception",
                         )
                         continue
-                    await self._execute_request(socket, idents, msg)
+                    await self._execute_request(socket, ident, msg)
                 except BaseException as e:
                     self.log.exception("Execute request", exc_info=e)
                     self._send_error_reply(
                         socket=socket,
-                        idents=idents,
+                        ident=ident,
                         msg=msg,
                         ename=str(type(e).__name__),
                         evalue=str(e),
@@ -1078,14 +1078,14 @@ class Kernel(ConnectionFileMixin):
                 await anyio.sleep(0.1)
                 continue
             copy = not isinstance(msg_[0], zmq.Message)
-            idents, msg_ = self.session.feed_identities(msg_, copy=copy)
+            ident, msg_ = self.session.feed_identities(msg_, copy=copy)
             msg = self.session.deserialize(msg_, content=True, copy=copy)
             msg_type = msg["header"]["msg_type"]
             self.log.debug("\n*** MESSAGE TYPE:%s***", msg_type)
             self.log.debug("   Content: %s\n   --->\n   ", msg["content"])
-            await process_message(socket, idents, msg, msg_type)
+            await process_message(socket, ident, msg, msg_type)
 
-    async def shutdown_request(self, socket, idents, msg):
+    async def shutdown_request(self, socket, ident, msg):
         """Handle a shutdown request."""
         content = await self.do_shutdown(msg["content"]["restart"])
         self.session.send(
@@ -1093,7 +1093,7 @@ class Kernel(ConnectionFileMixin):
             msg_or_type="shutdown_reply",
             content=content,
             parent=msg,
-            ident=idents,
+            ident=ident,
         )
 
     async def _run_control_loop(self, task_status: TaskStatus):
@@ -1103,7 +1103,7 @@ class Kernel(ConnectionFileMixin):
             task_status.started()
             await self._receive_msg_loop(self._process_control, socket=control_socket)
 
-    async def _process_control(self, socket, idents, msg, msg_type):
+    async def _process_control(self, socket, ident, msg, msg_type):
         # Inside control thread
 
         # Execute_requests
@@ -1113,7 +1113,7 @@ class Kernel(ConnectionFileMixin):
         else:
             try:
                 self._publish_status("busy", msg)
-                await handler(socket, idents, msg)
+                await handler(socket, ident, msg)
             except Exception as e:
                 self.log.error("Exception in message handler:", exc_info=e)
             except KeyboardInterrupt:
