@@ -948,8 +948,8 @@ class Kernel(ConnectionFileMixin):
                     self.comm_manager.kernel = self
 
                     async def _watch_stop_event():
-                        "A task and thread dedicated to stopping"
                         await anyio.to_thread.run_sync(self._stop_event.wait)
+                        # Initiate shutdown
                         tg.cancel_scope.cancel()
 
                     tg.start_soon(_watch_stop_event)

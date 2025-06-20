@@ -30,6 +30,9 @@ def launch():
         sys.exit(0)
     except KeyboardInterrupt:
         sys.exit(0)
+    except Exception as e:
+        print(e)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
