@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from IPython.core.autocall import ZMQExitAutocall
 from IPython.core.displaypub import DisplayPublisher
+from IPython.core.error import StdinNotImplementedError
 from IPython.core.interactiveshell import InteractiveShell, InteractiveShellABC
 from IPython.core.usage import default_banner
 from jupyter_client.session import extract_header
@@ -120,6 +121,13 @@ class ZMQInteractiveShell(InteractiveShell):
     keepkernel_on_exit = None
 
     def ask_exit(self):
+        try:
+            response = self.kernel.raw_input("Are you sure you want to stop the kernel?\ny/[n]\n")
+        except StdinNotImplementedError:
+            pass
+        else:
+            if response != "y":
+                return
         self.exit_now = True
 
     @override

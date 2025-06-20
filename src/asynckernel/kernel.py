@@ -841,7 +841,7 @@ class Kernel(ConnectionFileMixin):
 
     async def do_shutdown(self, restart):
         """Handle kernel shutdown."""
-        self.shell.exit_now = True
+        self.stop()
         await self._stopped.wait()
         return {"status": "ok", "restart": restart}
 
@@ -946,12 +946,19 @@ class Kernel(ConnectionFileMixin):
                     )
                     atexit.register(self.cleanup_connection_file)
                     self.comm_manager.kernel = self
+
+                    async def _watch_stop_event():
+                        "A task and thread dedicated to stopping"
+                        await anyio.to_thread.run_sync(self._stop_event.wait)
+                        tg.cancel_scope.cancel()
+
+                    tg.start_soon(_watch_stop_event)
                     yield self
                 finally:
                     self.comm_manager.kernel = None
                     self.stop()
                     self._reset_io()
-                    tg.cancel_scope.cancel()
+
 
     @classmethod
     def start(cls, connection_file="", async_mode=AsyncMode.asyncio) -> int:
