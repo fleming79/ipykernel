@@ -138,9 +138,6 @@ class Kernel(ConnectionFileMixin):
             "comm_msg": self.comm_msg,
             "comm_close": self.comm_close,
         }
-        self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[
-            tuple[float, zmq_anyio.Socket, list[bytes | bytearray], dict]
-        ](max_buffer_size=1000)
         self.shell = self.shell_class.instance(
             parent=self,
             profile_dir=self.profile_dir,
@@ -156,94 +153,6 @@ class Kernel(ConnectionFileMixin):
             "shutdown_request": self.control_shutdown_request,
         }
         sys.excepthook = self.excepthook
-
-    @classmethod
-    def start(cls, connection_file="", async_mode=AsyncMode.asyncio) -> int:
-        """Start the kernel.
-
-        See also: `start_in_context`
-        """
-        async_mode = AsyncMode(async_mode)
-
-        async def _start() -> None:
-            """ """
-            if async_mode is AsyncMode.asyncio_eager and sys.version_info >= (3, 12):
-                loop = asyncio.get_running_loop()
-                loop.set_task_factory(asyncio.eager_task_factory)
-
-            async with kernel.start_in_context():
-                await anyio.sleep_forever()
-
-        kernel = cls()
-        kernel.connection_file = connection_file
-
-        if (
-            sys.platform == "win32"
-            and async_mode in [AsyncMode.asyncio, AsyncMode.asyncio_eager]
-            and (policy := asyncio.get_event_loop_policy())
-            and policy.__class__.__name__ == "WindowsProactorEventLoopPolicy"
-        ):
-            from anyio._core._asyncio_selector_thread import get_selector  # noqa: PLC0415
-
-            selector = get_selector()
-            selector._thread.pydev_do_not_trace = True
-        try:
-            anyio.run(_start, backend="trio" if async_mode is AsyncMode.trio else "asyncio")
-        finally:
-            pass
-        return 0
-
-    @classmethod
-    def stop(cls):
-        if cls._instance:
-            cls._instance._stop_event.set()
-            cls._instance = None
-
-    @asynccontextmanager
-    async def start_in_context(self):
-        """Start the Kernel in an already running  anyio event loop.
-
-        ``` python
-        async with Kernel().start_in_context() as kernel:
-           await anyio.sleep_forever()
-        ...
-
-        """
-        if self._sockets:
-            msg = "Already started"
-            raise RuntimeError(msg)
-        if self.connection_file and Path(self.connection_file).exists():
-            self.load_connection_file()
-
-        with self._zmq_context:
-            async with (
-                anyio.create_task_group() as tg,
-                self._load_socket(SocketID.iopub, zmq.SocketType.PUB, 1000),
-                self._load_socket(SocketID.stdin, zmq.SocketType.ROUTER, 1000),
-            ):
-                try:
-                    await utils.start_anyio_thread(self._heartbeat, self._stop_event, tg, name="Heartbeat")
-                    await utils.start_anyio_thread(self._run_control_loop, self._stop_event, tg, name="Control")
-                    await tg.start(self._receive_msg_loop, SocketID.shell)
-                    await tg.start(self._shell_execute_request_loop)
-                    await tg.start(self._start_soon_scheduler, tg)
-                    self.init_pubio()
-                    if not self.connection_file:
-                        self.connection_file = str(
-                            Path(jupyter_runtime_dir()).joinpath(f"kernel-{self.kernel_name}.json")
-                        )
-                    self.write_connection_file()
-                    self.log.info(
-                        'To connect another client to this kernel, use:\n      --existing "%s"', {self.connection_file}
-                    )
-                    atexit.register(self.cleanup_connection_file)
-                    self.comm_manager.kernel = self
-                    yield self
-                finally:
-                    self.comm_manager.kernel = None
-                    self.stop()
-                    self.reset_io()
-                    tg.cancel_scope.cancel()
 
     @property
     def parent_msg(self):
@@ -297,11 +206,6 @@ class Kernel(ConnectionFileMixin):
 
         comm.set_comm()
         return comm.get_comm_manager()
-
-    def excepthook(self, etype, evalue, tb):
-        """Handle an exception."""
-        # write uncaught traceback to 'real' stderr, not zmq-forwarder
-        traceback.print_exception(etype, evalue, tb, file=sys.__stderr__)
 
     async def _heartbeat(self, task_status: TaskStatus):
         """The heartbeat.
@@ -435,6 +339,9 @@ class Kernel(ConnectionFileMixin):
                     self._publish_status("idle", msg)
 
     async def _shell_execute_request_loop(self, *, task_status: TaskStatus):
+        self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[
+            tuple[float, zmq_anyio.Socket, list[bytes | bytearray], dict]
+        ](max_buffer_size=1000)
         async with self._exec_receive_stream as receive_stream:
             task_status.started()
             async for received_time, socket, ident, msg in receive_stream:
@@ -461,6 +368,145 @@ class Kernel(ConnectionFileMixin):
                     )
                 finally:
                     self._publish_status("idle", msg)
+
+    async def _start_soon_scheduler(self, tg: TaskGroup, *, task_status: TaskStatus):
+        "Orderly schedule starting a coroutine"
+        self._start_soon_stream, scheduled = anyio.create_memory_object_stream[tuple[Callable, tuple, str | None]](
+            max_buffer_size=1000
+        )
+        async with scheduled:
+            task_status.started()
+            while True:
+                func, args, name = await scheduled.receive()
+                tg.start_soon(self._wrap_start_soon, func, args, name=name)
+
+    async def _wrap_start_soon(self, func: Callable[..., CoroutineType], args: tuple):
+        try:
+            await func(*args)
+        except Exception as e:
+            self.log.exception("Coroutine execution failed", exc_info=e)
+
+    def _topic(self, topic):
+        """prefixed topic for IOPub messages"""
+        return (f"kernel.{self.kernel_name}.{topic}").encode()
+
+    def _input_request(self, prompt, *, password=False):
+        # Flush output before making the request.
+        if threading.current_thread() is not threading.main_thread():
+            msg = "Input request is only allowed from the main thread (eg: not from the control thread)."
+            raise RuntimeError(msg)
+        # flush the stdin socket, to purge stale replies
+        socket = self._sockets[SocketID.stdin]
+        while True:
+            try:
+                socket.recv_multipart(zmq.NOBLOCK)
+            except zmq.ZMQError as e:
+                if e.errno == zmq.EAGAIN:
+                    break
+                raise
+        # Send the input request.
+        assert self is not None
+        self.session.send(
+            stream=socket,
+            msg_or_type="input_request",
+            content={"prompt": prompt, "password": password},
+            parent=self.parent_msg,
+            ident=self.parent_ident,
+        )
+        # Await a response.
+        while True:
+            try:
+                # Use polling with select() so KeyboardInterrupts can get
+                # through; doing a blocking recv() means stdin reads are
+                # uninterruptible on Windows. We need a timeout because
+                # zmq.select() is also uninterruptible, but at least this
+                # way reads get noticed immediately and KeyboardInterrupts
+                # get noticed fairly quickly by human response time standards.
+                rlist, _, xlist = zmq.select([socket], [], [socket], 0.01)
+                if rlist or xlist:
+                    ident, reply = self.session.recv(socket)
+                    if (ident, reply) != (None, None):
+                        break
+            except KeyboardInterrupt:
+                # re-raise KeyboardInterrupt, to truncate traceback
+                msg = "Interrupted by user"
+                raise KeyboardInterrupt(msg) from None
+            except Exception:
+                self.log.warning("Invalid Message:", exc_info=True)
+        try:
+            value = reply["content"]["value"]  # type:ignore[index]
+        except Exception:
+            self.log.error("Bad input_reply: %s", self.parent_msg)
+            value = ""
+        if value == "\x04":
+            # EOF
+            raise EOFError
+        return value
+
+    def _forward_input(self, allow_stdin=False):
+        """Forward raw_input and getpass to the current frontend.
+
+        via input_request
+        """
+        self._allow_stdin = allow_stdin
+        self._sys_raw_input = builtins.input
+        builtins.input = self.raw_input
+        self._save_getpass = getpass.getpass
+        getpass.getpass = self.getpass
+
+    def _restore_input(self):
+        """Restore raw_input, getpass"""
+        builtins.input = self._sys_raw_input
+        getpass.getpass = self._save_getpass
+
+    def _init_pubio(self):
+        """Redirect input streams."""
+        if threading.current_thread() != threading.main_thread():
+            msg = "pubio expects to be running in the main thread"
+            raise RuntimeError(msg)
+        self._save_io()
+        if self.outstream_class:
+            cls: type[OutStream] = import_item(self.outstream_class)
+            for name in ["stdout", "stderr"]:
+                echo = getattr(sys, name)
+
+                def flusher(string: str, name=name, echo=echo):
+                    "Publish stdio or stderr when flush is called"
+                    self.pubio_send(
+                        msg_or_type="stream",
+                        content={"name": name, "text": string},
+                        ident=self._topic("status"),
+                    )
+                    if not self.quiet and echo:
+                        echo.write(string)
+                        echo.flush()
+
+                wrapper = cls(name=name, flusher=flusher)  # type: ignore[call-arg]
+                setattr(sys, name, wrapper)
+
+    def _save_io(self):
+        if not self._io_modified:
+            self._original_io = sys.stdout, sys.stderr, sys.displayhook
+            self._io_modified = True
+
+    def _reset_io(self):
+        """restore original io
+
+        restores state after init_io
+        """
+        if not self._io_modified:
+            return
+        stdout, stderr, displayhook = sys.stdout, sys.stderr, sys.displayhook
+        sys.stdout, sys.stderr, sys.displayhook = self._original_io
+        self._io_modified = False
+        if finish_displayhook := getattr(displayhook, "finish_displayhook", None):
+            finish_displayhook()
+        if self.outstream_class:
+            outstream_factory = import_item(str(self.outstream_class))
+            if isinstance(stderr, outstream_factory):
+                stderr.close()
+            if isinstance(stdout, outstream_factory):
+                stdout.close()
 
     async def kernel_info_request(self, socket, ident, parent):
         """Handle a kernel info request."""
@@ -804,50 +850,10 @@ class Kernel(ConnectionFileMixin):
         self.shell.reset(False)
         return {"status": "ok"}
 
-    async def _start_soon_scheduler(self, tg: TaskGroup, *, task_status: TaskStatus):
-        "Orderly schedule starting a coroutine"
-        self._start_soon_stream, scheduled = anyio.create_memory_object_stream[tuple[Callable, tuple, str | None]](
-            max_buffer_size=1000
-        )
-        task_status.started()
-        while True:
-            func, args, name = await scheduled.receive()
-            tg.start_soon(self._wrap_start_soon, func, args, name=name)
-
-    async def _wrap_start_soon(self, func: Callable[..., CoroutineType], args: tuple):
-        try:
-            await func(*args)
-        except Exception as e:
-            self.log.exception("Coroutine execution failed", exc_info=e)
-
-    def start_soon(self, func, *args, name: str | None = None):
-        "Run a coroutine in the main thread."
-        to_start = (func, args, name)
-        if threading.current_thread() is threading.main_thread():
-            self._start_soon_stream.send_nowait(to_start)
-        else:
-            anyio.from_thread.run_sync(self._start_soon_stream.send_nowait, to_start)
-
-    # ---------------------------------------------------------------------------
-    # Protected interface
-    # ---------------------------------------------------------------------------
-
-    def _topic(self, topic):
-        """prefixed topic for IOPub messages"""
-        return (f"kernel.{self.kernel_name}.{topic}").encode()
-
-    def _no_raw_input(self):
-        """Raise StdinNotImplementedError if active frontend doesn't support
-        stdin."""
-        msg = "raw_input was called, but this frontend does not support stdin."
-        raise StdinNotImplementedError(msg)
-
-    def getpass(self, prompt=""):
-        """Forward getpass to frontends"""
-        if not self._allow_stdin:
-            msg = "getpass was called, but this frontend does not support input requests."
-            raise StdinNotImplementedError(msg)
-        return self._input_request(prompt, password=True)
+    def excepthook(self, etype, evalue, tb):
+        """Handle an exception."""
+        # write uncaught traceback to 'real' stderr, not zmq-forwarder
+        traceback.print_exception(etype, evalue, tb, file=sys.__stderr__)
 
     def raw_input(self, prompt=""):
         """Forward raw_input to frontends
@@ -857,127 +863,14 @@ class Kernel(ConnectionFileMixin):
         StdinNotImplementedError if active frontend doesn't support stdin.
         """
         if not self._allow_stdin:
-            msg = "raw_input was called, but this frontend does not support input requests."
-            raise StdinNotImplementedError(msg)
+            raise StdinNotImplementedError
         return self._input_request(str(prompt), password=False)
 
-    def _input_request(self, prompt, *, password=False):
-        # Flush output before making the request.
-        if threading.current_thread() is not threading.main_thread():
-            msg = "Input request is only allowed from the main thread (eg: not from the control thread)."
-            raise RuntimeError(msg)
-        # flush the stdin socket, to purge stale replies
-        socket = self._sockets[SocketID.stdin]
-        while True:
-            try:
-                socket.recv_multipart(zmq.NOBLOCK)
-            except zmq.ZMQError as e:
-                if e.errno == zmq.EAGAIN:
-                    break
-                raise
-        # Send the input request.
-        assert self is not None
-        self.session.send(
-            stream=socket,
-            msg_or_type="input_request",
-            content={"prompt": prompt, "password": password},
-            parent=self.parent_msg,
-            ident=self.parent_ident,
-        )
-        # Await a response.
-        while True:
-            try:
-                # Use polling with select() so KeyboardInterrupts can get
-                # through; doing a blocking recv() means stdin reads are
-                # uninterruptible on Windows. We need a timeout because
-                # zmq.select() is also uninterruptible, but at least this
-                # way reads get noticed immediately and KeyboardInterrupts
-                # get noticed fairly quickly by human response time standards.
-                rlist, _, xlist = zmq.select([socket], [], [socket], 0.01)
-                if rlist or xlist:
-                    ident, reply = self.session.recv(socket)
-                    if (ident, reply) != (None, None):
-                        break
-            except KeyboardInterrupt:
-                # re-raise KeyboardInterrupt, to truncate traceback
-                msg = "Interrupted by user"
-                raise KeyboardInterrupt(msg) from None
-            except Exception:
-                self.log.warning("Invalid Message:", exc_info=True)
-        try:
-            value = reply["content"]["value"]  # type:ignore[index]
-        except Exception:
-            self.log.error("Bad input_reply: %s", self.parent_msg)
-            value = ""
-        if value == "\x04":
-            # EOF
-            raise EOFError
-        return value
-
-    def _forward_input(self, allow_stdin=False):
-        """Forward raw_input and getpass to the current frontend.
-
-        via input_request
-        """
-        self._allow_stdin = allow_stdin
-        self._sys_raw_input = builtins.input
-        builtins.input = self.raw_input
-        self._save_getpass = getpass.getpass
-        getpass.getpass = self.getpass
-
-    def _restore_input(self):
-        """Restore raw_input, getpass"""
-        builtins.input = self._sys_raw_input
-        getpass.getpass = self._save_getpass
-
-    def init_pubio(self):
-        """Redirect input streams."""
-        if threading.current_thread() != threading.main_thread():
-            msg = "pubio expects to be running in the main thread"
-            raise RuntimeError(msg)
-        self._save_io()
-        if self.outstream_class:
-            cls: type[OutStream] = import_item(self.outstream_class)
-            for name in ["stdout", "stderr"]:
-                echo = getattr(sys, name)
-
-                def flusher(string: str, name=name, echo=echo):
-                    "Publish stdio or stderr when flush is called"
-                    self.pubio_send(
-                        msg_or_type="stream",
-                        content={"name": name, "text": string},
-                        ident=self._topic("status"),
-                    )
-                    if not self.quiet and echo:
-                        echo.write(string)
-                        echo.flush()
-
-                wrapper = cls(name=name, flusher=flusher)  # type: ignore[call-arg]
-                setattr(sys, name, wrapper)
-
-    def _save_io(self):
-        if not self._io_modified:
-            self._original_io = sys.stdout, sys.stderr, sys.displayhook
-            self._io_modified = True
-
-    def reset_io(self):
-        """restore original io
-
-        restores state after init_io
-        """
-        if not self._io_modified:
-            return
-        stdout, stderr, displayhook = sys.stdout, sys.stderr, sys.displayhook
-        sys.stdout, sys.stderr, sys.displayhook = self._original_io
-        self._io_modified = False
-        if finish_displayhook := getattr(displayhook, "finish_displayhook", None):
-            finish_displayhook()
-        if self.outstream_class:
-            outstream_factory = import_item(str(self.outstream_class))
-            if isinstance(stderr, outstream_factory):
-                stderr.close()
-            if isinstance(stdout, outstream_factory):
-                stdout.close()
+    def getpass(self, prompt=""):
+        """Forward getpass to frontends"""
+        if not self._allow_stdin:
+            raise StdinNotImplementedError
+        return self._input_request(prompt, password=True)
 
     def pubio_send(
         self,
@@ -1005,3 +898,99 @@ class Kernel(ConnectionFileMixin):
             ident=ident,
             buffers=buffers,
         )
+
+    def start_soon(self, func, *args, name: str | None = None):
+        "Run a coroutine in the main thread."
+        to_start = (func, args, name)
+        if threading.current_thread() is threading.main_thread():
+            self._start_soon_stream.send_nowait(to_start)
+        else:
+            anyio.from_thread.run_sync(self._start_soon_stream.send_nowait, to_start)
+
+    @asynccontextmanager
+    async def start_in_context(self):
+        """Start the Kernel in an already running  anyio event loop.
+
+        ``` python
+        async with Kernel().start_in_context() as kernel:
+           await anyio.sleep_forever()
+        ...
+
+        """
+        if self._sockets:
+            msg = "Already started"
+            raise RuntimeError(msg)
+        if self.connection_file and Path(self.connection_file).exists():
+            self.load_connection_file()
+
+        with self._zmq_context:
+            async with (
+                anyio.create_task_group() as tg,
+                self._load_socket(SocketID.iopub, zmq.SocketType.PUB, 1000),
+                self._load_socket(SocketID.stdin, zmq.SocketType.ROUTER, 1000),
+            ):
+                try:
+                    await utils.start_anyio_thread(self._heartbeat, self._stop_event, tg, name="Heartbeat")
+                    await utils.start_anyio_thread(self._run_control_loop, self._stop_event, tg, name="Control")
+                    await tg.start(self._shell_execute_request_loop)
+                    await tg.start(self._receive_msg_loop, SocketID.shell)
+                    await tg.start(self._start_soon_scheduler, tg)
+                    self._init_pubio()
+                    if not self.connection_file:
+                        self.connection_file = str(
+                            Path(jupyter_runtime_dir()).joinpath(f"kernel-{self.kernel_name}.json")
+                        )
+                    self.write_connection_file()
+                    self.log.info(
+                        'To connect another client to this kernel, use:\n      --existing "%s"', {self.connection_file}
+                    )
+                    atexit.register(self.cleanup_connection_file)
+                    self.comm_manager.kernel = self
+                    yield self
+                finally:
+                    self.comm_manager.kernel = None
+                    self.stop()
+                    self._reset_io()
+                    tg.cancel_scope.cancel()
+
+    @classmethod
+    def start(cls, connection_file="", async_mode=AsyncMode.asyncio) -> int:
+        """Start the kernel.
+
+        See also: `start_in_context`
+        """
+        async_mode = AsyncMode(async_mode)
+
+        async def _start() -> None:
+            """ """
+            if async_mode is AsyncMode.asyncio_eager and sys.version_info >= (3, 12):
+                loop = asyncio.get_running_loop()
+                loop.set_task_factory(asyncio.eager_task_factory)
+
+            async with kernel.start_in_context():
+                await anyio.sleep_forever()
+
+        kernel = cls()
+        kernel.connection_file = connection_file
+
+        if (
+            sys.platform == "win32"
+            and async_mode in [AsyncMode.asyncio, AsyncMode.asyncio_eager]
+            and (policy := asyncio.get_event_loop_policy())
+            and policy.__class__.__name__ == "WindowsProactorEventLoopPolicy"
+        ):
+            from anyio._core._asyncio_selector_thread import get_selector  # noqa: PLC0415
+
+            selector = get_selector()
+            selector._thread.pydev_do_not_trace = True
+        try:
+            anyio.run(_start, backend="trio" if async_mode is AsyncMode.trio else "asyncio")
+        finally:
+            pass
+        return 0
+
+    @classmethod
+    def stop(cls):
+        if cls._instance:
+            cls._instance._stop_event.set()
+            cls._instance = None
