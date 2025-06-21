@@ -88,6 +88,7 @@ class Kernel(ConnectionFileMixin):
     _sockets: Dict[SocketID, zmq_anyio.Socket] = Dict()
     _shell_handlers = Dict()
     _control_handlers = Dict()
+    _subshells: traitlets.Container[set[str]] = traitlets.Set()
 
     quiet = traitlets.Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
     outstream_class = traitlets.DottedObjectName(
@@ -151,6 +152,9 @@ class Kernel(ConnectionFileMixin):
         self._control_handlers = {
             "execute_request": self.control_execute_request,  # no task queue
             "shutdown_request": self.control_shutdown_request,
+            "create_subshell_request": self.control_create_subshell_request,
+            "list_subshell_request": self.control_list_subshell_request,
+            "delete_subshell_request": self.control_delete_subshell_request,
         }
         sys.excepthook = self.excepthook
 
@@ -178,7 +182,7 @@ class Kernel(ConnectionFileMixin):
             "implementation_version": _version.implementation_version,
             "language_info": _version.language_info,
             "banner": self.shell.banner,
-            "supported_features": [],
+            "supported_features": ["kernel subshells"],
         }
 
     @observe("user_module")
@@ -545,7 +549,7 @@ class Kernel(ConnectionFileMixin):
     async def execute_request(self, socket, ident, parent):
         content = parent["content"]
         silent = content["silent"]
-        if not silent:
+        if not silent and not parent["header"].get("subshell_id"):
             await self._exec_send_stream.send((time.monotonic(), socket, ident, parent))
         else:
             self.start_soon(self._execute_request, socket, ident, parent)
@@ -681,6 +685,37 @@ class Kernel(ConnectionFileMixin):
             msg_or_type="shutdown_reply",
             content=content,
             parent=msg,
+            ident=ident,
+        )
+
+    async def control_create_subshell_request(self, socket, ident, parent):
+        # Control thread
+        subshell_id = str(uuid.uuid4())
+        self._subshells.add(subshell_id)
+        self.session.send(
+            stream=socket,
+            msg_or_type="create_subshell_reply",
+            content={"status": "ok", "subshell_id": subshell_id},
+            parent=parent,
+            ident=ident,
+        )
+
+    async def control_list_subshell_request(self, socket, ident, parent):
+        self.session.send(
+            stream=socket,
+            msg_or_type="list_subshell_reply",
+            content={"status": "ok", "subshell_id": list(self._subshells)},
+            parent=parent,
+            ident=ident,
+        )
+
+    async def control_delete_subshell_request(self, socket, ident, parent):
+        self._subshells.discard(parent["content"]["subshell_id"])
+        self.session.send(
+            stream=socket,
+            msg_or_type="delete_subshell_reply",
+            content={"status": "ok"},
+            parent=parent,
             ident=ident,
         )
 
