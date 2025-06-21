@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Any, Literal, Self
 import anyio
 import anyio.from_thread
 import anyio.to_thread
-import sniffio
 import traitlets
 import zmq
 import zmq_anyio
@@ -89,7 +88,6 @@ class Kernel(ConnectionFileMixin):
     _sockets: Dict[SocketID, zmq_anyio.Socket] = Dict()
     _shell_handlers = Dict()
     _control_handlers = Dict()
-    _subshells: traitlets.Container[set[str]] = traitlets.Set()
 
     quiet = traitlets.Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
     outstream_class = traitlets.DottedObjectName(
@@ -153,9 +151,6 @@ class Kernel(ConnectionFileMixin):
         self._control_handlers = {
             "execute_request": self.control_execute_request,  # no task queue
             "shutdown_request": self.control_shutdown_request,
-            "create_subshell_request": self.control_create_subshell_request,
-            "list_subshell_request": self.control_list_subshell_request,
-            "delete_subshell_request": self.control_delete_subshell_request,
         }
         sys.excepthook = self.excepthook
 
@@ -177,15 +172,13 @@ class Kernel(ConnectionFileMixin):
 
     @property
     def kernel_info(self):
-        # Some weird bug results in a subshell_id NOT being set in the frontend with a trio backend
-        supported_features = [] if sniffio.current_async_library() == "trio" else ["kernel subshells"]
         return {
             "protocol_version": _version.kernel_protocol_version,
             "implementation": _version.implementation,
             "implementation_version": _version.implementation_version,
             "language_info": _version.language_info,
             "banner": self.shell.banner,
-            "supported_features": supported_features,
+            "supported_features": [],
         }
 
     @observe("user_module")
@@ -300,7 +293,7 @@ class Kernel(ConnectionFileMixin):
             ident=self._topic("debug_event"),
         )
 
-    async def _send_reply(self, socket: zmq_anyio.Socket, ident, parent, content: dict | None = None):
+    async def _send_reply(self, socket, ident, parent, content: dict | None = None):
         msg_type = parent["header"]["msg_type"].replace("request", "reply")
         content = content or {}
         if "status" not in content:
@@ -543,7 +536,7 @@ class Kernel(ConnectionFileMixin):
     async def execute_request(self, socket, ident, parent):
         content = parent["content"]
         silent = content["silent"]
-        if not silent and not parent["header"].get("subshell_id"):
+        if not silent:
             await self._exec_send_stream.send((time.monotonic(), socket, ident, parent))
         else:
             self.start_soon(self._execute_request, socket, ident, parent)
@@ -630,19 +623,6 @@ class Kernel(ConnectionFileMixin):
         """Handle a shutdown request."""
         reply_content = await self.do_shutdown(parent["content"]["restart"])
         await self._send_reply(socket, ident, parent, reply_content)
-
-    async def control_create_subshell_request(self, socket, ident, parent):
-        # Control thread
-        subshell_id = str(uuid.uuid4())
-        self._subshells.add(subshell_id)
-        await self._send_reply(socket, ident, parent, {"subshell_id": subshell_id})
-
-    async def control_list_subshell_request(self, socket, ident, parent):
-        await self._send_reply(socket, ident, parent, {"subshell_id": list(self._subshells)})
-
-    async def control_delete_subshell_request(self, socket, ident, parent):
-        self._subshells.discard(parent["content"]["subshell_id"])
-        await self._send_reply(socket, ident, parent)
 
     async def _do_execute(
         self,
