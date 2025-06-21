@@ -18,7 +18,7 @@ import uuid
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, Self, TypedDict
 
 import anyio
 import anyio.from_thread
@@ -48,6 +48,33 @@ if TYPE_CHECKING:
 
     from asynckernel.comm import CommManager
     from asynckernel.iostream import OutStream
+
+class MsgHeader(TypedDict):
+    # https://jupyter-client.readthedocs.io/en/stable/messaging.html#message-header
+    msg_id: str
+    session: str
+    username: str
+    date: str
+    msg_type: str
+    version: str
+    subshell_id: NotRequired[str | None]
+
+
+class MsgType(TypedDict):
+    header: MsgHeader
+    parent_header: MsgHeader
+    metadata: dict[str, Any]
+    content: dict[str, dict]
+    buffers: list[bytearray | bytes]
+
+
+class MsgRequest(TypedDict):
+    "A message associated with the socket and ident"
+
+    socket: zmq_anyio.Socket
+    ident: list[bytes | bytearray]
+    parent: dict
+    msg_type: str
 
 
 class SocketID(enum.StrEnum):
@@ -155,22 +182,6 @@ class Kernel(ConnectionFileMixin):
         sys.excepthook = self.excepthook
 
     @property
-    def parent_msg(self):
-        """The message of the most recent execution request."""
-        try:
-            return self._parent_msg
-        except AttributeError:
-            return {}
-
-    @property
-    def parent_ident(self):
-        """The ident of the most recent execution request."""
-        try:
-            return self._parent_ident
-        except AttributeError:
-            return []
-
-    @property
     def kernel_info(self):
         return {
             "protocol_version": _version.kernel_protocol_version,
@@ -233,35 +244,36 @@ class Kernel(ConnectionFileMixin):
                     continue
                 copy = not isinstance(msg_[0], zmq.Message)
                 ident, msg_ = self.session.feed_identities(msg_, copy=copy)
-                msg = self.session.deserialize(msg_, content=True, copy=copy)
-                msg_type = msg["header"]["msg_type"]
+                parent = self.session.deserialize(msg_, content=True, copy=copy)
+                msg_type = parent["header"]["msg_type"]
                 self.log.debug("\n*** MESSAGE TYPE:%s***", msg_type)
-                self.log.debug("   Content: %s\n   --->\n   ", msg["content"])
-                await process_message(socket, ident, msg, msg_type)
+                self.log.debug("   Content: %s\n   --->\n   ", parent["content"])
+                await process_message(MsgRequest(socket=socket, ident=ident, parent=parent, msg_type=msg_type))
 
     async def _run_control_loop(self, task_status: TaskStatus):
         # Inside control thread
         # This code runs in a different thread having its own async event loop
         await self._receive_msg_loop(SocketID.control, task_status=task_status)
 
-    async def _process_control(self, socket, ident, parent, msg_type):
+    async def _process_control(self, job: MsgRequest):
         # Inside control thread
 
         # Execute_requests
+        msg_type = job["msg_type"]
         handler = self._control_handlers.get(msg_type) or self._shell_handlers.get(msg_type)
         if not handler:
             self.log.error("Unknown message type: %r", msg_type)
         else:
             try:
-                self._publish_status("busy", parent)
-                await handler(socket, ident, parent)
+                self._publish_status("busy", job)
+                await handler(job)
             except Exception as e:
-                self.log.error("Exception in message handler:", exc_info=e)
+                await self._send_error_reply(job, ename=str(type(e).__name__), evalue=str(e))
             except KeyboardInterrupt:
                 # Ctrl-c shouldn't crash the kernel here.
                 self.log.error("KeyboardInterrupt caught in kernel.")
             finally:
-                self._publish_status("idle", parent)
+                self._publish_status("idle", job)
 
     def _load_socket(self, socket_id: SocketID, socket_type: zmq.SocketType, linger: int):
         if socket_id in self._sockets:
@@ -276,49 +288,28 @@ class Kernel(ConnectionFileMixin):
         self.log.debug("{%} {%} Channel on port: %i", socket_id, socket_type.name, port)
         return socket
 
-    def _publish_status(self, status: Literal["busy", "idle"], parent):
+    def _publish_status(self, status: Literal["busy", "idle"], job: MsgRequest):
         """send status (busy/idle) on IOPub"""
         self.pubio_send(
             msg_or_type="status",
             content={"execution_state": status},
-            parent=parent,
+            parent=job["parent"],
             ident=self._topic("status"),
         )
 
-    def _publish_debug_event(self, event):
-        self.pubio_send(
-            msg_or_type="debug_event",
-            content=event,
-            parent=self.parent_msg,
-            ident=self._topic("debug_event"),
-        )
-
-    async def _send_reply(self, socket, ident, parent, content: dict | None = None):
-        msg_type = parent["header"]["msg_type"].replace("request", "reply")
+    async def _send_reply(self, job: MsgRequest, content: dict | None = None):
+        msg_type = job["msg_type"].replace("request", "reply")
         content = content or {}
         if "status" not in content:
             content["status"] = "ok"
-        msg = self.session.msg(msg_type, content, parent=parent)
-        to_send = self.session.serialize(msg, ident)
-        await socket.asend_multipart(to_send, copy=False).wait()
+        msg = self.session.msg(msg_type, content, parent=job["parent"])
+        to_send = self.session.serialize(msg, job["ident"])
+        await job["socket"].asend_multipart(to_send, copy=False).wait()
 
-    def _set_parent_ident(self, parent, ident):
-        self._parent_msg = parent
-        self._parent_ident = ident
-        self.shell.set_parent(parent)
-
-    def _send_error_reply(
-        self,
-        socket: zmq_anyio.Socket,
-        ident,
-        msg: dict,
-        *,
-        ename="RuntimeError",
-        evalue="",
-        traceback: list[str] | None = None,
+    async def _send_error_reply(
+        self, job: MsgRequest, *, ename="RuntimeError", evalue="", traceback: list[str] | None = None
     ):
         "Send a reply to the request"
-        msg_or_type = msg["header"]["msg_type"].replace("request", "reply")
         content = {
             "status": "error",
             "execution_count": self.shell.execution_count,
@@ -326,57 +317,51 @@ class Kernel(ConnectionFileMixin):
             "evalue": evalue,
             "traceback": traceback or [],
         }
-        self.session.send(stream=socket, msg_or_type=msg_or_type, content=content, ident=ident, parent=msg)
+        await self._send_reply(job, content)
 
-    async def _process_shell(self, socket, ident, parent, msg_type):
+    async def _process_shell(self, job: MsgRequest):
+        msg_type = job["msg_type"]
         if msg_type == "execute_request":
-            await self.execute_request(socket, ident, parent)
+            await self.execute_request(job)
         else:
             handler = self._shell_handlers.get(msg_type)
             if handler is None:
                 self.log.error("Unknown message type: %r", msg_type)
             else:
                 try:
-                    self._publish_status("busy", parent)
-                    await handler(socket, ident, parent)
+                    self._publish_status("busy", job)
+                    await handler(job)
                 except Exception as e:
                     self.log.error("Exception in message handler:", exc_info=e)
                 except KeyboardInterrupt:
                     # Ctrl-c shouldn't crash the self here.
                     self.log.error("KeyboardInterrupt caught in kernel.")
                 finally:
-                    self._publish_status("idle", parent)
+                    self._publish_status("idle", job)
 
     async def _shell_execute_request_loop(self, *, task_status: TaskStatus):
-        self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[
-            tuple[float, zmq_anyio.Socket, list[bytes | bytearray], dict]
-        ](max_buffer_size=1000)
+        self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[tuple[float, MsgRequest]](
+            max_buffer_size=1000
+        )
         async with self._exec_receive_stream as receive_stream:
             task_status.started()
-            async for received_time, socket, ident, msg in receive_stream:
+            async for received_time, job in receive_stream:
                 try:
                     if received_time < self._stop_on_error_time:
-                        self.log.info("Aborting execute_request: %s", msg["header"]["msg_id"])
-                        self._send_error_reply(
-                            socket=socket,
-                            ident=ident,
-                            msg=msg,
-                            evalue="Aborting due to prior exception",
-                        )
+                        self.log.info("Aborting execute_request: %s", job)
+                        await self._send_error_reply(job, evalue="Aborting due to prior exception")
                         continue
-                    await self._execute_request(socket, ident, msg)
+                    await self._execute_request(job)
                 except BaseException as e:
                     self.log.exception("Execute request", exc_info=e)
-                    self._send_error_reply(
-                        socket=socket,
-                        ident=ident,
-                        msg=msg,
+                    await self._send_error_reply(
+                        job,
                         ename=str(type(e).__name__),
                         evalue=str(e),
                         traceback=traceback.format_stack(),
                     )
                 finally:
-                    self._publish_status("idle", msg)
+                    self._publish_status("idle", job)
 
     async def _start_soon_scheduler(self, tg: TaskGroup, *, task_status: TaskStatus):
         "Orderly schedule starting a coroutine"
@@ -419,8 +404,8 @@ class Kernel(ConnectionFileMixin):
             stream=socket,
             msg_or_type="input_request",
             content={"prompt": prompt, "password": password},
-            parent=self.parent_msg,
-            ident=self.parent_ident,
+            parent=self._job["parent"],
+            ident=self._job["ident"],
         )
         # Await a response.
         while True:
@@ -445,7 +430,7 @@ class Kernel(ConnectionFileMixin):
         try:
             value = reply["content"]["value"]  # type:ignore[index]
         except Exception:
-            self.log.error("Bad input_reply: %s", self.parent_msg)
+            self.log.error("Bad input_reply: %s", self._job["parent"])
             value = ""
         if value == "\x04":
             # EOF
@@ -517,45 +502,45 @@ class Kernel(ConnectionFileMixin):
             if isinstance(stdout, outstream_factory):
                 stdout.close()
 
-    async def kernel_info_request(self, socket, ident, parent):
+    async def kernel_info_request(self, job: MsgRequest):
         """Handle a kernel info request."""
 
-        await self._send_reply(socket, ident, parent, self.kernel_info)
+        await self._send_reply(job, self.kernel_info)
 
-    async def comm_info_request(self, socket, ident, parent):
+    async def comm_info_request(self, job: MsgRequest):
         """Handle a comm info request."""
-        content = parent["content"]
+        content = job["parent"]["content"]
         target_name = content.get("target_name", None)
         comms = {
             k: {"target_name": v.target_name}
             for (k, v) in tuple(self.comm_manager.comms.items())
             if v.target_name == target_name or target_name is None
         }
-        await self._send_reply(socket, ident, parent, {"comms": comms})
+        await self._send_reply(job, {"comms": comms})
 
-    async def execute_request(self, socket, ident, parent):
-        content = parent["content"]
+    async def execute_request(self, job: MsgRequest):
+        content = job["parent"]["content"]
         silent = content["silent"]
         if not silent:
-            await self._exec_send_stream.send((time.monotonic(), socket, ident, parent))
+            await self._exec_send_stream.send((time.monotonic(), job))
         else:
-            self.start_soon(self._execute_request, socket, ident, parent)
+            self.start_soon(self._execute_request, job)
 
-    async def _execute_request(self, socket, ident, parent):
+    async def _execute_request(self, job: MsgRequest):
         """handle an execute_request"""
-        content = parent["content"]
+        content = job["parent"]["content"]
         silent = content["silent"]
         stop_on_error = content.pop("stop_on_error", True)
-        self._publish_status("busy", parent)
+        self._publish_status("busy", job)
         try:
             # Re-broadcast our input for the benefit of listening clients, and
             # start computing output
             if not silent:
-                self._set_parent_ident(parent, ident)
+                self._job = job
                 self.pubio_send(
                     msg_or_type="execute_input",
                     content={"code": content["code"], "execution_count": self.shell.execution_count},
-                    parent=parent,
+                    parent=job["parent"],
                     ident=self._topic("execute_input"),
                 )
             # Call do_execute with the appropriate arguments
@@ -564,65 +549,66 @@ class Kernel(ConnectionFileMixin):
                 self._stop_on_error_time = time.monotonic()
                 self.log.info("An error occurred in a non-silent execution request at %s", self._stop_on_error_time)
             # Send the reply.
-            await self._send_reply(socket, ident, parent, reply_content)
+            await self._send_reply(job, reply_content)
         except Exception as e:
-            self._send_error_reply(socket, parent, ident, ename=e.__class__.__name__, evalue=str(e))
+            await self._send_error_reply(job, ename=e.__class__.__name__, evalue=str(e))
         finally:
-            self._publish_status("idle", parent)
+            self._publish_status("idle", job)
 
-    async def interrupt_request(self, socket, ident, parent):
+    async def interrupt_request(self, job: MsgRequest):
         """Handle an interrupt request."""
 
         for event in self._interrupt_events:
             event.set()
-        await self._send_reply(socket, ident, parent)
+        await self._send_reply(job)
 
-    async def complete_request(self, socket, ident, parent):
+    async def complete_request(self, job: MsgRequest):
         """Handle a completion request."""
+        parent = job["parent"]
         matches = await self.do_complete(parent["content"]["code"], parent["content"]["cursor_pos"])
-        await self._send_reply(socket, ident, parent, matches)
+        await self._send_reply(job, matches)
 
-    async def is_complete_request(self, socket, ident, parent):
+    async def is_complete_request(self, job: MsgRequest):
         """Handle an is_complete request."""
-        reply_content = await self.do_is_complete(parent["content"]["code"])
-        await self._send_reply(socket, ident, parent, reply_content)
+        reply_content = await self.do_is_complete(job["parent"]["content"]["code"])
+        await self._send_reply(job, reply_content)
 
-    async def inspect_request(self, socket, ident, parent):
+    async def inspect_request(self, job: MsgRequest):
         """Handle an inspect request."""
-        content = parent["content"]
+        content = job["parent"]["content"]
         reply_content = await self.do_inspect(
             content["code"],
             content["cursor_pos"],
             content.get("detail_level", 0),
             set(content.get("omit_sections", [])),
         )
-        await self._send_reply(socket, ident, parent, reply_content)
+        await self._send_reply(job, reply_content)
 
-    async def history_request(self, socket, ident, parent):
+    async def history_request(self, job: MsgRequest):
         """Handle a history request."""
-        reply_content = await self.do_history(**parent["content"])
-        await self._send_reply(socket, ident, parent, reply_content)
+        reply_content = await self.do_history(**job["parent"]["content"])
+        await self._send_reply(job, reply_content)
 
-    async def comm_open(self, socket, ident, parent):
-        self.comm_manager.comm_open(socket, ident, parent)
+    async def comm_open(self, job: MsgRequest):
+        self.comm_manager.comm_open(job["socket"], job["ident"], job["parent"])  # type: ignore[call-arg]
 
-    async def comm_msg(self, socket, ident, parent):
-        self.comm_manager.comm_msg(socket, ident, parent)
+    async def comm_msg(self, job: MsgRequest):
+        self.comm_manager.comm_msg(job["socket"], job["ident"], job["parent"])  # type: ignore[call-arg]
 
-    async def comm_close(self, socket, ident, parent):
-        self.comm_manager.comm_close(socket, ident, parent)
+    async def comm_close(self, job: MsgRequest):
+        self.comm_manager.comm_close(job["socket"], job["ident"], job["parent"])  # type: ignore[call-arg]
 
-    async def control_execute_request(self, socket, ident, parent):
-        content = parent["content"]
+    async def control_execute_request(self, job: MsgRequest):
+        content = job["parent"]["content"]
         # Override setting
         content["silent"] = True
         content["allow_stdin"] = False
-        self.start_soon(self._execute_request, socket, ident, parent)
+        self.start_soon(self._execute_request, job)
 
-    async def control_shutdown_request(self, socket, ident, parent):
+    async def control_shutdown_request(self, job: MsgRequest):
         """Handle a shutdown request."""
-        reply_content = await self.do_shutdown(parent["content"]["restart"])
-        await self._send_reply(socket, ident, parent, reply_content)
+        reply_content = await self.do_shutdown(job["parent"]["content"]["restart"])
+        await self._send_reply(job, reply_content)
 
     async def _do_execute(
         self,
@@ -819,7 +805,7 @@ class Kernel(ConnectionFileMixin):
         metadata: dict[str, Any] | None = None,
         parent: dict[str, Any] | None = None,
         ident: bytes | list[bytes] | None = None,
-        buffers: list[bytes | bytearray] | None = None,
+        buffers: list[bytes] | None = None,
     ):
         "Send the message on the iopub socket"
         if threading.current_thread() is not threading.main_thread():
@@ -834,7 +820,7 @@ class Kernel(ConnectionFileMixin):
             msg_or_type=msg_or_type,
             content=content,
             metadata=metadata,
-            parent=parent or self.parent_msg,
+            parent=parent if parent is not None else self._job.get("parent"),
             ident=ident,
             buffers=buffers,
         )

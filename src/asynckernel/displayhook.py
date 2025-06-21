@@ -7,7 +7,6 @@ from __future__ import annotations
 import typing as t
 
 from IPython.core.displayhook import DisplayHook
-from jupyter_client.session import extract_header
 from traitlets import Dict, Instance
 
 if t.TYPE_CHECKING:
@@ -20,37 +19,27 @@ class ZMQShellDisplayHook(DisplayHook):
     representations of the object."""
 
     kernel: Instance[Kernel] = Instance("asynckernel.Kernel", ())
-    parent_header = Dict()
-    msg: dict[str, t.Any] | None = None
+    content: Dict[str, t.Any] = Dict()
 
-    def set_parent(self, parent):
+    def set_job(self, job):
         """Set the parent for outbound messages."""
-        self.parent_header = extract_header(parent)
+        self.job = job
 
     def start_displayhook(self):
         """Start the display hook."""
-        self.msg = self.kernel.session.msg(
-            msg_type="execute_result",
-            content={
-                "data": {},
-                "metadata": {},
-            },
-            parent=self.parent_header,
-        )
+        self.content = {}
 
     def write_output_prompt(self):
         """Write the output prompt."""
-        if self.msg:
-            self.msg["content"]["execution_count"] = self.prompt_count
+        self.content["execution_count"] = self.prompt_count
 
     def write_format_data(self, format_dict, md_dict=None):
         """Write format data to the message."""
-        if self.msg:
-            self.msg["content"]["data"] = format_dict
-            self.msg["content"]["metadata"] = md_dict
+        self.content["data"] = format_dict
+        self.content["metadata"] = md_dict
 
     def finish_displayhook(self):
         """Finish up all displayhook activities."""
-        if self.msg and self.msg["content"]["data"]:
-            self.kernel.pubio_send(self.msg, parent=self.parent_header)
-        self.msg = None
+        if self.content:
+            self.kernel.pubio_send("display_data", content=self.content)
+            self.content = {}

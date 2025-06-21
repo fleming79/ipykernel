@@ -10,7 +10,7 @@ from IPython.core.error import StdinNotImplementedError
 from IPython.core.interactiveshell import InteractiveShell, InteractiveShellABC
 from IPython.core.usage import default_banner
 from jupyter_client.session import extract_header
-from traitlets import CBool, CBytes, Dict, Instance, Type, default, observe
+from traitlets import CBool, CBytes, Instance, Type, default, observe
 from typing_extensions import override
 
 from asynckernel.displayhook import ZMQShellDisplayHook
@@ -23,7 +23,6 @@ class ZMQDisplayPublisher(DisplayPublisher):
     """A display publisher that publishes data using a ZeroMQ PUB socket."""
 
     kernel: Instance[Kernel] = Instance("asynckernel.Kernel", ())
-    parent_header = Dict({})
     topic = CBytes(b"display_data")
 
     def set_parent(self, parent):
@@ -60,7 +59,6 @@ class ZMQDisplayPublisher(DisplayPublisher):
         self.kernel.pubio_send(
             msg_or_type="update_display_data" if update else "display_data",
             content={"data": data, "metadata": metadata or {}, "transient": transient or {}} | kwargs,
-            parent=self.parent_header,
             ident=self.topic,
         )
 
@@ -76,12 +74,7 @@ class ZMQDisplayPublisher(DisplayPublisher):
             This reduces bounce during repeated clear & display loops.
 
         """
-        self.kernel.pubio_send(
-            msg_or_type="clear_output",
-            content={"wait": wait},
-            parent=self.parent_header,
-            ident=self.topic,
-        )
+        self.kernel.pubio_send(msg_or_type="clear_output", content={"wait": wait}, ident=self.topic)
 
 
 class ZMQInteractiveShell(InteractiveShell):
@@ -92,7 +85,6 @@ class ZMQInteractiveShell(InteractiveShell):
     displayhook: Instance[ZMQShellDisplayHook]
     display_pub: Instance[ZMQDisplayPublisher]
     kernel: Instance[Kernel] = Instance("asynckernel.Kernel", ())
-    parent_header = Dict()
 
     @default("banner1")
     def _default_banner1(self):
@@ -143,23 +135,9 @@ class ZMQInteractiveShell(InteractiveShell):
         ename = str(etype.__name__)
         if ename == "KeyboardInterrupt":
             stb.pop(-2)
-        self.kernel.pubio_send(
-            msg_or_type="error",
-            content={"traceback": stb, "ename": ename, "evalue": str(evalue)},
-            parent=self.parent_header,
-        )
+        self.kernel.pubio_send(msg_or_type="error", content={"traceback": stb, "ename": ename, "evalue": str(evalue)})
         # store the formatted traceback
         self._last_traceback = stb
-
-    def set_parent(self, parent):
-        """Set the parent header for associating output with its triggering input"""
-        self.parent_header = parent
-        self.displayhook.set_parent(parent)
-        self.display_pub.set_parent(parent)
-
-    def get_parent(self):
-        """Get the parent header."""
-        return self.parent_header
 
 
 InteractiveShellABC.register(ZMQInteractiveShell)

@@ -177,10 +177,6 @@ async def test_is_complete_request(client):
     assert reply["header"]["msg_type"] == "is_complete_reply"
 
 
-async def test_publish_debug_event(kernel):
-    kernel._publish_debug_event({})
-
-
 async def test_properties(kernel) -> None:
     class user_mod:
         __dict__ = {}

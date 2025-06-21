@@ -56,7 +56,7 @@ class Comm(BaseComm):
             msg_or_type=msg_type,
             content=content,
             metadata=metadata,
-            parent=kernel.parent_msg,
+            parent={},
             ident=self.topic,
             buffers=buffers,
         )
