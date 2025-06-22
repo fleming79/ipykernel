@@ -83,7 +83,7 @@ async def test_is_complete(client):
     assert reply["content"]["status"] == "complete"
 
 
-async def test_message_order(client, kernel):
+async def test_message_order(client):
     N = 100  # number of messages to test
 
     _, reply = await utils.execute(client, "a = 1")
