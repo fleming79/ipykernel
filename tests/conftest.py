@@ -2,6 +2,7 @@ import os
 import sys
 from typing import TYPE_CHECKING
 
+import anyio
 import pytest
 from jupyter_client.asynchronous.client import AsyncKernelClient
 
@@ -42,3 +43,4 @@ async def client(kernel: Kernel):
         yield client
     finally:
         client.stop_channels()
+        await anyio.sleep(0)
