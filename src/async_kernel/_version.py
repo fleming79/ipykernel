@@ -5,6 +5,7 @@ store the current version info of the server.
 from __future__ import annotations
 
 import re
+import sys
 
 # Version string must appear intact for hatch versioning
 __version__ = "0.0.0a1"
@@ -25,9 +26,9 @@ implementation_version = " 0.1"
 
 language_info = {
     "name": "python",
-    "version": "3",
+    "version": ".".join(map(str, sys.version_info)),
     "mimetype": "text/x-python",
-    "codemirror_mode": {"name": "ipython", "version": "3"},
+    "codemirror_mode": {"name": "ipython", "version": 3},
     "pygments_lexer": "ipython3",
     "nbconvert_exporter": "python",
     "file_extension": ".py",
