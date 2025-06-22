@@ -6,7 +6,7 @@ import anyio
 import pytest
 from jupyter_client.asynchronous.client import AsyncKernelClient
 
-from asynckernel.kernel import Kernel
+from async_kernel.kernel import Kernel
 
 if TYPE_CHECKING:
     pytest_plugins = ["anyio.pytest_plugin"]
@@ -27,7 +27,7 @@ def anyio_backend():
 @pytest.fixture(scope="session")
 async def kernel(anyio_backend, tmp_path_factory):
     # Set a blank connection_file
-    connection_file = tmp_path_factory.mktemp("asynckernel") / "temp_connection.json"
+    connection_file = tmp_path_factory.mktemp("async_kernel") / "temp_connection.json"
     kernel = Kernel()
     kernel.connection_file = str(connection_file.resolve())
     async with kernel.start_in_context():
@@ -36,7 +36,7 @@ async def kernel(anyio_backend, tmp_path_factory):
 
 @pytest.fixture(scope="session")
 async def client(kernel: Kernel):
-    client: AsyncKernelClient = AsyncKernelClient()
+    client = AsyncKernelClient()
     client.load_connection_info(kernel.get_connection_info())
     client.start_channels()
     try:

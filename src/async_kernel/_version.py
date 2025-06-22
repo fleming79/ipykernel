@@ -20,7 +20,7 @@ version_info = tuple(parts)
 
 kernel_protocol_version_info = (5, 4)
 kernel_protocol_version = "{}.{}".format(*kernel_protocol_version_info)
-implementation = "asynckernel"
+implementation = "async_kernel"
 implementation_version = " 0.1"
 
 language_info = {

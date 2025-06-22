@@ -8,7 +8,7 @@ import shutil
 import pytest
 from jupyter_client.kernelspec import KernelSpec
 
-from asynckernel.kernelspec import RESOURCES, AsyncMode, write_kernel_spec
+from async_kernel.kernelspec import RESOURCES, AsyncMode, write_kernel_spec
 
 
 @pytest.mark.parametrize("async_mode", list(AsyncMode))

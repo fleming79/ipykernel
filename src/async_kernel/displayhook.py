@@ -10,7 +10,7 @@ from IPython.core.displayhook import DisplayHook
 from traitlets import Dict, Instance
 
 if t.TYPE_CHECKING:
-    from asynckernel.kernel import Kernel
+    from async_kernel.kernel import Kernel
 
 
 class ZMQShellDisplayHook(DisplayHook):
@@ -18,7 +18,7 @@ class ZMQShellDisplayHook(DisplayHook):
     to work with an InteractiveShell instance. It sends a dict of different
     representations of the object."""
 
-    kernel: Instance[Kernel] = Instance("asynckernel.Kernel", ())
+    kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
     content: Dict[str, t.Any] = Dict()
 
     def set_job(self, job):

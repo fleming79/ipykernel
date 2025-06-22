@@ -3,7 +3,8 @@ requires = ["hatchling>=1.4", "jupyter_client>=8"]
 build-backend = "hatchling.build"
 
 [project]
-name = "asynckernel"
+name = "async_kernel"
+
 dynamic = ["version"]
 authors = [{name = "IPython Development Team", email = "ipython-dev@python.org"}]
 license = {file = "LICENSE"}
@@ -36,12 +37,12 @@ dependencies = [
 
 [project.urls]
 # Homepage = "https://ipython.org"
-# Documentation = "https://asynckernel.readthedocs.io"
+# Documentation = "https://async_kernel.readthedocs.io"
 # Source = "https://github.com/ipython/ipykernel"
 # Tracker = "https://github.com/ipython/ipykernel/issues"
 
 [project.scripts]
-asynckernel = "asynckernel.__main__:launch"
+async_kernel = "async_kernel.__main__:launch"
 
 [project.optional-dependencies]
 docs = [
@@ -72,7 +73,7 @@ cov = [
 ]
 
 [tool.hatch.version]
-path = "src/asynckernel/_version.py"
+path = "src/async_kernel/_version.py"
 
 # Used to call hatch_build.py
 [tool.hatch.build.hooks.custom]
@@ -97,7 +98,7 @@ nowarn = "test -W default {args}"
 [tool.hatch.envs.cov]
 features = ["test", "cov"]
 [tool.hatch.envs.cov.scripts]
-test = "python -m pytest -vv --cov asynckernel --cov-branch --cov-report term-missing:skip-covered {args}"
+test = "python -m pytest -vv --cov async_kernel --cov-branch --cov-report term-missing:skip-covered {args}"
 nowarn = "test -W default {args}"
 
 [[tool.hatch.envs.cov.matrix]]
@@ -179,7 +180,7 @@ exclude_lines = [
 
 [tool.coverage.run]
 relative_files = true
-source = ["asynckernel"]
+source = ["async_kernel"]
 omit = ["tests/*"]
 
 [tool.ruff]
@@ -252,7 +253,7 @@ fail-under=95
 exclude = ["docs", "tests"]
 
 [tool.check-wheel-contents]
-toplevel = ["asynckernel/"]
+toplevel = ["async_kernel/"]
 ignore = ["W002"]
 
 [tool.repo-review]

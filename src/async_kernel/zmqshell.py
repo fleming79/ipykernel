@@ -13,16 +13,16 @@ from jupyter_client.session import extract_header
 from traitlets import CBool, CBytes, Instance, Type, default, observe
 from typing_extensions import override
 
-from asynckernel.displayhook import ZMQShellDisplayHook
+from async_kernel.displayhook import ZMQShellDisplayHook
 
 if TYPE_CHECKING:
-    from asynckernel.kernel import Kernel
+    from async_kernel.kernel import Kernel
 
 
 class ZMQDisplayPublisher(DisplayPublisher):
     """A display publisher that publishes data using a ZeroMQ PUB socket."""
 
-    kernel: Instance[Kernel] = Instance("asynckernel.Kernel", ())
+    kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
     topic = CBytes(b"display_data")
 
     def set_parent(self, parent):
@@ -84,7 +84,7 @@ class ZMQInteractiveShell(InteractiveShell):
     display_pub_class = Type(ZMQDisplayPublisher)
     displayhook: Instance[ZMQShellDisplayHook]
     display_pub: Instance[ZMQDisplayPublisher]
-    kernel: Instance[Kernel] = Instance("asynckernel.Kernel", ())
+    kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
 
     @default("banner1")
     def _default_banner1(self):

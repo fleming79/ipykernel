@@ -1,6 +1,6 @@
 import unittest.mock
 
-from asynckernel.comm import Comm, CommManager
+from async_kernel.comm import Comm, CommManager
 
 
 async def test_comm(kernel) -> None:
