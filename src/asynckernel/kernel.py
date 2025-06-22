@@ -89,7 +89,7 @@ class SocketID(enum.StrEnum):
 class Kernel(ConnectionFileMixin):
     """An async kernel with an anyio backend providing an IPython InteractiveShell with zmq.
 
-    To start the kernel
+    To start the kernel.
 
     Direct
 
@@ -100,7 +100,8 @@ class Kernel(ConnectionFileMixin):
     Inside an already running asycio context.
 
     ``` python
-    async with Kernel().start_in_context() as kernel:
+    kernel = Kernel()
+    async with kernel.start_in_context():
         await anyio.sleep_forever()
     ```
 
