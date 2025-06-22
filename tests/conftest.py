@@ -13,6 +13,13 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.anyio
 
+if sys.platform.startswith("win"):
+    import asyncio
+
+    # needed for `jupyter_client.AsyncKernelClient` messaging only
+    # ref: https://github.com/zeromq/pyzmq/issues/1423
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 
 @pytest.hookimpl
 def pytest_configure(config):
@@ -28,6 +35,7 @@ def anyio_backend():
 async def kernel(anyio_backend, tmp_path_factory):
     # Set a blank connection_file
     connection_file = tmp_path_factory.mktemp("async_kernel") / "temp_connection.json"
+    os.environ["IPYTHONDIR"] = str(tmp_path_factory.mktemp("ipython_config"))
     kernel = Kernel()
     kernel.connection_file = str(connection_file.resolve())
     async with kernel.start_in_context():

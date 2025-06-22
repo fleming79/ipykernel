@@ -276,7 +276,7 @@ class Kernel(ConnectionFileMixin):
             try:
                 await handler(job)
             except Exception as e:
-                await self._send_error_reply(job, ename=str(type(e).__name__), evalue=str(e))
+                self._send_error_reply(job, ename=str(type(e).__name__), evalue=str(e))
             except KeyboardInterrupt:
                 # Ctrl-c shouldn't crash the kernel here.
                 self.log.error("KeyboardInterrupt caught in kernel.")
@@ -320,7 +320,7 @@ class Kernel(ConnectionFileMixin):
             ident=self._topic("status"),
         )
 
-    async def _send_reply(self, job: MsgRequest, content: dict | None = None):
+    def _send_reply(self, job: MsgRequest, content: dict | None = None):
         content = content or {}
         if "status" not in content:
             content["status"] = "ok"
@@ -333,7 +333,7 @@ class Kernel(ConnectionFileMixin):
         )
         self.log.debug("%s", job)
 
-    async def _send_error_reply(
+    def _send_error_reply(
         self, job: MsgRequest, *, ename="RuntimeError", evalue="", traceback: list[str] | None = None
     ):
         "Send a reply to the request"
@@ -344,7 +344,7 @@ class Kernel(ConnectionFileMixin):
             "evalue": evalue,
             "traceback": traceback or [],
         }
-        await self._send_reply(job, content)
+        self._send_reply(job, content)
 
     async def _process_shell(self, job: MsgRequest):
         msg_type = job["msg_type"]
@@ -359,6 +359,9 @@ class Kernel(ConnectionFileMixin):
                     self._publish_status("busy", job)
                     await handler(job)
                 except Exception as e:
+                    self._send_error_reply(
+                        job, ename=str(type(e).__name__), evalue=str(e), traceback=traceback.format_stack()
+                    )
                     self.log.error("Exception in message handler:", exc_info=e)
                 except KeyboardInterrupt:
                     # Ctrl-c shouldn't crash the self here.
@@ -376,12 +379,12 @@ class Kernel(ConnectionFileMixin):
                 try:
                     if received_time < self._stop_on_error_time:
                         self.log.info("Aborting execute_request: %s", job)
-                        await self._send_error_reply(job, evalue="Aborting due to prior exception")
+                        self._send_error_reply(job, evalue="Aborting due to prior exception")
                         continue
                     await self._execute_request(job)
                 except BaseException as e:
                     self.log.exception("Execute request", exc_info=e)
-                    await self._send_error_reply(
+                    self._send_error_reply(
                         job,
                         ename=str(type(e).__name__),
                         evalue=str(e),
@@ -530,7 +533,7 @@ class Kernel(ConnectionFileMixin):
     async def kernel_info_request(self, job: MsgRequest):
         """Handle a kernel info request."""
 
-        await self._send_reply(job, self.kernel_info)
+        self._send_reply(job, self.kernel_info)
 
     async def comm_info_request(self, job: MsgRequest):
         """Handle a comm info request."""
@@ -541,7 +544,7 @@ class Kernel(ConnectionFileMixin):
             for (k, v) in tuple(self.comm_manager.comms.items())
             if v.target_name == target_name or target_name is None
         }
-        await self._send_reply(job, {"comms": comms})
+        self._send_reply(job, {"comms": comms})
 
     async def execute_request(self, job: MsgRequest):
         content = job["parent"]["content"]
@@ -574,9 +577,9 @@ class Kernel(ConnectionFileMixin):
                 self._stop_on_error_time = time.monotonic()
                 self.log.info("An error occurred in a non-silent execution request at %s", self._stop_on_error_time)
             # Send the reply.
-            await self._send_reply(job, reply_content)
+            self._send_reply(job, reply_content)
         except Exception as e:
-            await self._send_error_reply(job, ename=e.__class__.__name__, evalue=str(e))
+            self._send_error_reply(job, ename=e.__class__.__name__, evalue=str(e))
         finally:
             self._publish_status("idle", job)
 
@@ -585,18 +588,18 @@ class Kernel(ConnectionFileMixin):
 
         for event in self._interrupt_events:
             event.set()
-        await self._send_reply(job)
+        self._send_reply(job)
 
     async def complete_request(self, job: MsgRequest):
         """Handle a completion request."""
         parent = job["parent"]
         matches = await self.do_complete(parent["content"]["code"], parent["content"]["cursor_pos"])
-        await self._send_reply(job, matches)
+        self._send_reply(job, matches)
 
     async def is_complete_request(self, job: MsgRequest):
         """Handle an is_complete request."""
         reply_content = await self.do_is_complete(job["parent"]["content"]["code"])
-        await self._send_reply(job, reply_content)
+        self._send_reply(job, reply_content)
 
     async def inspect_request(self, job: MsgRequest):
         """Handle an inspect request."""
@@ -607,12 +610,12 @@ class Kernel(ConnectionFileMixin):
             content.get("detail_level", 0),
             set(content.get("omit_sections", [])),
         )
-        await self._send_reply(job, reply_content)
+        self._send_reply(job, reply_content)
 
     async def history_request(self, job: MsgRequest):
         """Handle a history request."""
         reply_content = await self.do_history(**job["parent"]["content"])
-        await self._send_reply(job, reply_content)
+        self._send_reply(job, reply_content)
 
     async def comm_open(self, job: MsgRequest):
         self.comm_manager.comm_open(self._sockets[job["socket_id"]], job["ident"], job["parent"])  # type: ignore[call-arg]
@@ -633,7 +636,7 @@ class Kernel(ConnectionFileMixin):
     async def control_shutdown_request(self, job: MsgRequest):
         """Handle a shutdown request."""
         reply_content = await self.do_shutdown(job["parent"]["content"]["restart"])
-        await self._send_reply(job, reply_content)
+        self._send_reply(job, reply_content)
 
     async def _do_execute(
         self,
@@ -933,7 +936,7 @@ class Kernel(ConnectionFileMixin):
             from anyio._core._asyncio_selector_thread import get_selector  # noqa: PLC0415
 
             selector = get_selector()
-            selector._thread.pydev_do_not_trace = True
+            selector._thread.pydev_do_not_trace = True  # type: ignore[assignment]
         try:
             anyio.run(_start, backend="trio" if kernel_name is KernelName.trio else "asyncio")
         finally:

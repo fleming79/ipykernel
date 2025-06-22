@@ -133,6 +133,7 @@ async def test_inspect_request(client):
 async def test_history_request(client, kernel):
     assert kernel.shell
     # assert kernel.shell.history_manager
+
     # kernel.shell.history_manager.db = DummyDB()
     reply = await utils.send_shell_message(client, "history_request", {"hist_access_type": "", "output": "", "raw": ""})
     assert reply["header"]["msg_type"] == "history_reply"
