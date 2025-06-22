@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from anyio.abc import TaskGroup, TaskStatus
 
 
-
 def start_anyio_thread(
     func: Callable[[TaskStatus], CoroutineType],
     stop_event: threading.Event,
@@ -116,4 +115,3 @@ def bind_socket(socket: zmq.Socket, transport: Literal["tcp", "ipc"], ip: str, p
                 raise
     msg = f"Failed to bind a {socket}:{port}"
     raise RuntimeError(msg)
-

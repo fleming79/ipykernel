@@ -19,17 +19,16 @@ from jupyter_client.kernelspec import KernelSpec, _is_valid_kernel_name
 RESOURCES = Path(__file__).parent.joinpath("resources")
 
 
-class AsyncMode(enum.StrEnum):
-    asyncio = "asyncio"
-    trio = "trio"
-    asyncio_eager = "asyncio_eager"
+class KernelName(enum.StrEnum):
+    asyncio = "async"
+    trio = "async-trio"
+    asyncio_eager = "async-eager"
 
 
 def write_kernel_spec(
     path: Path | str | None = None,
     *,
-    kernel_name: str,
-    async_mode=AsyncMode.asyncio,
+    kernel_name=KernelName.asyncio,
     python_args=("python", "-m", "async_kernel.__main__:launch"),
 ) -> Path:
     """Write a kernel spec directory to `path`
@@ -51,7 +50,7 @@ def write_kernel_spec(
         path.chmod(mask | stat.S_IWUSR)
 
     spec = KernelSpec()
-    spec.argv = [*python_args, "-f", "{connection_file}", "--async-mode", str(AsyncMode(async_mode))]
+    spec.argv = [*python_args, "-f", "{connection_file}", "--async-mode", str(KernelName(kernel_name))]
     spec.name = kernel_name
     spec.display_name = f"Python ({kernel_name})"
     spec.language = "python"
@@ -64,16 +63,14 @@ def write_kernel_spec(
     return path
 
 
-
-def write_all_kernelspec(base: Path, module_name: str, modes: tuple[AsyncMode, ...] = ()):
-    python_args = ("python", "-m", f"{module_name}.__main__:launch")
-    if not modes:
-        modes = (AsyncMode.asyncio, AsyncMode.trio)
+def write_all_kernelspec(base: Path, kernel_names: tuple[KernelName, ...] = ()):
+    python_args = ("python", "-m", "async_kernel.__main__:launch")
+    if not kernel_names:
+        kernel_names = (KernelName.asyncio, KernelName.trio)
         if sys.version_info >= (3, 12):
-            modes = (*modes, AsyncMode.asyncio_eager)
+            kernel_names = (*kernel_names, KernelName.asyncio_eager)
     if base.exists():
         shutil.rmtree(base)
-    for async_mode in modes:
-        kernel_name = str(async_mode)
+    for kernel_name in kernel_names:
         dest = base / kernel_name
-        write_kernel_spec(dest, kernel_name=kernel_name, async_mode=async_mode, python_args=python_args)
+        write_kernel_spec(dest, kernel_name=kernel_name, python_args=python_args)

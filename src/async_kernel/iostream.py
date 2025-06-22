@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-
 class OutStream(TextIOBase):
     """A file like object that calls flusher with the string output when flush is called."""
 
@@ -65,5 +64,3 @@ class OutStream(TextIOBase):
     def writable(self):
         """Test whether the stream is writable."""
         return True
-
-

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, Self, TypedDict
 import anyio
 import anyio.from_thread
 import anyio.to_thread
+import sniffio
 import traitlets
 import zmq
 import zmq_anyio
@@ -38,7 +39,7 @@ from traitlets import Dict, Instance, default, observe
 from traitlets.utils.importstring import import_item
 
 from async_kernel import _version, utils
-from async_kernel.kernelspec import AsyncMode
+from async_kernel.kernelspec import KernelName
 from async_kernel.zmqshell import ZMQInteractiveShell
 
 if TYPE_CHECKING:
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
 
     from async_kernel.comm import CommManager
     from async_kernel.iostream import OutStream
+
 
 class MsgHeader(TypedDict):
     # https://jupyter-client.readthedocs.io/en/stable/messaging.html#message-header
@@ -117,6 +119,7 @@ class Kernel(ConnectionFileMixin):
     _sockets: Dict[SocketID, zmq.Socket] = Dict()
     _shell_handlers = Dict()
     _control_handlers = Dict()
+    _job: traitlets.Container[MsgRequest | dict] = Dict()  # type: ignore[assignment]
 
     quiet = traitlets.Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
     outstream_class = traitlets.DottedObjectName(
@@ -211,7 +214,11 @@ class Kernel(ConnectionFileMixin):
 
     @default("kernel_name")
     def _default_kernel_name(self):
-        return str(uuid.uuid4())
+        if sniffio.current_async_library() == "trio":
+            return KernelName.trio
+        if sys.version_info >= (3, 12) and asyncio.get_running_loop().get_task_factory() is asyncio.eager_task_factory:
+            return KernelName.asyncio_eager
+        return KernelName.asyncio
 
     @default("comm_manager")
     def _default_comm_manager(self):
@@ -400,7 +407,7 @@ class Kernel(ConnectionFileMixin):
 
     def _topic(self, topic):
         """prefixed topic for IOPub messages"""
-        return (f"kernel.{self.kernel_name}.{topic}").encode()
+        return (f"kernel.{topic}").encode()
 
     def _input_request(self, prompt, *, password=False):
         # Flush output before making the request.
@@ -487,7 +494,7 @@ class Kernel(ConnectionFileMixin):
                     self.pubio_send(
                         msg_or_type="stream",
                         content={"name": name, "text": string},
-                        ident=self._topic("status"),
+                        ident=f"stream.{name}".encode(),
                     )
                     if not self.quiet and echo:
                         echo.write(string)
@@ -668,12 +675,11 @@ class Kernel(ConnectionFileMixin):
             self._interrupt_events.discard(interrupt)
             if not silent:
                 self._restore_input()
-
         reply_content = {}
         if result and (res := result[0]):
             err = res.error_before_exec if res.error_before_exec is not None else res.error_in_exec
         else:
-            err = KeyboardInterrupt("Interruped by client request")
+            err = KeyboardInterrupt("Interrupted by client request")
         if not err:
             reply_content["status"] = "ok"
         else:
@@ -683,7 +689,6 @@ class Kernel(ConnectionFileMixin):
             reply_content["traceback"] = traceback or []
             reply_content["ename"] = str(type(err).__name__)
             reply_content["evalue"] = str(err)
-
         reply_content["execution_count"] = shell.execution_count - 1
         reply_content["user_expressions"] = (
             shell.user_expressions(user_expressions) if not err and user_expressions else {}
@@ -701,13 +706,15 @@ class Kernel(ConnectionFileMixin):
             completions = list(_rectify_completions(code, raw_completions))
             comps = []
             for comp in completions:
-                comps.append({
-                    "start": comp.start,
-                    "end": comp.end,
-                    "text": comp.text,
-                    "type": comp.type,
-                    "signature": comp.signature,
-                })
+                comps.append(
+                    {
+                        "start": comp.start,
+                        "end": comp.end,
+                        "text": comp.text,
+                        "type": comp.type,
+                        "signature": comp.signature,
+                    }
+                )
         if completions:
             s = completions[0].start
             e = completions[0].end
@@ -716,7 +723,6 @@ class Kernel(ConnectionFileMixin):
             s = cursor_pos
             e = cursor_pos
             matches = []
-
         return {
             "matches": matches,
             "cursor_end": e,
@@ -769,15 +775,12 @@ class Kernel(ConnectionFileMixin):
         assert history_manager
         if hist_access_type == "tail":
             hist = history_manager.get_tail(n, raw=raw, output=output, include_latest=True)
-
         elif hist_access_type == "range":
             hist = history_manager.get_range(session, start, stop, raw=raw, output=output)
-
         elif hist_access_type == "search":
             hist = history_manager.search(pattern, raw=raw, output=output, n=n, unique=unique)
         else:
             hist = []
-
         return {
             "status": "ok",
             "history": list(hist),
@@ -881,12 +884,10 @@ class Kernel(ConnectionFileMixin):
                     await tg.start(self._start_soon_scheduler, tg)
                     self._init_pubio()
                     if not self.connection_file:
-                        self.connection_file = str(
-                            Path(jupyter_runtime_dir()).joinpath(f"kernel-{self.kernel_name}.json")
-                        )
+                        self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{uuid.uuid4()}.json"))
                     self.write_connection_file()
-                    self.log.info(
-                        'To connect another client to this kernel, use:\n      --existing "%s"', {self.connection_file}
+                    print(
+                        f'To connect another client to this kernel, use:\n      --existing "{self.connection_file}"',
                     )
                     atexit.register(self.cleanup_connection_file)
                     self.comm_manager.kernel = self
@@ -903,30 +904,29 @@ class Kernel(ConnectionFileMixin):
                     self.stop()
                     self._reset_io()
 
-
     @classmethod
-    def start(cls, connection_file="", async_mode=AsyncMode.asyncio) -> int:
+    def start(cls, connection_file="", kernel_name=KernelName.asyncio) -> int:
         """Start the kernel.
 
         See also: `start_in_context`
         """
-        async_mode = AsyncMode(async_mode)
+        kernel_name = KernelName(kernel_name)
 
         async def _start() -> None:
             """ """
-            if async_mode is AsyncMode.asyncio_eager and sys.version_info >= (3, 12):
+            if kernel_name is KernelName.asyncio_eager and sys.version_info >= (3, 12):
                 loop = asyncio.get_running_loop()
                 loop.set_task_factory(asyncio.eager_task_factory)
 
             async with kernel.start_in_context():
                 await anyio.sleep_forever()
 
-        kernel = cls()
+        kernel = cls(kernel_name=kernel_name)
         kernel.connection_file = connection_file
 
         if (
             sys.platform == "win32"
-            and async_mode in [AsyncMode.asyncio, AsyncMode.asyncio_eager]
+            and kernel_name in [KernelName.asyncio, KernelName.asyncio_eager]
             and (policy := asyncio.get_event_loop_policy())
             and policy.__class__.__name__ == "WindowsProactorEventLoopPolicy"
         ):
@@ -935,7 +935,7 @@ class Kernel(ConnectionFileMixin):
             selector = get_selector()
             selector._thread.pydev_do_not_trace = True
         try:
-            anyio.run(_start, backend="trio" if async_mode is AsyncMode.trio else "asyncio")
+            anyio.run(_start, backend="trio" if kernel_name is KernelName.trio else "asyncio")
         finally:
             pass
         return 0

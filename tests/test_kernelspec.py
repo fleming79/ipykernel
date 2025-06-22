@@ -8,12 +8,12 @@ import shutil
 import pytest
 from jupyter_client.kernelspec import KernelSpec
 
-from async_kernel.kernelspec import RESOURCES, AsyncMode, write_kernel_spec
+from async_kernel.kernelspec import RESOURCES, KernelName, write_kernel_spec
 
 
-@pytest.mark.parametrize("async_mode", list(AsyncMode))
-def test_write_kernel_spec(async_mode: AsyncMode):
-    path = write_kernel_spec(kernel_name="my-kernel", async_mode=async_mode)
+@pytest.mark.parametrize("kernel_name", list(KernelName))
+def test_write_kernel_spec(kernel_name: KernelName):
+    path = write_kernel_spec(kernel_name=kernel_name)
     for fname in RESOURCES.iterdir():
         dst = path.joinpath(fname)
         assert pathlib.Path(dst).exists()
