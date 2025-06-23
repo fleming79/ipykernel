@@ -40,7 +40,7 @@ from traitlets.utils.importstring import import_item
 
 from async_kernel import _version, utils
 from async_kernel.kernelspec import KernelName
-from async_kernel.zmqshell import ZMQInteractiveShell
+from async_kernel.asyncshell import AsyncInteractiveShell
 
 if TYPE_CHECKING:
     from types import CoroutineType
@@ -138,25 +138,27 @@ class Kernel(ConnectionFileMixin):
 
     log = Instance(logging.LoggerAdapter)
 
-    shell = Instance(ZMQInteractiveShell)
-    shell_class = traitlets.Type(ZMQInteractiveShell)
+    shell = Instance(AsyncInteractiveShell)
+    shell_class = traitlets.Type(AsyncInteractiveShell)
 
     user_module = traitlets.Any()
     user_ns = Dict()
     comm_manager: Instance[CommManager] = Instance("async_kernel.comm.CommManager")
 
-    def __new__(cls, **kwargs) -> Self:  # noqa: ARG004
+    def __new__(cls, *, kernel_name=KernelName.asyncio, connection_file="", **kwargs) -> Self:  # noqa: ARG004
         #  There is only one instance.
         if not (instance := cls._instance):
             cls._instance = instance = super().__new__(cls)
         return instance
 
-    def __init__(self, **kwargs):
+    def __init__(self, *, connection_file="", kernel_name=KernelName.asyncio, **kwargs):
         """Initialize the kernel."""
         if self._shell_handlers:
             return  # Only initialize once
-        super().__init__(**kwargs)
+        self.kernel_name = kernel_name
+        self.connection_file = connection_file
         self.session = Session(parent=self)
+        super().__init__(**kwargs)
         self._shell_handlers = {
             "kernel_info_request": self.kernel_info_request,
             "comm_info_request": self.comm_info_request,
@@ -170,6 +172,10 @@ class Kernel(ConnectionFileMixin):
             "comm_msg": self.comm_msg,
             "comm_close": self.comm_close,
         }
+        self._control_handlers = {
+            "execute_request": self.control_execute_request,  # no task queue
+            "shutdown_request": self.control_shutdown_request,
+        }
         self.shell = self.shell_class.instance(
             parent=self,
             profile_dir=self.profile_dir,
@@ -177,13 +183,22 @@ class Kernel(ConnectionFileMixin):
             user_ns=self.user_ns,
             kernel=self,
         )
+        if kernel_name is KernelName.asyncio_eager and sys.version_info >= (3, 12):
+            loop = asyncio.get_running_loop()
+            loop.set_task_factory(asyncio.eager_task_factory)
+        if (
+            sys.platform == "win32"
+            and kernel_name in [KernelName.asyncio, KernelName.asyncio_eager]
+            and (policy := asyncio.get_event_loop_policy())
+            and policy.__class__.__name__ == "WindowsProactorEventLoopPolicy"
+        ):
+            from anyio._core._asyncio_selector_thread import get_selector  # noqa: PLC0415
+
+            selector = get_selector()
+            selector._thread.pydev_do_not_trace = True  # type: ignore[assignment]
         jupyter_session_name = os.environ.get("JPY_SESSION_NAME")
         if jupyter_session_name:
             self.shell.user_ns["__session__"] = jupyter_session_name
-        self._control_handlers = {
-            "execute_request": self.control_execute_request,  # no task queue
-            "shutdown_request": self.control_shutdown_request,
-        }
         sys.excepthook = self.excepthook
 
     @property
@@ -310,6 +325,28 @@ class Kernel(ConnectionFileMixin):
             finally:
                 socket_.close(linger=0)
                 socket.close(linger=0)
+
+    def _init_pubio(self):
+        """Redirect input streams."""
+        self._save_io()
+        if self.outstream_class:
+            cls: type[OutStream] = import_item(self.outstream_class)
+            for name in ["stdout", "stderr"]:
+                echo = getattr(sys, name)
+
+                def flusher(string: str, name=name, echo=echo):
+                    "Publish stdio or stderr when flush is called"
+                    self.pubio_send(
+                        msg_or_type="stream",
+                        content={"name": name, "text": string},
+                        ident=f"stream.{name}".encode(),
+                    )
+                    if not self.quiet and echo:
+                        echo.write(string)
+                        echo.flush()
+
+                wrapper = cls(name=name, flusher=flusher)  # type: ignore[call-arg]
+                setattr(sys, name, wrapper)
 
     def _publish_status(self, status: Literal["busy", "idle"], job: MsgRequest):
         """send status (busy/idle) on IOPub"""
@@ -481,31 +518,6 @@ class Kernel(ConnectionFileMixin):
         builtins.input = self._sys_raw_input
         getpass.getpass = self._save_getpass
 
-    def _init_pubio(self):
-        """Redirect input streams."""
-        if threading.current_thread() != threading.main_thread():
-            msg = "pubio expects to be running in the main thread"
-            raise RuntimeError(msg)
-        self._save_io()
-        if self.outstream_class:
-            cls: type[OutStream] = import_item(self.outstream_class)
-            for name in ["stdout", "stderr"]:
-                echo = getattr(sys, name)
-
-                def flusher(string: str, name=name, echo=echo):
-                    "Publish stdio or stderr when flush is called"
-                    self.pubio_send(
-                        msg_or_type="stream",
-                        content={"name": name, "text": string},
-                        ident=f"stream.{name}".encode(),
-                    )
-                    if not self.quiet and echo:
-                        echo.write(string)
-                        echo.flush()
-
-                wrapper = cls(name=name, flusher=flusher)  # type: ignore[call-arg]
-                setattr(sys, name, wrapper)
-
     def _save_io(self):
         if not self._io_modified:
             self._original_io = sys.stdout, sys.stderr, sys.displayhook
@@ -547,6 +559,17 @@ class Kernel(ConnectionFileMixin):
         self._send_reply(job, {"comms": comms})
 
     async def execute_request(self, job: MsgRequest):
+        """Handle an execute_request.
+
+        * *Non-silent*:
+            - Added to a queue and executed sequntially in a separate task.
+            - Respect an `interrupt_request`.
+            - Stop on error results with all queued *non-silent* requests returning an error.
+        * *Silent*:
+            - Started in a separate task.
+            - Ignore `interrupt_request`.
+            - Stop on error is not relevant.
+        """
         content = job["parent"]["content"]
         silent = content["silent"]
         if not silent:
@@ -555,7 +578,7 @@ class Kernel(ConnectionFileMixin):
             self.start_soon(self._execute_request, job)
 
     async def _execute_request(self, job: MsgRequest):
-        """handle an execute_request"""
+        """Perform the actual execute_request."""
         content = job["parent"]["content"]
         silent = content["silent"]
         stop_on_error = content.pop("stop_on_error", True)
@@ -699,9 +722,7 @@ class Kernel(ConnectionFileMixin):
         return reply_content
 
     async def do_complete(self, code, cursor_pos):
-        """
-        Completions from IPython, using Jedi.
-        """
+        """Completions from IPython, using Jedi."""
         if cursor_pos is None:
             cursor_pos = len(code)
         with _provisionalcompleter():
@@ -709,15 +730,13 @@ class Kernel(ConnectionFileMixin):
             completions = list(_rectify_completions(code, raw_completions))
             comps = []
             for comp in completions:
-                comps.append(
-                    {
-                        "start": comp.start,
-                        "end": comp.end,
-                        "text": comp.text,
-                        "type": comp.type,
-                        "signature": comp.signature,
-                    }
-                )
+                comps.append({
+                    "start": comp.start,
+                    "end": comp.end,
+                    "text": comp.text,
+                    "type": comp.type,
+                    "signature": comp.signature,
+                })
         if completions:
             s = completions[0].start
             e = completions[0].end
@@ -806,7 +825,7 @@ class Kernel(ConnectionFileMixin):
         traceback.print_exception(etype, evalue, tb, file=sys.__stderr__)
 
     def raw_input(self, prompt=""):
-        """Forward raw_input to frontends
+        """Forward raw_input to frontends.
 
         Raises
         ------
@@ -817,7 +836,7 @@ class Kernel(ConnectionFileMixin):
         return self._input_request(str(prompt), password=False)
 
     def getpass(self, prompt=""):
-        """Forward getpass to frontends"""
+        """Forward getpass to frontends."""
         if not self._allow_stdin:
             raise StdinNotImplementedError
         return self._input_request(prompt, password=True)
@@ -831,7 +850,7 @@ class Kernel(ConnectionFileMixin):
         ident: bytes | list[bytes] | None = None,
         buffers: list[bytes] | None = None,
     ):
-        "Send the message on the iopub socket"
+        """Send the message on the iopub socket."""
         if threading.current_thread() is not threading.main_thread():
             # Send the message from the main thread
             try:
@@ -859,20 +878,12 @@ class Kernel(ConnectionFileMixin):
 
     @asynccontextmanager
     async def start_in_context(self):
-        """Start the Kernel in an already running  anyio event loop.
-
-        ``` python
-        async with Kernel().start_in_context() as kernel:
-           await anyio.sleep_forever()
-        ...
-
-        """
+        """Start the Kernel in an already running anyio event loop."""
         if self._sockets:
             msg = "Already started"
             raise RuntimeError(msg)
         if self.connection_file and Path(self.connection_file).exists():
             self.load_connection_file()
-
         with self._zmq_context:
             async with (
                 anyio.create_task_group() as tg,
@@ -909,42 +920,22 @@ class Kernel(ConnectionFileMixin):
 
     @classmethod
     def start(cls, connection_file="", kernel_name=KernelName.asyncio) -> int:
-        """Start the kernel.
-
-        See also: `start_in_context`
-        """
-        kernel_name = KernelName(kernel_name)
+        """Start the kernel."""
 
         async def _start() -> None:
-            """ """
-            if kernel_name is KernelName.asyncio_eager and sys.version_info >= (3, 12):
-                loop = asyncio.get_running_loop()
-                loop.set_task_factory(asyncio.eager_task_factory)
-
             async with kernel.start_in_context():
                 await anyio.sleep_forever()
 
-        kernel = cls(kernel_name=kernel_name)
-        kernel.connection_file = connection_file
-
-        if (
-            sys.platform == "win32"
-            and kernel_name in [KernelName.asyncio, KernelName.asyncio_eager]
-            and (policy := asyncio.get_event_loop_policy())
-            and policy.__class__.__name__ == "WindowsProactorEventLoopPolicy"
-        ):
-            from anyio._core._asyncio_selector_thread import get_selector  # noqa: PLC0415
-
-            selector = get_selector()
-            selector._thread.pydev_do_not_trace = True  # type: ignore[assignment]
+        kernel = cls(kernel_name=kernel_name, connection_file=connection_file)
         try:
-            anyio.run(_start, backend="trio" if kernel_name is KernelName.trio else "asyncio")
+            anyio.run(_start, backend="trio" if kernel.kernel_name is KernelName.trio else "asyncio")
         finally:
             pass
         return 0
 
     @classmethod
     def stop(cls):
+        """Stop the kernel."""
         if cls._instance:
             cls._instance._stop_event.set()
             cls._instance = None

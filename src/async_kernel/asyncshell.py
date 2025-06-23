@@ -2,24 +2,54 @@
 # Distributed under the terms of the Modified BSD License.
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from IPython.core.autocall import ZMQExitAutocall
+from IPython.core.displayhook import DisplayHook
 from IPython.core.displaypub import DisplayPublisher
 from IPython.core.error import StdinNotImplementedError
 from IPython.core.interactiveshell import InteractiveShell, InteractiveShellABC
 from IPython.core.usage import default_banner
 from jupyter_client.session import extract_header
-from traitlets import CBool, CBytes, Instance, Type, default, observe
+from traitlets import CBool, CBytes, Dict, Instance, Type, default, observe
 from typing_extensions import override
-
-from async_kernel.displayhook import ZMQShellDisplayHook
 
 if TYPE_CHECKING:
     from async_kernel.kernel import Kernel
 
 
-class ZMQDisplayPublisher(DisplayPublisher):
+class AsyncDisplayHook(DisplayHook):
+    """A displayhook subclass that publishes data using ZeroMQ. This is intended
+    to work with an InteractiveShell instance. It sends a dict of different
+    representations of the object."""
+
+    kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
+    content: Dict[str, Any] = Dict()
+
+    def set_job(self, job):
+        """Set the parent for outbound messages."""
+        self.job = job
+
+    def start_displayhook(self):
+        """Start the display hook."""
+        self.content = {}
+
+    def write_output_prompt(self):
+        """Write the output prompt."""
+        self.content["execution_count"] = self.prompt_count
+
+    def write_format_data(self, format_dict, md_dict=None):
+        """Write format data to the message."""
+        self.content["data"] = format_dict
+        self.content["metadata"] = md_dict
+
+    def finish_displayhook(self):
+        """Finish up all displayhook activities."""
+        if self.content:
+            self.kernel.pubio_send("display_data", content=self.content)
+            self.content = {}
+
+
+class AsyncDisplayPublisher(DisplayPublisher):
     """A display publisher that publishes data using a ZeroMQ PUB socket."""
 
     kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
@@ -77,13 +107,13 @@ class ZMQDisplayPublisher(DisplayPublisher):
         self.kernel.pubio_send(msg_or_type="clear_output", content={"wait": wait}, ident=self.topic)
 
 
-class ZMQInteractiveShell(InteractiveShell):
+class AsyncInteractiveShell(InteractiveShell):
     """A subclass of InteractiveShell for ZMQ."""
 
-    displayhook_class = Type(ZMQShellDisplayHook)
-    display_pub_class = Type(ZMQDisplayPublisher)
-    displayhook: Instance[ZMQShellDisplayHook]
-    display_pub: Instance[ZMQDisplayPublisher]
+    displayhook_class = Type(AsyncDisplayHook)
+    display_pub_class = Type(AsyncDisplayPublisher)
+    displayhook: Instance[AsyncDisplayHook]
+    display_pub: Instance[AsyncDisplayPublisher]
     kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
 
     @default("banner1")
@@ -97,12 +127,6 @@ class ZMQInteractiveShell(InteractiveShell):
     # autoindent has no meaning in a zmqshell, and attempting to enable it
     # will print a warning in the absence of readline.
     autoindent = CBool(False)
-
-    exiter = Instance(ZMQExitAutocall)
-
-    @default("exiter")
-    def _default_exiter(self):
-        return ZMQExitAutocall(self)
 
     @observe("exit_now")
     def _update_exit_now(self, change):
@@ -140,4 +164,4 @@ class ZMQInteractiveShell(InteractiveShell):
         self._last_traceback = stb
 
 
-InteractiveShellABC.register(ZMQInteractiveShell)
+InteractiveShellABC.register(AsyncInteractiveShell)
