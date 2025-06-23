@@ -39,8 +39,8 @@ from traitlets import Dict, Instance, default, observe
 from traitlets.utils.importstring import import_item
 
 from async_kernel import _version, utils
-from async_kernel.kernelspec import KernelName
 from async_kernel.asyncshell import AsyncInteractiveShell
+from async_kernel.kernelspec import KernelName
 
 if TYPE_CHECKING:
     from types import CoroutineType
