@@ -166,6 +166,16 @@ async def test_interrupt_request(client, kernel, mocker):
     assert event.is_set()
 
 
+async def test_user_exit(client, kernel, mocker):
+    stop = mocker.patch.object( kernel, 'stop')
+    raw_input = mocker.patch.object( kernel, 'raw_input', return_value='y')
+    await utils.execute(client, "quit()")
+    assert raw_input.call_count == 1
+    assert stop.call_count == 1
+    kernel.exit_now = False
+
+
+
 async def test_shutdown_request(client, kernel, mocker):
     # Apply patches
     shutdown_request = mocker.patch.object(kernel, "do_shutdown", return_value={"restart": False, "status": "ok"})

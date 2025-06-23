@@ -81,7 +81,7 @@ def bind_socket(socket: zmq.Socket, transport: Literal["tcp", "ipc"], ip: str, p
     def _try_bind_socket(port: int):
         if transport == "tcp":
             if port <= 0:
-                port = socket.bind_to_random_port(f"{transport}://{ip}")
+                port = socket.bind_to_random_port(f"tcp://{ip}")
             else:
                 socket.bind(f"tcp://{ip}:{port}")
         elif transport == "ipc":

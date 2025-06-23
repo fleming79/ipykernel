@@ -134,8 +134,6 @@ class AsyncInteractiveShell(InteractiveShell):
         if self.exit_now:
             self.kernel.stop()
 
-    keepkernel_on_exit = None
-
     def ask_exit(self):
         try:
             response = self.kernel.raw_input("Are you sure you want to stop the kernel?\ny/[n]\n")
