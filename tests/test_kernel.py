@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import inspect
 import threading
 import time
 
@@ -12,6 +13,8 @@ import anyio
 import pytest
 from anyio import to_thread
 
+from async_kernel.kernel import Kernel
+from async_kernel.kernelspec import KernelName
 from tests import utils
 
 
@@ -167,13 +170,12 @@ async def test_interrupt_request(client, kernel, mocker):
 
 
 async def test_user_exit(client, kernel, mocker):
-    stop = mocker.patch.object( kernel, 'stop')
-    raw_input = mocker.patch.object( kernel, 'raw_input', return_value='y')
+    stop = mocker.patch.object(kernel, "stop")
+    raw_input = mocker.patch.object(kernel, "raw_input", return_value="y")
     await utils.execute(client, "quit()")
     assert raw_input.call_count == 1
     assert stop.call_count == 1
     kernel.exit_now = False
-
 
 
 async def test_shutdown_request(client, kernel, mocker):
@@ -222,3 +224,25 @@ async def test_start_soon(mode, exception: bool, client, kernel):
 
     for event in events:
         await event.wait()
+
+@pytest.mark.parametrize("kernel_name", list(KernelName))
+def test_kernel_start(kernel_name:KernelName):
+    anyio_run = anyio.run
+    anyio_sleep_forever = anyio.sleep_forever
+
+    def _patch_run(coro, backend):
+        nonlocal _start
+        _start = coro
+        if kernel_name.startswith('async'):
+            assert backend == 'asyncio'
+        else:
+            assert backend == 'trio'
+
+    anyio.run = _patch_run
+    try:
+        _start = None
+        Kernel.start(connection_file='test.json', kernel_name=kernel_name)
+        assert inspect.iscoroutinefunction(_start)
+    finally:
+        anyio.run = anyio_run
+        anyio.sleep_forever = anyio_sleep_forever

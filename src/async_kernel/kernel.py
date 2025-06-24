@@ -183,9 +183,6 @@ class Kernel(ConnectionFileMixin):
             user_ns=self.user_ns,
             kernel=self,
         )
-        if kernel_name is KernelName.asyncio_eager and sys.version_info >= (3, 12):
-            loop = asyncio.get_running_loop()
-            loop.set_task_factory(asyncio.eager_task_factory)
         if (
             sys.platform == "win32"
             and kernel_name in [KernelName.asyncio, KernelName.asyncio_eager]
@@ -879,6 +876,10 @@ class Kernel(ConnectionFileMixin):
     @asynccontextmanager
     async def start_in_context(self):
         """Start the Kernel in an already running anyio event loop."""
+        if self.kernel_name is KernelName.asyncio_eager and sys.version_info >= (3, 12):
+            loop = asyncio.get_running_loop()
+            loop.set_task_factory(asyncio.eager_task_factory)
+
         if self._sockets:
             msg = "Already started"
             raise RuntimeError(msg)
