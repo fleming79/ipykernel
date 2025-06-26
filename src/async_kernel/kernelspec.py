@@ -29,7 +29,7 @@ def write_kernel_spec(
     path: Path | str | None = None,
     *,
     kernel_name=KernelName.asyncio,
-    python_args=("python", "-m", "async_kernel.__main__:launch"),
+    module_name="async_kernel",
 ) -> Path:
     """Write a kernel spec directory to `path`
 
@@ -50,7 +50,7 @@ def write_kernel_spec(
         path.chmod(mask | stat.S_IWUSR)
 
     spec = KernelSpec()
-    spec.argv = [*python_args, "-f", "{connection_file}", "--async-mode", str(KernelName(kernel_name))]
+    spec.argv = ["python", "-m", module_name, "-f", "{connection_file}", "--async-mode", str(KernelName(kernel_name))]
     spec.name = kernel_name
     spec.display_name = f"Python ({kernel_name})"
     spec.language = "python"
@@ -63,8 +63,7 @@ def write_kernel_spec(
     return path
 
 
-def write_all_kernelspec(base: Path, kernel_names: tuple[KernelName, ...] = ()):
-    python_args = ("python", "-m", "async_kernel.__main__:launch")
+def write_all_kernelspec(base: Path, *, module_name="async_kernel", kernel_names: tuple[KernelName, ...] = ()):
     if not kernel_names:
         kernel_names = (KernelName.asyncio, KernelName.trio)
         if sys.version_info >= (3, 12):
@@ -73,4 +72,4 @@ def write_all_kernelspec(base: Path, kernel_names: tuple[KernelName, ...] = ()):
         shutil.rmtree(base)
     for kernel_name in kernel_names:
         dest = base / kernel_name
-        write_kernel_spec(dest, kernel_name=kernel_name, python_args=python_args)
+        write_kernel_spec(dest, kernel_name=kernel_name, module_name=module_name)
