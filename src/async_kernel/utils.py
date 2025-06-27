@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import errno
+import sys
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
 
     from anyio.abc import TaskGroup, TaskStatus
 
+LAUNCHED_BY_DEBUGPY = "debugpy" in sys.modules
 
 def start_anyio_thread(
     func: Callable[[TaskStatus], CoroutineType],
@@ -27,8 +29,8 @@ def start_anyio_thread(
     *,
     backend: Literal["anyio", "trio", ""] = "",
     name="",
-    pydev_do_not_trace=False,
-    is_pydev_daemon_thread=False,
+    pydev_do_not_trace=not LAUNCHED_BY_DEBUGPY,
+    is_pydev_daemon_thread=not LAUNCHED_BY_DEBUGPY,
 ):
     """Run a coroutine function in a separate thread (and event loop) and manage its lifecycle using AnyIO.
 

@@ -13,9 +13,10 @@ from jupyter_client.session import extract_header
 from traitlets import CBool, CBytes, Dict, Instance, Type, default, observe
 from typing_extensions import override
 
+from async_kernel.compiler import XCachingCompiler
+
 if TYPE_CHECKING:
     from async_kernel.kernel import Kernel
-
 
 class AsyncDisplayHook(DisplayHook):
     """A displayhook subclass that publishes data using ZeroMQ. This is intended
@@ -115,6 +116,7 @@ class AsyncInteractiveShell(InteractiveShell):
     displayhook: Instance[AsyncDisplayHook]
     display_pub: Instance[AsyncDisplayPublisher]
     kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
+    compiler_class = Type(XCachingCompiler)
 
     @default("banner1")
     def _default_banner1(self):
