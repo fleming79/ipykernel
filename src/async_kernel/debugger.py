@@ -35,6 +35,7 @@ try:
         _FramesTracker,
     )
 
+
     _is_debugpy_available = True
 except ImportError:
     _is_debugpy_available = False
@@ -125,13 +126,11 @@ class DebugpyMessageQueue:
         self.log = log
 
     def _put_message(self, raw_msg: bytes):
-        self.log.debug("QUEUE - _put_message: %s", raw_msg)
         msg: dict[str, t.Any] = orjson.loads(raw_msg)
+        self.log.debug("_put_message :%s %s", msg["type"], msg)
         if msg["type"] == "event":
-            self.log.debug("QUEUE - received event:%s", msg)
             self.event_callback(msg)
         else:
-            self.log.debug("QUEUE - put message:%s", msg)
             self.send_stream.send_nowait(msg)
 
     def put_tcp_frame(self, frame: bytes):
@@ -175,7 +174,6 @@ class DebugpyClient(traitlets.HasTraits):
     async def start(self, task_status:TaskStatus):
         def start_debugpy():
             import debugpy
-
             return debugpy.listen(0)
 
         self._host_port = anyio.from_thread.run_sync(start_debugpy)
@@ -185,7 +183,6 @@ class DebugpyClient(traitlets.HasTraits):
             # This thread can't be stopped by the debugger when debugging
             thread.pydev_do_not_trace = True  # type: ignore[attr-defined]
             thread.is_pydev_daemon_thread = True  # type: ignore[attr-defined]
-
             task_status.started()
             await anyio.sleep_forever()
 
@@ -200,9 +197,7 @@ class DebugpyClient(traitlets.HasTraits):
         content_length = str(len(content)).encode()
         buf = DebugpyMessageQueue.HEADER + content_length + DebugpyMessageQueue.SEPARATOR
         buf += content
-        self.log.debug("DEBUGPYCLIENT:")
-        self.log.debug("%s", self._connected)
-        self.log.debug("%s", buf)
+        self.log.debug("DEBUGPYCLIENT: request %s", buf)
         await self.debugpy_client.send(buf)
 
     async def _wait_for_response(self):
@@ -267,7 +262,6 @@ class DebugpyClient(traitlets.HasTraits):
             self.wait_for_attach = False
             return rep
         reply = await self._wait_for_response()
-        self.log.debug("DEBUGPYCLIENT - returning:\n%s", reply)
         if msg["command"] == "initialize":
             self.initialize_reply = reply
         return reply

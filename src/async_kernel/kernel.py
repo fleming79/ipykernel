@@ -285,8 +285,7 @@ class Kernel(ConnectionFileMixin):
                 ident, msg_ = self.session.feed_identities(msg_, copy=copy)
                 parent = self.session.deserialize(msg_, content=True, copy=copy)
                 msg_type = parent["header"]["msg_type"]
-                self.log.debug("\n*** MESSAGE TYPE:%s***", msg_type)
-                self.log.debug("   Content: %s\n   --->\n   ", parent["content"])
+                self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, parent["content"])
                 await process_message(MsgRequest(socket_id=socket_id, ident=ident, parent=parent, msg_type=msg_type))
 
     @contextlib.asynccontextmanager
@@ -365,7 +364,8 @@ class Kernel(ConnectionFileMixin):
             parent=job["parent"]["header"],
             ident=job["ident"],
         )
-        self.log.debug("%s", msg)
+        if msg:
+            self.log.debug("send_reply: '%s' %s", msg["msg_type"], msg["content"])
 
     def _send_error_reply(
         self, job: MsgRequest, *, ename="RuntimeError", evalue="", traceback: list[str] | None = None
@@ -899,7 +899,8 @@ class Kernel(ConnectionFileMixin):
             ident=ident,
             buffers=buffers,
         )
-        self.log.debug("%s", msg)
+        if msg:
+            self.log.debug("pubio_send: msg_type:'%s', content: %s", msg["msg_type"], msg["content"])
 
     def start_soon(self, func, *args, name: str | None = None):
         "Run a coroutine in the main thread."
