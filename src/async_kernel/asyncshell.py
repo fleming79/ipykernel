@@ -46,7 +46,7 @@ class AsyncDisplayHook(DisplayHook):
     def finish_displayhook(self):
         """Finish up all displayhook activities."""
         if self.content:
-            self.kernel.pubio_send("display_data", content=self.content)
+            self.kernel.iopub_send("display_data", content=self.content)
             self.content = {}
 
 
@@ -87,7 +87,7 @@ class AsyncDisplayPublisher(DisplayPublisher):
 
         Ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#update-display-data
         """
-        self.kernel.pubio_send(
+        self.kernel.iopub_send(
             msg_or_type="update_display_data" if update else "display_data",
             content={"data": data, "metadata": metadata or {}, "transient": transient or {}} | kwargs,
             ident=self.topic,
@@ -105,7 +105,7 @@ class AsyncDisplayPublisher(DisplayPublisher):
             This reduces bounce during repeated clear & display loops.
 
         """
-        self.kernel.pubio_send(msg_or_type="clear_output", content={"wait": wait}, ident=self.topic)
+        self.kernel.iopub_send(msg_or_type="clear_output", content={"wait": wait}, ident=self.topic)
 
 
 class AsyncInteractiveShell(InteractiveShell):
@@ -159,7 +159,7 @@ class AsyncInteractiveShell(InteractiveShell):
         ename = str(etype.__name__)
         if ename == "KeyboardInterrupt":
             stb.pop(-2)
-        self.kernel.pubio_send(msg_or_type="error", content={"traceback": stb, "ename": ename, "evalue": str(evalue)})
+        self.kernel.iopub_send(msg_or_type="error", content={"traceback": stb, "ename": ename, "evalue": str(evalue)})
         # store the formatted traceback
         self._last_traceback = stb
 

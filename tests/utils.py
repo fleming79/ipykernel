@@ -118,7 +118,7 @@ async def wait_for_idle(client: AsyncKernelClient, *, wait=1.0):
 
 
 async def clear_pub_message(client):
-    "Ensure there are no further pubio messages waiting."
+    "Ensure there are no further iopub messages waiting."
     await assemble_output(client, timeout=0.2)
 
 

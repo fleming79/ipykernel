@@ -17,7 +17,7 @@ import time
 import traceback
 import uuid
 from collections.abc import Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, Self, TypedDict
 
@@ -84,7 +84,6 @@ class MsgRequest(TypedDict):
 class SocketID(enum.StrEnum):
     heartbeat = "hb"
     shell = "shell"
-    iopub = "iopub"
     stdin = "stdin"
     control = "control"
 
@@ -121,6 +120,9 @@ class Kernel(ConnectionFileMixin):
     _shell_handlers = Dict()
     _control_handlers = Dict()
     _job: traitlets.Container[MsgRequest | dict] = Dict()  # type: ignore[assignment]
+    _iopub_url = traitlets.Unicode("inproc://iopub")
+    _iopub_context = traitlets.Instance(zmq.Context)
+    _iopub_sockets: traitlets.Dict[threading.Thread, zmq.Socket] = traitlets.Dict()
     debugger = Instance(Debugger, ())
 
     quiet = traitlets.Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
@@ -275,18 +277,21 @@ class Kernel(ConnectionFileMixin):
         """Receive messages from the socket, unpack them and pass them to be processed with process_message."""
         process_message = self._process_control if socket_id is SocketID.control else self._process_shell
         async with self._open_socket(socket_id) as socket:
-            task_status.started()
-            while True:
-                if not (msg_ := await socket.arecv_multipart(copy=False).wait()):
-                    self.log.error("Empty message received on socket %", socket)
-                    await anyio.sleep(0.1)
-                    continue
-                copy = not isinstance(msg_[0], zmq.Message)
-                ident, msg_ = self.session.feed_identities(msg_, copy=copy)
-                parent = self.session.deserialize(msg_, content=True, copy=copy)
-                msg_type = parent["header"]["msg_type"]
-                self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, parent["content"])
-                await process_message(MsgRequest(socket_id=socket_id, ident=ident, parent=parent, msg_type=msg_type))
+            with self.iopub_socket(do_slow_subscriber_sleep=False):
+                task_status.started()
+                while True:
+                    if not (msg_ := await socket.arecv_multipart(copy=False).wait()):
+                        self.log.error("Empty message received on socket %", socket)
+                        await anyio.sleep(0.1)
+                        continue
+                    copy = not isinstance(msg_[0], zmq.Message)
+                    ident, msg_ = self.session.feed_identities(msg_, copy=copy)
+                    parent = self.session.deserialize(msg_, content=True, copy=copy)
+                    msg_type = parent["header"]["msg_type"]
+                    self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, parent["content"])
+                    await process_message(
+                        MsgRequest(socket_id=socket_id, ident=ident, parent=parent, msg_type=msg_type)
+                    )
 
     @contextlib.asynccontextmanager
     async def _open_socket(self, socket_id: SocketID):
@@ -296,22 +301,16 @@ class Kernel(ConnectionFileMixin):
         The zmq socket is used for receiving asynchronously.
         """
         linger = 1000
-        match socket_id:
-            case SocketID.iopub:
-                socket_type = zmq.SocketType.PUB
-            case _:
-                socket_type = zmq.SocketType.ROUTER
-
         if socket_id in self._sockets:
             msg = f"{socket_id=} is already loaded"
             raise RuntimeError(msg)
-        socket = zmq.Socket(self._zmq_context, socket_type)
+        socket: zmq.Socket = self._zmq_context.socket(zmq.SocketType.ROUTER)
         socket.linger = linger
         port_name = f"{socket_id}_port"
         port = utils.bind_socket(socket=socket, transport=self.transport, ip=self.ip, port=getattr(self, port_name, 0))  # type: ignore[call-arg]
         setattr(self, port_name, port)
         self._sockets[socket_id] = socket
-        self.log.debug("{%} {%} Channel on port: %i", socket_id, socket_type.name, port)
+        self.log.debug("{%} Channel on port: %i", socket_id, port)
         socket_ = zmq_anyio.Socket(socket)
         socket_.linger = linger
         async with socket_:
@@ -322,31 +321,118 @@ class Kernel(ConnectionFileMixin):
                 socket_.close(linger=0)
                 socket.close(linger=0)
 
-    def _init_pubio(self):
-        """Redirect input streams."""
+    @contextmanager
+    def _iopub_proxy(self):
+        """Provide an io proxy"""
+        context = zmq.Context()
+        ready_event = threading.Event()
+
+        def pub_proxy(context=context, ready_event=ready_event):
+            # We use a proxy because zmq pub sockets are not threadsafe and we use iopub for stdio / stderr
+            # which could come from any thread in this process.
+            # Ref: https://zguide.zeromq.org/docs/chapter2/#Working-with-Messages (fig 14)
+            frontend: zmq.Socket = context.socket(zmq.XSUB)
+            frontend.bind(self._iopub_url)
+            backend: zmq.Socket = context.socket(zmq.XPUB)
+            self.iopub_port = utils.bind_socket(
+                socket=backend,
+                transport=self.transport,  # type: ignore
+                ip=str(self.ip),
+                port=int(self.iopub_port),
+            )
+            ready_event.set()
+            try:
+                zmq.proxy(frontend, backend)
+            except zmq.ContextTerminated:
+                frontend.close()
+                backend.close()
+
+        iopub_thread = threading.Thread(target=pub_proxy, name="iopub proxy", daemon=True)
+        iopub_thread.start()
+        ready_event.wait(10)
+        iopub_thread.pydev_do_not_trace = True  # type: ignore[attr-defined]
+        iopub_thread.is_pydev_daemon_thread = True  # type: ignore[attr-defined]
+
         self._save_io()
+        cls: type[OutStream] = import_item(self.outstream_class)
         if self.outstream_class:
-            cls: type[OutStream] = import_item(self.outstream_class)
             for name in ["stdout", "stderr"]:
                 echo = getattr(sys, name)
 
                 def flusher(string: str, name=name, echo=echo):
                     "Publish stdio or stderr when flush is called"
-                    self.pubio_send(
-                        msg_or_type="stream",
-                        content={"name": name, "text": string},
-                        ident=f"stream.{name}".encode(),
-                    )
+                    if (thread := threading.current_thread()) not in self._iopub_sockets:
+                        self.log.debug("%s for thread %s: %s", name, thread.name, string)
+                    else:
+                        self.iopub_send(
+                            msg_or_type="stream",
+                            content={"name": name, "text": string},
+                            ident=f"stream.{name}".encode(),
+                        )
                     if not self.quiet and echo:
                         echo.write(string)
                         echo.flush()
 
                 wrapper = cls(name=name, flusher=flusher)  # type: ignore[call-arg]
                 setattr(sys, name, wrapper)
+        try:
+            yield context
+        finally:
+            context.term()
+            self._reset_io()
+
+    @contextlib.contextmanager
+    def iopub_socket(self, *, do_slow_subscriber_sleep=True):
+        """A contextmanager to provide a iopub socket on the current thread."""
+        # Each thread needs its own pub socket, normally this will only be for MainThread and Control.
+        thread = threading.current_thread()
+        socket: zmq.Socket | None
+        if not (socket := self._iopub_sockets.get(thread)):
+            self.log.info("Opening iopub socket for thread %s", thread.name)
+            # If you see this a lot, consider opening the socket in the context of the thread in which it is running.
+            socket = zmq.Socket(self._iopub_context, zmq.SocketType.PUB)
+            socket.connect(self._iopub_url)
+            self._iopub_sockets[thread] = socket
+            if do_slow_subscriber_sleep:
+                # https://pyzmq.readthedocs.io/en/latest/howto/logging.html#slow-joiner-problem
+                # https://zguide.zeromq.org/docs/chapter5/#Slow-Subscriber-Detection-Suicidal-Snail-Pattern
+                time.sleep(1)
+            try:
+                yield socket
+            finally:
+                socket.close(linger=500)
+                self._iopub_sockets.pop(thread, None)
+        else:
+            yield socket
+
+    def iopub_send(
+        self,
+        msg_or_type: dict[str, Any] | str,
+        content: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        parent: dict[str, Any] | None = None,
+        ident: bytes | list[bytes] | None = None,
+        buffers: list[bytes] | None = None,
+    ):
+        """Send the message using the zmq iopub socket on the current thread."""
+        if socket := self._iopub_sockets.get(thread := threading.current_thread()):
+            msg = self.session.send(
+                stream=socket,
+                msg_or_type=msg_or_type,
+                content=content,
+                metadata=metadata,
+                parent=parent if parent is not None else self._job.get("parent"),
+                ident=ident,
+                buffers=buffers,
+            )
+            if msg:
+                self.log.debug("iopub_send: msg_type:'%s', content: %s", msg["msg_type"], msg["content"])
+        else:
+            self.log.debug("No iopub socket for thread %s", thread.name)
 
     def _publish_status(self, status: Literal["busy", "idle"], job: MsgRequest):
         """send status (busy/idle) on IOPub"""
-        self.pubio_send(
+        self.iopub_send(
             msg_or_type="status",
             content={"execution_state": status},
             parent=job["parent"],
@@ -613,7 +699,7 @@ class Kernel(ConnectionFileMixin):
             # start computing output
             if not silent:
                 self._job = job
-                self.pubio_send(
+                self.iopub_send(
                     msg_or_type="execute_input",
                     content={"code": content["code"], "execution_count": self.shell.execution_count},
                     parent=job["parent"],
@@ -873,35 +959,6 @@ class Kernel(ConnectionFileMixin):
             raise StdinNotImplementedError
         return self._input_request(prompt, password=True)
 
-    def pubio_send(
-        self,
-        msg_or_type: dict[str, Any] | str,
-        content: dict[str, Any] | None = None,
-        metadata: dict[str, Any] | None = None,
-        parent: dict[str, Any] | None = None,
-        ident: bytes | list[bytes] | None = None,
-        buffers: list[bytes] | None = None,
-    ):
-        """Send the message on the iopub socket."""
-        if threading.current_thread() is not threading.main_thread():
-            # Send the message from the main thread
-            try:
-                anyio.from_thread.run_sync(self.pubio_send, msg_or_type, content, metadata, parent, ident, buffers)
-            except RuntimeError:
-                self.log.exception("Unable to send %s", msg_or_type)
-            return
-        msg = self.session.send(
-            stream=self._sockets[SocketID.iopub],
-            msg_or_type=msg_or_type,
-            content=content,
-            metadata=metadata,
-            parent=parent if parent is not None else self._job.get("parent"),
-            ident=ident,
-            buffers=buffers,
-        )
-        if msg:
-            self.log.debug("pubio_send: msg_type:'%s', content: %s", msg["msg_type"], msg["content"])
-
     def start_soon(self, func, *args, name: str | None = None):
         "Run a coroutine in the main thread."
         to_start = (func, args, name)
@@ -922,12 +979,9 @@ class Kernel(ConnectionFileMixin):
             raise RuntimeError(msg)
         if self.connection_file and Path(self.connection_file).exists():
             self.load_connection_file()
-        with self._zmq_context:
-            async with (
-                anyio.create_task_group() as tg,
-                self._open_socket(SocketID.iopub),
-                self._open_socket(SocketID.stdin),
-            ):
+        with self._zmq_context, self._iopub_proxy() as iopub_context:
+            async with anyio.create_task_group() as tg, self._open_socket(SocketID.stdin):
+                self._iopub_context = iopub_context
                 try:
                     await utils.start_anyio_thread(self._heartbeat, self._stop_event, tg, name="Heartbeat")
                     await utils.start_anyio_thread(self._run_control_loop, self._stop_event, tg, name="Control")
@@ -935,27 +989,28 @@ class Kernel(ConnectionFileMixin):
                     await tg.start(self._receive_msg_loop, SocketID.shell)
                     await tg.start(self._start_soon_scheduler, tg)
                     await tg.start(self.debugger.main_start, self)
-                    self._init_pubio()
+
                     if not self.connection_file:
                         self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{uuid.uuid4()}.json"))
                     self.write_connection_file()
                     print(
-                        f'To connect another client to this kernel, use:\n      --existing "{self.connection_file}"',
+                        f'To connect a client to this kernel, use:\n      --existing "{self.connection_file}"',
                     )
                     atexit.register(self.cleanup_connection_file)
-                    self.comm_manager.kernel = self
 
                     async def _watch_stop_event():
-                        await anyio.to_thread.run_sync(self._stop_event.wait)
-                        # Initiate shutdown
-                        tg.cancel_scope.cancel()
+                        try:
+                            await anyio.to_thread.run_sync(self._stop_event.wait)
+                        finally:
+                            tg.cancel_scope.cancel()
 
                     tg.start_soon(_watch_stop_event)
+                    self.comm_manager.kernel = self
                     yield self
                 finally:
                     self.comm_manager.kernel = None
                     self.stop()
-                    self._reset_io()
+
 
     @classmethod
     def start(cls, connection_file="", kernel_name=KernelName.asyncio) -> int:

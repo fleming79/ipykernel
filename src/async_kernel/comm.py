@@ -52,7 +52,7 @@ class Comm(BaseComm):
             # Only send when the kernel is set
             return
         content = {"data": {} if data is None else data, "comm_id": self.comm_id} | keys
-        kernel.pubio_send(
+        kernel.iopub_send(
             msg_or_type=msg_type,
             content=content,
             metadata=metadata,
