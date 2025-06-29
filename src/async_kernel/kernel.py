@@ -261,23 +261,39 @@ class Kernel(ConnectionFileMixin):
             pdb.Pdb = debugger.Pdb  # type:ignore[assignment,misc]
             pdb.set_trace = debugger.set_trace
 
-    async def _heartbeat(self, task_status: TaskStatus):
-        """The heartbeat.
+    async def _start_heartbeat(self, task_status: TaskStatus):
+        # Reference: https://jupyter-client.readthedocs.io/en/stable/messaging.html#heartbeat-for-kernels
 
-        Reference: https://jupyter-client.readthedocs.io/en/stable/messaging.html#heartbeat-for-kernels
-        """
-        # Inside heartbeat thread
-        async with self._open_socket(SocketID.heartbeat) as socket:
-            task_status.started()
-            while True:
-                data = await socket.arecv_multipart(copy=False).wait()
-                socket.send_multipart(data)
+        def heartbeat():
+            socket: zmq.Socket = context.socket(zmq.ROUTER)
+            socket.linger = 1000
+            self.hb_port = utils.bind_socket(socket=socket, transport=self.transport, ip=self.ip, port=self.hb_port)  # type: ignore
+            ready_event.set()
+            try:
+                # Echo the message back
+                zmq.proxy(socket, socket)
+            except zmq.ContextTerminated:
+                socket.close()
+
+        context = zmq.Context()
+        ready_event = threading.Event()
+        heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
+        heartbeat_thread.start()
+        ready_event.wait(10)
+        heartbeat_thread.name = "Heartbeat"
+        heartbeat_thread.pydev_do_not_trace = True  # type: ignore[attr-defined]
+        heartbeat_thread.is_pydev_daemon_thread = True  # type: ignore[attr-defined]
+        task_status.started()
+        try:
+            await anyio.sleep_forever()
+        finally:
+            context.term()
 
     async def _receive_msg_loop(self, socket_id: Literal[SocketID.control, SocketID.shell], *, task_status: TaskStatus):
         """Receive messages from the socket, unpack them and pass them to be processed with process_message."""
         process_message = self._process_control if socket_id is SocketID.control else self._process_shell
         async with self._open_socket(socket_id) as socket:
-            with self.iopub_socket(do_slow_subscriber_sleep=False):
+            with self.iopub_enabled_this_thread(slow_subscriber_sleep=False):
                 task_status.started()
                 while True:
                     if not (msg_ := await socket.arecv_multipart(copy=False).wait()):
@@ -328,7 +344,8 @@ class Kernel(ConnectionFileMixin):
         ready_event = threading.Event()
 
         def pub_proxy(context=context, ready_event=ready_event):
-            # We use a proxy because zmq pub sockets are not threadsafe and we use iopub for stdio / stderr
+            # We use an internal proxy to collect pub messages for distribution.
+            # as a side effect, threads need to
             # which could come from any thread in this process.
             # Ref: https://zguide.zeromq.org/docs/chapter2/#Working-with-Messages (fig 14)
             frontend: zmq.Socket = context.socket(zmq.XSUB)
@@ -382,9 +399,8 @@ class Kernel(ConnectionFileMixin):
             self._reset_io()
 
     @contextlib.contextmanager
-    def iopub_socket(self, *, do_slow_subscriber_sleep=True):
+    def iopub_enabled_this_thread(self, *, slow_subscriber_sleep=True):
         """A contextmanager to provide a iopub socket on the current thread."""
-        # Each thread needs its own pub socket, normally this will only be for MainThread and Control.
         thread = threading.current_thread()
         socket: zmq.Socket | None
         if not (socket := self._iopub_sockets.get(thread)):
@@ -393,17 +409,17 @@ class Kernel(ConnectionFileMixin):
             socket = zmq.Socket(self._iopub_context, zmq.SocketType.PUB)
             socket.connect(self._iopub_url)
             self._iopub_sockets[thread] = socket
-            if do_slow_subscriber_sleep:
+            if slow_subscriber_sleep:
                 # https://pyzmq.readthedocs.io/en/latest/howto/logging.html#slow-joiner-problem
                 # https://zguide.zeromq.org/docs/chapter5/#Slow-Subscriber-Detection-Suicidal-Snail-Pattern
-                time.sleep(1)
+                time.sleep(0.5)
             try:
-                yield socket
+                yield
             finally:
                 socket.close(linger=500)
                 self._iopub_sockets.pop(thread, None)
         else:
-            yield socket
+            yield
 
     def iopub_send(
         self,
@@ -828,7 +844,7 @@ class Kernel(ConnectionFileMixin):
             reply_content["status"] = "ok"
         else:
             if traceback := shell._last_traceback:
-                self.log.info("Exception in execute request:\n%s", "\n".join(traceback))
+                self.log.info("Exception in execute request")
             reply_content["status"] = "error"
             reply_content["traceback"] = traceback or []
             reply_content["ename"] = str(type(err).__name__)
@@ -983,8 +999,8 @@ class Kernel(ConnectionFileMixin):
             async with anyio.create_task_group() as tg, self._open_socket(SocketID.stdin):
                 self._iopub_context = iopub_context
                 try:
-                    await utils.start_anyio_thread(self._heartbeat, self._stop_event, tg, name="Heartbeat")
                     await utils.start_anyio_thread(self._run_control_loop, self._stop_event, tg, name="Control")
+                    await tg.start(self._start_heartbeat)
                     await tg.start(self._shell_execute_request_loop)
                     await tg.start(self._receive_msg_loop, SocketID.shell)
                     await tg.start(self._start_soon_scheduler, tg)
