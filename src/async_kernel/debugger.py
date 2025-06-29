@@ -16,6 +16,7 @@ import traitlets
 from IPython.core.inputtransformer2 import leading_empty_lines
 from jupyter_client.jsonutil import json_default
 
+from async_kernel import utils
 from async_kernel.compiler import get_file_name, get_tmp_directory, get_tmp_hash_seed
 
 if TYPE_CHECKING:
@@ -527,7 +528,7 @@ class Debugger(traitlets.HasTraits):
 
     async def debugInfo(self, message):
         """Handle a debug info message."""
-        if not _is_debugpy_available:
+        if not _is_debugpy_available or utils.LAUNCHED_BY_DEBUGPY:
             return {}
         breakpoint_list = []
         for key, value in self.breakpoint_list.items():

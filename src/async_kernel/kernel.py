@@ -144,7 +144,8 @@ class Kernel(ConnectionFileMixin):
 
     shell = Instance(AsyncInteractiveShell)
     shell_class = traitlets.Type(AsyncInteractiveShell)
-
+    banner = traitlets.Unicode()
+    help_links = traitlets.Dict()
     user_module = traitlets.Any()
     user_ns = Dict()
     comm_manager: Instance[CommManager] = Instance("async_kernel.comm.CommManager")
@@ -211,8 +212,9 @@ class Kernel(ConnectionFileMixin):
             "implementation": _version.implementation,
             "implementation_version": _version.implementation_version,
             "language_info": _version.language_info,
-            "banner": self.shell.banner,
-            "supported_features": ["debugger"],
+            "banner": self.banner,
+            "help_links": self.help_links,
+            "debugger": not utils.LAUNCHED_BY_DEBUGPY,
         }
 
     @observe("user_module")
