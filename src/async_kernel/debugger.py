@@ -8,9 +8,9 @@ import sys
 import threading
 import typing as t
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic, TypeVar
 
-import anyio.from_thread
+import anyio.abc
 import orjson
 import traitlets
 from IPython.core.inputtransformer2 import leading_empty_lines
@@ -48,7 +48,32 @@ except Exception as e:
     else:
         raise e
 
+T = TypeVar("T")
 
+
+class PendingResult(Generic[T]):
+    "A lightweight anyio non-compliant varient of a Future"
+
+    def __init__(self) -> None:
+        self._exception = None
+        self._event_done = anyio.Event()
+
+    async def wait(self) -> T:
+        await self._event_done.wait()
+        if self._exception:
+            raise self._exception
+        return self.result
+
+    def set_result(self, value):
+        if self._event_done.is_set():
+            raise RuntimeError
+        self.result = value
+        self._event_done.set()
+
+    def set_exception(self, exception: Exception):
+        if self._event_done.is_set():
+            raise RuntimeError
+        self._exception = exception
 
 
 class _FakeCode:
@@ -123,7 +148,7 @@ class DebugpyMessageQueue:
         """Init the queue."""
         self.tcp_buffer = b""
         self.event_callback = event_callback
-        self.send_stream, self.receive_stream = anyio.create_memory_object_stream()
+        self._pending_responses: dict[int, PendingResult] = {}
         self.log = log
 
     def _put_message(self, raw_msg: bytes):
@@ -132,7 +157,8 @@ class DebugpyMessageQueue:
         if msg["type"] == "event":
             self.event_callback(msg)
         else:
-            self.send_stream.send_nowait(msg)
+            if pending_result := self._pending_responses.pop(msg["request_seq"], None):
+                pending_result.set_result(msg)
 
     def put_tcp_frame(self, frame: bytes):
         """Put a tcp frame in the queue."""
@@ -149,10 +175,10 @@ class DebugpyMessageQueue:
                     return
             self.tcp_buffer = b""
 
-
-    async def get_message(self):
+    async def get_message(self, msg):
         """Get a message from the queue."""
-        return await self.receive_stream.receive()
+        self._pending_responses[msg["seq"]] = pending = PendingResult()
+        return await pending.wait()
 
 
 class DebugpyClient(traitlets.HasTraits):
@@ -160,11 +186,8 @@ class DebugpyClient(traitlets.HasTraits):
 
     capabilities = traitlets.Dict()
     kernel: traitlets.Instance[Kernel] = traitlets.Instance("async_kernel.Kernel", ())
-    initialize_reply = traitlets.Dict()
-    init_event_seq = traitlets.Int(-1)
-    _connected = traitlets.Bool()
-    wait_for_attach = traitlets.Bool(True)
-    _seq = 0
+    _host_port = None
+    _socketstream: anyio.abc.SocketStream | None = None
 
     def __init__(self, log, event_callback):
         """Initialize the client."""
@@ -173,116 +196,82 @@ class DebugpyClient(traitlets.HasTraits):
         self.message_queue = DebugpyMessageQueue(self._forward_event, self.log)
         self.init_event = anyio.Event()
 
-    async def start(self, task_status: TaskStatus):
-        def start_debugpy():
-            import debugpy
-            return debugpy.listen(0)
-
-        self._host_port = anyio.from_thread.run_sync(start_debugpy)
-        async with await anyio.connect_tcp(*self._host_port) as socketstream:
-            self.socketstream = socketstream
-            thread = threading.current_thread()
-            # This thread can't be stopped by the debugger when debugging
-            thread.pydev_do_not_trace = True  # type: ignore[attr-defined]
-            thread.is_pydev_daemon_thread = True  # type: ignore[attr-defined]
-            task_status.started()
-            await anyio.sleep_forever()
-
-    def next_seq(self):
-        "A monotonically decreasing negative number so as not to clash with the frontend seq."
-        self._seq = self._seq - 1
-        return self._seq
-
     def _forward_event(self, msg):
         if msg["event"] == "initialized":
             self.init_event.set()
-            self.init_event_seq = msg["seq"]
         self.event_callback(msg)
+
+    @property
+    def connected(self):
+        return bool(self._socketstream)
 
     async def _send_request(self, msg):
         content = orjson.dumps(msg, default=json_default)
         content_length = str(len(content)).encode()
         buf = DebugpyMessageQueue.HEADER + content_length + DebugpyMessageQueue.SEPARATOR
         buf += content
-        self.log.debug("DEBUGPYCLIENT: request %s", buf)
-        await self.socketstream.send(buf)
+        if socketstream := self._socketstream:
+            self.log.debug("DEBUGPYCLIENT: request %s", buf)
+            await socketstream.send(buf)
+        else:
+            msg = "socketstream not connected"
+            raise RuntimeError(msg)
 
-    async def _wait_for_response(self):
+    async def _wait_for_response(self, msg):
         # Since events are never pushed to the message_queue
         # we can safely assume the next message in queue
         # will be an answer to the previous request
-        return await self.message_queue.get_message()
-
-    async def _handle_init_sequence(self):
-        # 1] Waits for initialized event
-        await self.init_event.wait()
-
-        # 2] Sends configurationDone request
-        configurationDone = {
-            "type": "request",
-            "seq": self.next_seq(),
-            "command": "configurationDone",
-        }
-        await self._send_request(configurationDone)
-
-        # 3]  Waits for configurationDone response
-        await self._wait_for_response()
-
-        # 4] Waits for attachResponse and returns it
-        return await self._wait_for_response()
+        return await self.message_queue.get_message(msg)
 
     def get_host_port(self):
         """Get the host debugpy port."""
-        return self._host_port
+        if not self._host_port:
+            msg = "host port not available until debugpy is listening!"
+            raise RuntimeError(msg)
+        host, port = self._host_port
+        return {"host": host, "port": port}
 
     async def connect_tcp_socket(self, *, task_status: TaskStatus):
         """Connect to the tcp socket."""
-        self._connected = True
-        task_status.started()
+
+        if not self._host_port:
+            import debugpy
+
+            self._host_port = debugpy.listen(0)
+            thread = threading.current_thread()
+            # This thread can't be stopped by the debugger when debugging
+            thread.pydev_do_not_trace = True  # type: ignore[attr-defined]
+            thread.is_pydev_daemon_thread = True  # type: ignore[attr-defined]
         try:
-            while True:
-                data = await self.socketstream.receive()
-                self.message_queue.put_tcp_frame(data)
+            self.log.debug("# debugpy socketstream connecting #")
+            async with await anyio.connect_tcp(*self._host_port) as socketstream:
+                self._socketstream = socketstream
+                self.log.debug("## debugpy socketstream connected ##")
+                task_status.started()
+                while True:
+                    data = await socketstream.receive()
+                    self.message_queue.put_tcp_frame(data)
         except anyio.EndOfStream:
+            self.log.debug("## debugpy socketstream disconnected ##")
             return
         finally:
-            self._connected = False
-
-    def disconnect_tcp_socket(self):
-        """Disconnect from the tcp socket."""
-        self._connected = False
-        self.init_event = anyio.Event()
-        self.wait_for_attach = True
-
-    def receive_dap_frame(self, frame):
-        """Receive a dap frame."""
-        self.message_queue.put_tcp_frame(frame)
+            self._socketstream = None
 
     async def send_dap_request(self, msg):
         """Send a dap request."""
-        if msg["command"] == "initialize":
-            if self.initialize_reply:
-                return self.initialize_reply | {"request_seq": msg["seq"]}
-            self.init_event_seq = msg["seq"]
         await self._send_request(msg)
-        if self.wait_for_attach and msg["command"] == "attach":
-            rep = await self._handle_init_sequence()
-            self.wait_for_attach = False
-            return rep
-        reply = await self._wait_for_response()
-        if msg["command"] == "initialize":
-            self.initialize_reply = reply
-        return reply
+        return await self._wait_for_response(msg)
 
 
 class Debugger(traitlets.HasTraits):
     """The debugger class."""
 
+    _seq = 0
     breakpoint_list = traitlets.Dict()
     stopped_threads = traitlets.Set()
     _removed_cleanup = traitlets.Dict()
-    is_started = traitlets.Bool()
-    just_my_code = traitlets.Bool()
+    _initialize_reply = traitlets.Dict()
+    just_my_code = traitlets.Bool(True)
     debugpy_initialized = traitlets.Bool()
     variable_explorer = traitlets.Instance(VariableExplorer, ())
     debugpy_client = traitlets.Instance(DebugpyClient)
@@ -320,20 +309,22 @@ class Debugger(traitlets.HasTraits):
         """Initialize the debugger."""
         self.debugpy_client = DebugpyClient(log=self.log, event_callback=self._handle_event)
         self.started_debug_handlers = {
-            "dumpCell": self.dumpCell,
-            "setBreakpoints": self.setBreakpoints,
-            "source": self.source,
-            "stackTrace": self.stackTrace,
-            "variables": self.variables,
-            "attach": self.attach,
-            "configurationDone": self.configurationDone,
+            "dumpCell": self.do_dump_cell,
+            "setBreakpoints": self.do_set_breakpoints,
+            "source": self.do_source,
+            "stackTrace": self.do_stack_trace,
+            "variables": self.do_variables,
+            "attach": self.do_attach,
+            "configurationDone": self.do_configuration_done,
+            "disconnect": self.do_disconnect,
         }
         self.static_debug_handlers = {
-            "debugInfo": self.debugInfo,
-            "inspectVariables": self.inspectVariables,
-            "richInspectVariables": self.richInspectVariables,
-            "modules": self.modules,
-            "copyToGlobals": self.copyToGlobals,
+            "initialize": self.do_initialize,
+            "debugInfo": self.do_debug_info,
+            "inspectVariables": self.do_inspect_variables,
+            "richInspectVariables": self.do_rich_inspect_variables,
+            "modules": self.do_modules,
+            "copyToGlobals": self.do_copy_to_globals,
         }
 
     async def main_start(self, kernel: Kernel, *, task_status: TaskStatus):
@@ -347,6 +338,11 @@ class Debugger(traitlets.HasTraits):
     async def _forward_message(self, msg):
         return await self.debugpy_client.send_dap_request(msg)
 
+    def next_seq(self):
+        "A monotonically decreasing negative number so as not to clash with the frontend seq."
+        self._seq = self._seq - 1
+        return self._seq
+
     def _handle_event(self, msg):
         if msg["event"] == "stopped":
             if msg["body"]["allThreadsStopped"]:
@@ -358,8 +354,6 @@ class Debugger(traitlets.HasTraits):
                 self.stopped_threads = set()
             else:
                 self.stopped_threads.remove(msg["body"]["threadId"])
-        elif msg["event"] == "terminated":
-            self._on_disconnect()
         self._publish_event(msg)
 
     def _publish_event(self, event: dict):
@@ -370,7 +364,7 @@ class Debugger(traitlets.HasTraits):
         )
 
     def _build_variables_response(self, request, variables):
-        var_list = [var for var in variables if self.accept_variable(var["name"])]
+        var_list = [var for var in variables if self._accept_variable(var["name"])]
         return {
             "seq": request["seq"],
             "type": "response",
@@ -381,14 +375,12 @@ class Debugger(traitlets.HasTraits):
         }
 
     def _accept_stopped_thread(self, thread_name):
-        # TODO: identify Thread-2, Thread-3 and Thread-4. These are NOT
-        # Control, IOPub or Heartbeat threads
-        forbid_list = ["IPythonHistorySavingThread", "Thread-2", "Thread-3", "Thread-4"]
+        forbid_list = ["IPythonHistorySavingThread"]
         return thread_name not in forbid_list
 
     async def handle_stopped_event(self, event):
         """Handle a stopped event."""
-        req = {"seq": self.debugpy_client.next_seq(), "type": "request", "command": "threads"}
+        req = {"seq": self.next_seq(), "type": "request", "command": "threads"}
         rep = await self._forward_message(req)
         for thread in rep["body"]["threads"]:
             if self._accept_stopped_thread(thread["name"]):
@@ -398,36 +390,49 @@ class Debugger(traitlets.HasTraits):
     async def start(self):
         """Start the debugger."""
         if not self.debugpy_initialized:
-            await self.taskgroup.start(self.debugpy_client.start)
-            await self.taskgroup.start(self.debugpy_client.connect_tcp_socket)
             tmp_dir = get_tmp_directory()
             if not Path(tmp_dir).exists():
                 Path(tmp_dir).mkdir(parents=True)
             self.debugpy_initialized = True
-        elif not self.debugpy_client._connected:
-            await self.taskgroup.start(self.debugpy_client.connect_tcp_socket)
-
+        await self.taskgroup.start(self.debugpy_client.connect_tcp_socket)
         # Don't remove leading empty lines when debugging so the breakpoints are correctly positioned
         cleanup_transforms = self.kernel.shell.input_transformer_manager.cleanup_transforms
         if leading_empty_lines in cleanup_transforms:
             index = cleanup_transforms.index(leading_empty_lines)
             self._removed_cleanup[index] = cleanup_transforms.pop(index)
 
-        # self.debugpy_client.connect_tcp_socket()
-        self.is_started = True
-        return self.debugpy_initialized
+    def _accept_variable(self, variable_name):
+        """Accept a variable by name."""
+        return (
+            variable_name not in self.forbidden_names
+            and not bool(re.search(r"^_\d", variable_name))
+            and not variable_name.startswith("_i")
+        )
 
-    def stop(self):
-        """Stop the debugger."""
-        self.debugpy_client.disconnect_tcp_socket()
+    def _to_response(self, msg: dict, *, success=True):
+        return {
+            "seq": self.next_seq(),
+            "type": "response",
+            "request_seq": msg["seq"],
+            "success": success,
+            "command": msg["command"],
+        }
 
-        # Restore remove cleanup transformers
-        cleanup_transforms = self.kernel.shell.input_transformer_manager.cleanup_transforms
-        for index in sorted(self._removed_cleanup):
-            func = self._removed_cleanup.pop(index)
-            cleanup_transforms.insert(index, func)
+    async def process_request(self, message: dict[str, t.Any]):
+        """Process a request."""
+        command = message["command"]
+        if handler := self.static_debug_handlers.get(command):
+            return await handler(message)
+        if not self.debugpy_client.connected:
+            self.log.debug("Not ready - ignoring command: '%s'", command)
+            return {}
+        if handler := self.started_debug_handlers.get(command):
+            with anyio.move_on_after(4):
+                return await handler(message)
+            return self._to_response(message, success=False)
+        return await self._forward_message(message)
 
-    async def dumpCell(self, message):
+    async def do_dump_cell(self, message):
         """Handle a dump cell message."""
         code = message["arguments"]["code"]
         file_name = get_file_name(code)
@@ -443,7 +448,7 @@ class Debugger(traitlets.HasTraits):
             "body": {"sourcePath": file_name},
         }
 
-    async def setBreakpoints(self, message):
+    async def do_set_breakpoints(self, message):
         """Handle a set breakpoints message."""
         source = message["arguments"]["source"]["path"]
         self.breakpoint_list[source] = message["arguments"]["breakpoints"]
@@ -456,7 +461,7 @@ class Debugger(traitlets.HasTraits):
             ]
         return message_response
 
-    async def source(self, message):
+    async def do_source(self, message):
         """Handle a source message."""
         reply = {"type": "response", "request_seq": message["seq"], "command": message["command"]}
         source_path = message["arguments"]["source"]["path"]
@@ -471,7 +476,7 @@ class Debugger(traitlets.HasTraits):
 
         return reply
 
-    async def stackTrace(self, message):
+    async def do_stack_trace(self, message):
         """Handle a stack trace message."""
         reply = await self._forward_message(message)
         # The stackFrames array can have the following content:
@@ -493,15 +498,7 @@ class Debugger(traitlets.HasTraits):
             pass
         return reply
 
-    def accept_variable(self, variable_name):
-        """Accept a variable by name."""
-        return (
-            variable_name not in self.forbidden_names
-            and not bool(re.search(r"^_\d", variable_name))
-            and not variable_name.startswith("_i")
-        )
-
-    async def variables(self, message):
+    async def do_variables(self, message):
         """Handle a variables message."""
         reply = {}
         if not self.stopped_threads:
@@ -510,23 +507,48 @@ class Debugger(traitlets.HasTraits):
 
         reply = await self._forward_message(message)
         # TODO : check start and count arguments work as expected in debugpy
-        reply["body"]["variables"] = [var for var in reply["body"]["variables"] if self.accept_variable(var["name"])]
+        reply["body"]["variables"] = [var for var in reply["body"]["variables"] if self._accept_variable(var["name"])]
         return reply
 
-    async def attach(self, message):
-        """Handle an attach message."""
-        host, port = self.debugpy_client.get_host_port()
-        message["arguments"]["connect"] = {"host": host, "port": port}
-        message["arguments"]["logToFile"] = True
-        # Experimental option to break in non-user code.
-        # The ipykernel source is in the call stack, so the user
-        # has to manipulate the step-over and step-into in a wize way.
-        # Set debugOptions for breakpoints in python standard library source.
-        if not self.just_my_code:
-            message["arguments"]["debugOptions"] = ["DebugStdLib"]
+    async def do_initialize(self, message):
+        if not self.debugpy_client.connected:
+            await self.start()
         return await self._forward_message(message)
 
-    async def configurationDone(self, message):
+    async def do_disconnect(self, message):
+        response = await self._forward_message(message)
+        # Restore the leading whitespace remove transform.
+        cleanup_transforms = self.kernel.shell.input_transformer_manager.cleanup_transforms
+        for index in sorted(self._removed_cleanup):
+            func = self._removed_cleanup.pop(index)
+            cleanup_transforms.insert(index, func)
+        return response
+
+    async def do_attach(self, message):
+        """Handle an attach message."""
+
+        message["arguments"]["connect"] = self.debugpy_client.get_host_port()
+        for path in self.breakpoint_list:
+            #
+            await self._forward_message({
+                "type": "request",
+                "seq": self.next_seq(),
+                "command": "setBreakpoints",
+                "arguments": {"breakpoints": [], "source": {"path": path}, "sourceModified": False},
+            })
+        if self.just_my_code:
+            message["arguments"]["debugOptions"] = ["justMyCode"]
+        await self.debugpy_client._send_request(message)
+        with anyio.move_on_after(10):
+            await self.debugpy_client.init_event.wait()
+        await self._forward_message({
+            "type": "request",
+            "seq": self.next_seq(),
+            "command": "configurationDone",
+        })
+        return await self.debugpy_client._wait_for_response(message)
+
+    async def do_configuration_done(self, message):
         """Handle a configuration done message."""
         # This is only supposed to be called during initialize but can come at anytime. Ref: https://microsoft.github.io/debug-adapter-protocol/specification#Events_Initialized
         return {
@@ -537,7 +559,7 @@ class Debugger(traitlets.HasTraits):
             "command": message["command"],
         }
 
-    async def debugInfo(self, message):
+    async def do_debug_info(self, message):
         """Handle a debug info message."""
         if not _is_debugpy_available or utils.LAUNCHED_BY_DEBUGPY:
             return {}
@@ -550,7 +572,7 @@ class Debugger(traitlets.HasTraits):
             "success": True,
             "command": message["command"],
             "body": {
-                "isStarted": self.is_started,
+                "isStarted": self.debugpy_client.connected,
                 "hashMethod": "Murmur2",
                 "hashSeed": get_tmp_hash_seed(),
                 "tmpFilePrefix": get_tmp_directory() + os.sep,
@@ -563,7 +585,7 @@ class Debugger(traitlets.HasTraits):
             },
         }
 
-    async def inspectVariables(self, message):
+    async def do_inspect_variables(self, message):
         """Handle an inspect variables message."""
         self.variable_explorer.untrack_all()
         # looks like the implementation of untrack_all in ptvsd
@@ -574,7 +596,7 @@ class Debugger(traitlets.HasTraits):
         variables = self.variable_explorer.get_children_variables()
         return self._build_variables_response(message, variables)
 
-    async def richInspectVariables(self, message):
+    async def do_rich_inspect_variables(self, message):
         """Handle a rich inspect variables message."""
         reply = {
             "type": "response",
@@ -606,7 +628,7 @@ class Debugger(traitlets.HasTraits):
             reply = await self._forward_message({
                 "type": "request",
                 "command": "evaluate",
-                "seq": self.debugpy_client.next_seq(),
+                "seq": self.next_seq(),
                 "arguments": {"expression": code, "frameId": frame_id, "context": "clipboard"},
             })
             if reply["success"]:
@@ -619,7 +641,7 @@ class Debugger(traitlets.HasTraits):
         reply["success"] = True
         return reply
 
-    async def copyToGlobals(self, message):
+    async def do_copy_to_globals(self, message):
         dst_var_name = message["arguments"]["dstVariableName"]
         src_var_name = message["arguments"]["srcVariableName"]
         src_frame_id = message["arguments"]["srcFrameId"]
@@ -636,7 +658,7 @@ class Debugger(traitlets.HasTraits):
             },
         })
 
-    async def modules(self, message):
+    async def do_modules(self, message):
         """Handle a modules message."""
         modules = list(sys.modules.values())
         startModule = message.get("startModule", 0)
@@ -648,22 +670,3 @@ class Debugger(traitlets.HasTraits):
             if filename and filename.endswith(".py"):
                 mods.append({"id": i, "name": module.__name__, "path": filename})
         return {"body": {"modules": mods, "totalModules": len(modules)}}
-
-    async def process_request(self, message: dict[str, t.Any]):
-        """Process a request."""
-        reply = {}
-        if message["command"] == "initialize" and not self.is_started:
-            await self.start()
-        if handler := self.static_debug_handlers.get(message["command"]):
-            return await handler(message)
-        if self.is_started:
-            if handler := self.started_debug_handlers.get(message["command"]):
-                return await handler(message)
-            return await self._forward_message(message)
-        if message["command"] == "disconnect":
-            self.stop()
-            self.breakpoint_list = {}
-            self.stopped_threads = set()
-            self.is_started = False
-            self.log.info("The debugger has stopped")
-        return reply
