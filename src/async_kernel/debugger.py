@@ -11,10 +11,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Generic, TypeVar
 
 import anyio.abc
-import orjson
 import traitlets
 from IPython.core.inputtransformer2 import leading_empty_lines
-from jupyter_client.jsonutil import json_default
 
 from async_kernel import utils
 from async_kernel.compiler import get_file_name, get_tmp_directory, get_tmp_hash_seed
@@ -52,7 +50,7 @@ T = TypeVar("T")
 
 
 class PendingResult(Generic[T]):
-    "A lightweight anyio non-compliant varient of a Future"
+    "A lightweight anyio non-compliant varient of a Future."
 
     def __init__(self) -> None:
         self._exception = None
@@ -137,28 +135,44 @@ class VariableExplorer(traitlets.HasTraits):
         return [x.get_var_data() for x in variables.get_children_variables()]
 
 
-class DebugpyMessageQueue:
-    """A debugpy message queue."""
+class DebugpyClient(traitlets.HasTraits):
+    """A client for debugpy."""
 
     HEADER = b"Content-Length: "
     SEPARATOR = b"\r\n\r\n"
     SEPARATOR_LENGTH = 4
+    tcp_buffer = b""
+    _pending_responses: traitlets.Dict[int, PendingResult] = traitlets.Dict()
+    capabilities = traitlets.Dict()
+    kernel: traitlets.Instance[Kernel] = traitlets.Instance("async_kernel.Kernel", ())
+    _host_port = None
+    _socketstream: anyio.abc.SocketStream | None = None
 
-    def __init__(self, event_callback, log):
-        """Init the queue."""
-        self.tcp_buffer = b""
-        self.event_callback = event_callback
-        self._pending_responses: dict[int, PendingResult] = {}
+    def __init__(self, log, event_callback):
+        """Initialize the client."""
         self.log = log
+        self.event_callback = event_callback
+        self._pack = self.kernel.session.pack
+        self._unpack = self.kernel.session.unpack
 
-    def _put_message(self, raw_msg: bytes):
-        msg: dict[str, t.Any] = orjson.loads(raw_msg)
-        self.log.debug("_put_message :%s %s", msg["type"], msg)
-        if msg["type"] == "event":
-            self.event_callback(msg)
-        else:
-            if pending_result := self._pending_responses.pop(msg["request_seq"], None):
-                pending_result.set_result(msg)
+    @property
+    def connected(self):
+        return bool(self._socketstream)
+
+    async def _send_request(self, request: dict):
+        if not (socketstream := self._socketstream):
+            msg = "socketstream not connected"
+            raise RuntimeError(msg)
+        content = self._pack(request)
+        content_length = str(len(content)).encode()
+        buf = self.HEADER + content_length + self.SEPARATOR
+        buf += content
+        self.log.debug("DEBUGPYCLIENT: request %s", buf)
+        await socketstream.send(buf)
+
+    async def _wait_for_response(self, request: dict):
+        self._pending_responses[request["seq"]] = pending = PendingResult()
+        return await pending.wait()
 
     def put_tcp_frame(self, frame: bytes):
         """Put a tcp frame in the queue."""
@@ -169,59 +183,17 @@ class DebugpyMessageQueue:
                 size, raw_msg = buf.split(self.SEPARATOR, maxsplit=1)
                 size = int(size)
                 if len(raw_msg) >= size:
-                    self._put_message(raw_msg[:size])
+                    msg: dict[str, t.Any] = self._unpack(raw_msg[:size])
+                    self.log.debug("_put_message :%s %s", msg["type"], msg)
+                    if msg["type"] == "event":
+                        self.event_callback(msg)
+                    else:
+                        if pending_result := self._pending_responses.pop(msg["request_seq"], None):
+                            pending_result.set_result(msg)
                 else:
                     self.tcp_buffer = self.HEADER + buf
                     return
             self.tcp_buffer = b""
-
-    async def get_message(self, msg):
-        """Get a message from the queue."""
-        self._pending_responses[msg["seq"]] = pending = PendingResult()
-        return await pending.wait()
-
-
-class DebugpyClient(traitlets.HasTraits):
-    """A client for debugpy."""
-
-    capabilities = traitlets.Dict()
-    kernel: traitlets.Instance[Kernel] = traitlets.Instance("async_kernel.Kernel", ())
-    _host_port = None
-    _socketstream: anyio.abc.SocketStream | None = None
-
-    def __init__(self, log, event_callback):
-        """Initialize the client."""
-        self.log = log
-        self.event_callback = event_callback
-        self.message_queue = DebugpyMessageQueue(self._forward_event, self.log)
-        self.init_event = anyio.Event()
-
-    def _forward_event(self, msg):
-        if msg["event"] == "initialized":
-            self.init_event.set()
-        self.event_callback(msg)
-
-    @property
-    def connected(self):
-        return bool(self._socketstream)
-
-    async def _send_request(self, msg):
-        content = orjson.dumps(msg, default=json_default)
-        content_length = str(len(content)).encode()
-        buf = DebugpyMessageQueue.HEADER + content_length + DebugpyMessageQueue.SEPARATOR
-        buf += content
-        if socketstream := self._socketstream:
-            self.log.debug("DEBUGPYCLIENT: request %s", buf)
-            await socketstream.send(buf)
-        else:
-            msg = "socketstream not connected"
-            raise RuntimeError(msg)
-
-    async def _wait_for_response(self, msg):
-        # Since events are never pushed to the message_queue
-        # we can safely assume the next message in queue
-        # will be an answer to the previous request
-        return await self.message_queue.get_message(msg)
 
     def get_host_port(self):
         """Get the host debugpy port."""
@@ -243,22 +215,22 @@ class DebugpyClient(traitlets.HasTraits):
             thread.pydev_do_not_trace = True  # type: ignore[attr-defined]
             thread.is_pydev_daemon_thread = True  # type: ignore[attr-defined]
         try:
-            self.log.debug("# debugpy socketstream connecting #")
+            self.log.debug("++ debugpy socketstream connecting ++")
             async with await anyio.connect_tcp(*self._host_port) as socketstream:
                 self._socketstream = socketstream
-                self.log.debug("## debugpy socketstream connected ##")
+                self.log.debug("++ debugpy socketstream connected ++")
                 task_status.started()
                 while True:
                     data = await socketstream.receive()
-                    self.message_queue.put_tcp_frame(data)
+                    self.put_tcp_frame(data)
         except anyio.EndOfStream:
-            self.log.debug("## debugpy socketstream disconnected ##")
+            self.log.debug("++ debugpy socketstream disconnected ++")
             return
         finally:
             self._socketstream = None
 
     async def send_dap_request(self, msg):
-        """Send a dap request."""
+        """Send a dap request and return the response."""
         await self._send_request(msg)
         return await self._wait_for_response(msg)
 
@@ -278,6 +250,7 @@ class Debugger(traitlets.HasTraits):
     log = traitlets.Instance(logging.LoggerAdapter)
     kernel: Kernel
     taskgroup: TaskGroup
+    init_event = traitlets.Instance(anyio.Event, ())
     forbidden_names = [
         "__name__",
         "__doc__",
@@ -354,6 +327,9 @@ class Debugger(traitlets.HasTraits):
                 self.stopped_threads = set()
             else:
                 self.stopped_threads.remove(msg["body"]["threadId"])
+        elif msg["event"] == "initialized":
+            self.init_event.set()
+
         self._publish_event(msg)
 
     def _publish_event(self, event: dict):
@@ -602,11 +578,11 @@ class Debugger(traitlets.HasTraits):
         # { frames from the notebook}
         # ...
         # { 'id': xxx, 'name': '<module>', ... } <= this is the first frame of the code from the notebook
-        # { frames from ipykernel }
+        # { frames from async_kernel }
         # ...
-        # {'id': yyy, 'name': '<module>', ... } <= this is the first frame of ipykernel code
+        # {'id': yyy, 'name': '<module>', ... } <= this is the first frame of async_kernel code
         # or only the frames from the notebook.
-        # We want to remove all the frames from ipykernel when they are present.
+        # We want to remove all the frames from async_kernel when they are present.
         try:
             sf_list = reply["body"]["stackFrames"]
             module_idx = len(sf_list) - next(
@@ -633,19 +609,11 @@ class Debugger(traitlets.HasTraits):
         """Handle an attach message."""
 
         message["arguments"]["connect"] = self.debugpy_client.get_host_port()
-        for path in self.breakpoint_list:
-            #
-            await self._forward_message({
-                "type": "request",
-                "seq": self.next_seq(),
-                "command": "setBreakpoints",
-                "arguments": {"breakpoints": [], "source": {"path": path}, "sourceModified": False},
-            })
         if self.just_my_code:
             message["arguments"]["debugOptions"] = ["justMyCode"]
         await self.debugpy_client._send_request(message)
         with anyio.move_on_after(10):
-            await self.debugpy_client.init_event.wait()
+            await self.init_event.wait()
         await self._forward_message({
             "type": "request",
             "seq": self.next_seq(),
@@ -671,4 +639,6 @@ class Debugger(traitlets.HasTraits):
         for index in sorted(self._removed_cleanup):
             func = self._removed_cleanup.pop(index)
             cleanup_transforms.insert(index, func)
+        self.init_event = anyio.Event()
+        self.breakpoint_list = {}
         return response
