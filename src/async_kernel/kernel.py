@@ -247,7 +247,7 @@ class Kernel(ConnectionFileMixin):
         def heartbeat():
             socket: zmq.Socket = context.socket(zmq.ROUTER)
             socket.linger = 1000
-            self.hb_port = utils.bind_socket(socket=socket, transport=self.transport, ip=self.ip, port=self.hb_port)  # type: ignore
+            self.hb_port = utils.bind_socket(socket=socket, transport=self.transport, ip=self.ip, port=self.hb_port)  # type: ignore[call-arg]
             ready_event.set()
             try:
                 # Echo the message back
@@ -333,7 +333,7 @@ class Kernel(ConnectionFileMixin):
             backend: zmq.Socket = context.socket(zmq.XPUB)
             self.iopub_port = utils.bind_socket(
                 socket=backend,
-                transport=self.transport,  # type: ignore
+                transport=self.transport,  # type: ignore[assignment]
                 ip=str(self.ip),
                 port=int(self.iopub_port),
             )

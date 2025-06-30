@@ -99,7 +99,7 @@ class _DummyPyDB:
 
     def __init__(self):
         """Init."""
-        from _pydevd_bundle.pydevd_api import PyDevdAPI
+        from _pydevd_bundle.pydevd_api import PyDevdAPI  # noqa: PLC0415
 
         self.variable_presentation = PyDevdAPI.VariablePresentation()
 
@@ -207,7 +207,7 @@ class DebugpyClient(traitlets.HasTraits):
         """Connect to the tcp socket."""
 
         if not self._host_port:
-            import debugpy
+            import debugpy  # noqa: PLC0415
 
             self._host_port = debugpy.listen(0)
             thread = threading.current_thread()
