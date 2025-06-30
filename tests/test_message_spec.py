@@ -189,7 +189,16 @@ async def test_kernel_info_request(client):
     msg_id = client.kernel_info()
     reply = await utils.get_reply(client, msg_id)
     utils.validate_message(reply, "kernel_info_reply", msg_id)
-    assert "supported_features" in reply["content"]
+    assert not {
+        "implementation",
+        "status",
+        "debugger",
+        "protocol_version",
+        "implementation_version",
+        "language_info",
+        "help_links",
+        "banner",
+    }.difference(reply["content"])
 
 
 async def test_comm_info_request(client):

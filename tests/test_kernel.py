@@ -103,13 +103,6 @@ async def test_message_order(client):
         assert reply["parent_header"]["msg_id"] == msg_id
 
 
-async def test_kernel_info_request(client):
-    reply = await utils.send_shell_message(client, "kernel_info_request")
-    assert reply["header"]["msg_type"] == "kernel_info_reply"
-    supported_features = reply["content"]["supported_features"]
-    assert supported_features == ["debugger"]
-
-
 async def test_execute_request(client):
     reply = await utils.send_shell_message(client, "execute_request", {"code": "hello", "silent": False})
     assert reply["header"]["msg_type"] == "execute_reply"

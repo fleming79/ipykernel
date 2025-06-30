@@ -107,16 +107,6 @@ async def test_debug_initialize(debug_kernel, client):
         assert reply == {}
 
 
-async def test_supported_features(debug_kernel, client):
-    msg_id = client.kernel_info()
-    reply = await get_reply(client, msg_id)
-    supported_features = reply["content"]["supported_features"]
-
-    if debugpy:
-        assert "debugger" in supported_features
-    else:
-        assert "debugger" not in supported_features
-
 
 async def test_attach_debug(debug_kernel, client):
     reply = await wait_for_debug_request(

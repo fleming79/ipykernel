@@ -164,6 +164,7 @@ class DebugpyClient(traitlets.HasTraits):
     init_event_seq = traitlets.Int(-1)
     _connected = traitlets.Bool()
     wait_for_attach = traitlets.Bool(True)
+    _seq = 0
 
     def __init__(self, log, event_callback):
         """Initialize the client."""
@@ -172,20 +173,25 @@ class DebugpyClient(traitlets.HasTraits):
         self.message_queue = DebugpyMessageQueue(self._forward_event, self.log)
         self.init_event = anyio.Event()
 
-    async def start(self, task_status:TaskStatus):
+    async def start(self, task_status: TaskStatus):
         def start_debugpy():
             import debugpy
             return debugpy.listen(0)
 
         self._host_port = anyio.from_thread.run_sync(start_debugpy)
-        async with await anyio.connect_tcp(*self._host_port) as client:
-            self.debugpy_client = client
+        async with await anyio.connect_tcp(*self._host_port) as socketstream:
+            self.socketstream = socketstream
             thread = threading.current_thread()
             # This thread can't be stopped by the debugger when debugging
             thread.pydev_do_not_trace = True  # type: ignore[attr-defined]
             thread.is_pydev_daemon_thread = True  # type: ignore[attr-defined]
             task_status.started()
             await anyio.sleep_forever()
+
+    def next_seq(self):
+        "A monotonically decreasing negative number so as not to clash with the frontend seq."
+        self._seq = self._seq - 1
+        return self._seq
 
     def _forward_event(self, msg):
         if msg["event"] == "initialized":
@@ -199,7 +205,7 @@ class DebugpyClient(traitlets.HasTraits):
         buf = DebugpyMessageQueue.HEADER + content_length + DebugpyMessageQueue.SEPARATOR
         buf += content
         self.log.debug("DEBUGPYCLIENT: request %s", buf)
-        await self.debugpy_client.send(buf)
+        await self.socketstream.send(buf)
 
     async def _wait_for_response(self):
         # Since events are never pushed to the message_queue
@@ -214,7 +220,7 @@ class DebugpyClient(traitlets.HasTraits):
         # 2] Sends configurationDone request
         configurationDone = {
             "type": "request",
-            "seq": int(self.init_event_seq) + 1,
+            "seq": self.next_seq(),
             "command": "configurationDone",
         }
         await self._send_request(configurationDone)
@@ -224,6 +230,7 @@ class DebugpyClient(traitlets.HasTraits):
 
         # 4] Waits for attachResponse and returns it
         return await self._wait_for_response()
+
     def get_host_port(self):
         """Get the host debugpy port."""
         return self._host_port
@@ -234,7 +241,7 @@ class DebugpyClient(traitlets.HasTraits):
         task_status.started()
         try:
             while True:
-                data = await self.debugpy_client.receive()
+                data = await self.socketstream.receive()
                 self.message_queue.put_tcp_frame(data)
         except anyio.EndOfStream:
             return
@@ -278,10 +285,32 @@ class Debugger(traitlets.HasTraits):
     just_my_code = traitlets.Bool()
     debugpy_initialized = traitlets.Bool()
     variable_explorer = traitlets.Instance(VariableExplorer, ())
-    debugpy_client = traitlets.Instance(DebugpyClient, ())
+    debugpy_client = traitlets.Instance(DebugpyClient)
     log = traitlets.Instance(logging.LoggerAdapter)
     kernel: Kernel
     taskgroup: TaskGroup
+    forbidden_names = [
+        "__name__",
+        "__doc__",
+        "__package__",
+        "__loader__",
+        "__spec__",
+        "__annotations__",
+        "__builtins__",
+        "__builtin__",
+        "__display__",
+        "get_ipython",
+        "debugpy",
+        "exit",
+        "quit",
+        "In",
+        "Out",
+        "_oh",
+        "_dh",
+        "_",
+        "__",
+        "___",
+    ]
 
     @traitlets.default("log")
     def _default_log(self):
@@ -315,25 +344,30 @@ class Debugger(traitlets.HasTraits):
             task_status.started()
             await anyio.sleep_forever()
 
-    # def _handle_event(self, msg):
-    #     if msg["event"] == "stopped":
-    #         if msg["body"]["allThreadsStopped"]:
-    #             self.stopped_queue.put_nowait(msg)
-    #             # Do not forward the event now, will be done in the handle_stopped_event
-    #             return
-    #         self.stopped_threads.add(msg["body"]["threadId"])
-    #         self.debugpy_client.publish_event(msg)
-    #     elif msg["event"] == "continued":
-    #         if msg["body"]["allThreadsContinued"]:
-    #             self.stopped_threads = set()
-    #         else:
-    #             self.stopped_threads.remove(msg["body"]["threadId"])
-    #         self.debugpy_client.publish_event(msg)
-    #     else:
-    #         self.debugpy_client.publish_event(msg)
-
     async def _forward_message(self, msg):
         return await self.debugpy_client.send_dap_request(msg)
+
+    def _handle_event(self, msg):
+        if msg["event"] == "stopped":
+            if msg["body"]["allThreadsStopped"]:
+                self.taskgroup.start_soon(self.handle_stopped_event, msg)
+                return
+            self.stopped_threads.add(msg["body"]["threadId"])
+        elif msg["event"] == "continued":
+            if msg["body"]["allThreadsContinued"]:
+                self.stopped_threads = set()
+            else:
+                self.stopped_threads.remove(msg["body"]["threadId"])
+        elif msg["event"] == "terminated":
+            self._on_disconnect()
+        self._publish_event(msg)
+
+    def _publish_event(self, event: dict):
+        self.kernel.iopub_send(
+            msg_or_type="debug_event",
+            content=event,
+            ident=self.kernel._topic("debug_event"),
+        )
 
     def _build_variables_response(self, request, variables):
         var_list = [var for var in variables if self.accept_variable(var["name"])]
@@ -352,17 +386,14 @@ class Debugger(traitlets.HasTraits):
         forbid_list = ["IPythonHistorySavingThread", "Thread-2", "Thread-3", "Thread-4"]
         return thread_name not in forbid_list
 
-    # async def handle_stopped_event(self):
-    #     """Handle a stopped event."""
-    #     # Wait for a stopped event message in the stopped queue
-    #     # This message is used for triggering the 'threads' request
-    #     event = await self.stopped_queue.get()
-    #     req = {"seq": event["seq"] + 1, "type": "request", "command": "threads"}
-    #     rep = await self._forward_message(req)
-    #     for thread in rep["body"]["threads"]:
-    #         if self._accept_stopped_thread(thread["name"]):
-    #             self.stopped_threads.add(thread["id"])
-    #     self.publish_event(event)
+    async def handle_stopped_event(self, event):
+        """Handle a stopped event."""
+        req = {"seq": self.debugpy_client.next_seq(), "type": "request", "command": "threads"}
+        rep = await self._forward_message(req)
+        for thread in rep["body"]["threads"]:
+            if self._accept_stopped_thread(thread["name"]):
+                self.stopped_threads.add(thread["id"])
+            self._publish_event(event)
 
     async def start(self):
         """Start the debugger."""
@@ -464,32 +495,11 @@ class Debugger(traitlets.HasTraits):
 
     def accept_variable(self, variable_name):
         """Accept a variable by name."""
-        forbid_list = [
-            "__name__",
-            "__doc__",
-            "__package__",
-            "__loader__",
-            "__spec__",
-            "__annotations__",
-            "__builtins__",
-            "__builtin__",
-            "__display__",
-            "get_ipython",
-            "debugpy",
-            "exit",
-            "quit",
-            "In",
-            "Out",
-            "_oh",
-            "_dh",
-            "_",
-            "__",
-            "___",
-        ]
-        cond = variable_name not in forbid_list
-        cond = cond and not bool(re.search(r"^_\d", variable_name))
-        cond = cond and variable_name[0:2] != "_i"
-        return cond  # noqa: RET504
+        return (
+            variable_name not in self.forbidden_names
+            and not bool(re.search(r"^_\d", variable_name))
+            and not variable_name.startswith("_i")
+        )
 
     async def variables(self, message):
         """Handle a variables message."""
@@ -518,6 +528,7 @@ class Debugger(traitlets.HasTraits):
 
     async def configurationDone(self, message):
         """Handle a configuration done message."""
+        # This is only supposed to be called during initialize but can come at anytime. Ref: https://microsoft.github.io/debug-adapter-protocol/specification#Events_Initialized
         return {
             "seq": message["seq"],
             "type": "response",
@@ -571,7 +582,6 @@ class Debugger(traitlets.HasTraits):
             "success": False,
             "command": message["command"],
         }
-
         var_name = message["arguments"]["variableName"]
         valid_name = str.isidentifier(var_name)
         if not valid_name:
@@ -579,7 +589,6 @@ class Debugger(traitlets.HasTraits):
             if var_name == "special variables" or var_name == "function variables":
                 reply["success"] = True
             return reply
-
         repr_data = {}
         repr_metadata = {}
         if not self.stopped_threads:
@@ -594,21 +603,18 @@ class Debugger(traitlets.HasTraits):
             # request to get the rich representation of the variable
             code = f"get_ipython().display_formatter.format({var_name})"
             frame_id = message["arguments"]["frameId"]
-            seq = message["seq"]
             reply = await self._forward_message({
                 "type": "request",
                 "command": "evaluate",
-                "seq": seq + 1,
+                "seq": self.debugpy_client.next_seq(),
                 "arguments": {"expression": code, "frameId": frame_id, "context": "clipboard"},
             })
             if reply["success"]:
                 repr_data, repr_metadata = eval(reply["body"]["result"], {}, {})
-
         body = {
             "data": repr_data,
             "metadata": {k: v for k, v in repr_metadata.items() if k in repr_data},
         }
-
         reply["body"] = body
         reply["success"] = True
         return reply
@@ -617,7 +623,6 @@ class Debugger(traitlets.HasTraits):
         dst_var_name = message["arguments"]["dstVariableName"]
         src_var_name = message["arguments"]["srcVariableName"]
         src_frame_id = message["arguments"]["srcFrameId"]
-
         expression = f"globals()['{dst_var_name}']"
         seq = message["seq"]
         return await self._forward_message({
@@ -642,7 +647,6 @@ class Debugger(traitlets.HasTraits):
             filename = getattr(getattr(module, "__spec__", None), "origin", None)
             if filename and filename.endswith(".py"):
                 mods.append({"id": i, "name": module.__name__, "path": filename})
-
         return {"body": {"modules": mods, "totalModules": len(modules)}}
 
     async def process_request(self, message: dict[str, t.Any]):
@@ -663,9 +667,3 @@ class Debugger(traitlets.HasTraits):
             self.is_started = False
             self.log.info("The debugger has stopped")
         return reply
-
-    async def interrupt(self):
-        "Respond to an interrupt request"
-        if not self.is_started:
-            return
-        # TODO: Interrupt the debugger

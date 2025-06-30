@@ -162,7 +162,6 @@ class Kernel(ConnectionFileMixin):
             return  # Only initialize once
         self.kernel_name = kernel_name
         self.connection_file = connection_file
-        self.session = Session(parent=self)
         super().__init__(**kwargs)
         self._shell_handlers = {
             "kernel_info_request": self.kernel_info_request,
@@ -182,28 +181,9 @@ class Kernel(ConnectionFileMixin):
             "shutdown_request": self.control_shutdown_request,
             "debug_request": self.debug_request,
         }
-        self.shell = self.shell_class.instance(
-            parent=self,
-            profile_dir=self.profile_dir,
-            user_module=self.user_module,
-            user_ns=self.user_ns,
-            kernel=self,
-        )
-        if (
-            sys.platform == "win32"
-            and kernel_name in [KernelName.asyncio, KernelName.asyncio_eager]
-            and (policy := asyncio.get_event_loop_policy())
-            and policy.__class__.__name__ == "WindowsProactorEventLoopPolicy"
-        ):
-            from anyio._core._asyncio_selector_thread import get_selector  # noqa: PLC0415
-
-            selector = get_selector()
-            selector._thread.pydev_do_not_trace = True  # type: ignore[assignment]
-        jupyter_session_name = os.environ.get("JPY_SESSION_NAME")
-        if jupyter_session_name:
+        if jupyter_session_name := os.environ.get("JPY_SESSION_NAME"):
             self.shell.user_ns["__session__"] = jupyter_session_name
         sys.excepthook = self.excepthook
-        self.init_pdb()
 
     @property
     def kernel_info(self):
@@ -247,21 +227,19 @@ class Kernel(ConnectionFileMixin):
         comm.set_comm()
         return comm.get_comm_manager()
 
-    def init_pdb(self):
-        """Replace pdb with IPython's version that is interruptible.
+    @default("session")
+    def _default_session(self):
+        return Session(parent=self)
 
-        With the non-interruptible version, stopping pdb() locks up the kernel in a
-        non-recoverable state.
-        """
-        import pdb
-
-        from IPython.core import debugger
-
-        if hasattr(debugger, "InterruptiblePdb"):
-            # Only available in newer IPython releases:
-            debugger.Pdb = debugger.InterruptiblePdb  # type:ignore[misc]
-            pdb.Pdb = debugger.Pdb  # type:ignore[assignment,misc]
-            pdb.set_trace = debugger.set_trace
+    @default("shell")
+    def _default_shell(self):
+        return self.shell_class.instance(
+            parent=self,
+            profile_dir=self.profile_dir,
+            user_module=self.user_module,
+            user_ns=self.user_ns,
+            kernel=self,
+        )
 
     async def _start_heartbeat(self, task_status: TaskStatus):
         # Reference: https://jupyter-client.readthedocs.io/en/stable/messaging.html#heartbeat-for-kernels
@@ -738,10 +716,8 @@ class Kernel(ConnectionFileMixin):
 
     async def interrupt_request(self, job: MsgRequest):
         """Handle an interrupt request."""
-
         for event in self._interrupt_events:
             event.set()
-        await self.debugger.interrupt()
         self.send_reply(job)
 
     async def complete_request(self, job: MsgRequest):
@@ -912,7 +888,6 @@ class Kernel(ConnectionFileMixin):
             reply_content["found"] = True
         except KeyError:
             reply_content["found"] = False
-
         return reply_content
 
     async def do_history(
@@ -991,6 +966,16 @@ class Kernel(ConnectionFileMixin):
         if self.kernel_name is KernelName.asyncio_eager and sys.version_info >= (3, 12):
             loop = asyncio.get_running_loop()
             loop.set_task_factory(asyncio.eager_task_factory)
+        if (
+            sys.platform == "win32"
+            and self.kernel_name in [KernelName.asyncio, KernelName.asyncio_eager]
+            and (policy := asyncio.get_event_loop_policy())
+            and policy.__class__.__name__ == "WindowsProactorEventLoopPolicy"
+        ):
+            from anyio._core._asyncio_selector_thread import get_selector  # noqa: PLC0415
+
+            selector = get_selector()
+            selector._thread.pydev_do_not_trace = True  # type: ignore[assignment]
 
         if self._sockets:
             msg = "Already started"
@@ -1007,7 +992,6 @@ class Kernel(ConnectionFileMixin):
                     await tg.start(self._receive_msg_loop, SocketID.shell)
                     await tg.start(self._start_soon_scheduler, tg)
                     await tg.start(self.debugger.main_start, self)
-
                     if not self.connection_file:
                         self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{uuid.uuid4()}.json"))
                     self.write_connection_file()
@@ -1028,7 +1012,6 @@ class Kernel(ConnectionFileMixin):
                 finally:
                     self.comm_manager.kernel = None
                     self.stop()
-
 
     @classmethod
     def start(cls, connection_file="", kernel_name=KernelName.asyncio) -> int:
