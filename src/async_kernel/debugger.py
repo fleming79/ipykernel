@@ -327,7 +327,7 @@ class Debugger(traitlets.HasTraits):
             "copyToGlobals": self.do_copy_to_globals,
         }
 
-    async def main_start(self, kernel: Kernel, *, task_status: TaskStatus):
+    async def start(self, kernel: Kernel, *, task_status: TaskStatus):
         # To be called by `kernel.start_in_context`.
         self.kernel = kernel
         async with anyio.create_task_group() as tg:
@@ -387,19 +387,6 @@ class Debugger(traitlets.HasTraits):
                 self.stopped_threads.add(thread["id"])
             self._publish_event(event)
 
-    async def start(self):
-        """Start the debugger."""
-        if not self.debugpy_initialized:
-            tmp_dir = get_tmp_directory()
-            if not Path(tmp_dir).exists():
-                Path(tmp_dir).mkdir(parents=True)
-            self.debugpy_initialized = True
-        await self.taskgroup.start(self.debugpy_client.connect_tcp_socket)
-        # Don't remove leading empty lines when debugging so the breakpoints are correctly positioned
-        cleanup_transforms = self.kernel.shell.input_transformer_manager.cleanup_transforms
-        if leading_empty_lines in cleanup_transforms:
-            index = cleanup_transforms.index(leading_empty_lines)
-            self._removed_cleanup[index] = cleanup_transforms.pop(index)
 
     def _accept_variable(self, variable_name):
         """Accept a variable by name."""
@@ -432,132 +419,23 @@ class Debugger(traitlets.HasTraits):
             return self._to_response(message, success=False)
         return await self._forward_message(message)
 
-    async def do_dump_cell(self, message):
-        """Handle a dump cell message."""
-        code = message["arguments"]["code"]
-        file_name = get_file_name(code)
-
-        with open(file_name, "w", encoding="utf-8") as f:
-            f.write(code)
-
-        return {
-            "type": "response",
-            "request_seq": message["seq"],
-            "success": True,
-            "command": message["command"],
-            "body": {"sourcePath": file_name},
-        }
-
-    async def do_set_breakpoints(self, message):
-        """Handle a set breakpoints message."""
-        source = message["arguments"]["source"]["path"]
-        self.breakpoint_list[source] = message["arguments"]["breakpoints"]
-        message_response = await self._forward_message(message)
-        # debugpy can set breakpoints on different lines than the ones requested,
-        # so we want to record the breakpoints that were actually added
-        if message_response.get("success"):
-            self.breakpoint_list[source] = [
-                {"line": breakpoint["line"]} for breakpoint in message_response["body"]["breakpoints"]
-            ]
-        return message_response
-
-    async def do_source(self, message):
-        """Handle a source message."""
-        reply = {"type": "response", "request_seq": message["seq"], "command": message["command"]}
-        source_path = message["arguments"]["source"]["path"]
-        if Path(source_path).is_file():
-            with open(source_path, encoding="utf-8") as f:
-                reply["success"] = True
-                reply["body"] = {"content": f.read()}
-        else:
-            reply["success"] = False
-            reply["message"] = "source unavailable"
-            reply["body"] = {}
-
-        return reply
-
-    async def do_stack_trace(self, message):
-        """Handle a stack trace message."""
-        reply = await self._forward_message(message)
-        # The stackFrames array can have the following content:
-        # { frames from the notebook}
-        # ...
-        # { 'id': xxx, 'name': '<module>', ... } <= this is the first frame of the code from the notebook
-        # { frames from ipykernel }
-        # ...
-        # {'id': yyy, 'name': '<module>', ... } <= this is the first frame of ipykernel code
-        # or only the frames from the notebook.
-        # We want to remove all the frames from ipykernel when they are present.
-        try:
-            sf_list = reply["body"]["stackFrames"]
-            module_idx = len(sf_list) - next(
-                i for i, v in enumerate(reversed(sf_list), 1) if v["name"] == "<module>" and i != 1
-            )
-            reply["body"]["stackFrames"] = reply["body"]["stackFrames"][: module_idx + 1]
-        except StopIteration:
-            pass
-        return reply
-
-    async def do_variables(self, message):
-        """Handle a variables message."""
-        reply = {}
-        if not self.stopped_threads:
-            variables = self.variable_explorer.get_children_variables(message["arguments"]["variablesReference"])
-            return self._build_variables_response(message, variables)
-
-        reply = await self._forward_message(message)
-        # TODO : check start and count arguments work as expected in debugpy
-        reply["body"]["variables"] = [var for var in reply["body"]["variables"] if self._accept_variable(var["name"])]
-        return reply
+    ## Static handlers
 
     async def do_initialize(self, message):
+        "Initialize debugpy server starting as required."
         if not self.debugpy_client.connected:
-            await self.start()
+            if not self.debugpy_initialized:
+                tmp_dir = get_tmp_directory()
+                if not Path(tmp_dir).exists():
+                    Path(tmp_dir).mkdir(parents=True)
+                self.debugpy_initialized = True
+            await self.taskgroup.start(self.debugpy_client.connect_tcp_socket)
+            # Don't remove leading empty lines when debugging so the breakpoints are correctly positioned
+            cleanup_transforms = self.kernel.shell.input_transformer_manager.cleanup_transforms
+            if leading_empty_lines in cleanup_transforms:
+                index = cleanup_transforms.index(leading_empty_lines)
+                self._removed_cleanup[index] = cleanup_transforms.pop(index)
         return await self._forward_message(message)
-
-    async def do_disconnect(self, message):
-        response = await self._forward_message(message)
-        # Restore the leading whitespace remove transform.
-        cleanup_transforms = self.kernel.shell.input_transformer_manager.cleanup_transforms
-        for index in sorted(self._removed_cleanup):
-            func = self._removed_cleanup.pop(index)
-            cleanup_transforms.insert(index, func)
-        return response
-
-    async def do_attach(self, message):
-        """Handle an attach message."""
-
-        message["arguments"]["connect"] = self.debugpy_client.get_host_port()
-        for path in self.breakpoint_list:
-            #
-            await self._forward_message({
-                "type": "request",
-                "seq": self.next_seq(),
-                "command": "setBreakpoints",
-                "arguments": {"breakpoints": [], "source": {"path": path}, "sourceModified": False},
-            })
-        if self.just_my_code:
-            message["arguments"]["debugOptions"] = ["justMyCode"]
-        await self.debugpy_client._send_request(message)
-        with anyio.move_on_after(10):
-            await self.debugpy_client.init_event.wait()
-        await self._forward_message({
-            "type": "request",
-            "seq": self.next_seq(),
-            "command": "configurationDone",
-        })
-        return await self.debugpy_client._wait_for_response(message)
-
-    async def do_configuration_done(self, message):
-        """Handle a configuration done message."""
-        # This is only supposed to be called during initialize but can come at anytime. Ref: https://microsoft.github.io/debug-adapter-protocol/specification#Events_Initialized
-        return {
-            "seq": message["seq"],
-            "type": "response",
-            "request_seq": message["seq"],
-            "success": True,
-            "command": message["command"],
-        }
 
     async def do_debug_info(self, message):
         """Handle a debug info message."""
@@ -641,6 +519,19 @@ class Debugger(traitlets.HasTraits):
         reply["success"] = True
         return reply
 
+    async def do_modules(self, message):
+        """Handle a modules message."""
+        modules = list(sys.modules.values())
+        startModule = message.get("startModule", 0)
+        moduleCount = message.get("moduleCount", len(modules))
+        mods = []
+        for i in range(startModule, moduleCount):
+            module = modules[i]
+            filename = getattr(getattr(module, "__spec__", None), "origin", None)
+            if filename and filename.endswith(".py"):
+                mods.append({"id": i, "name": module.__name__, "path": filename})
+        return {"body": {"modules": mods, "totalModules": len(modules)}}
+
     async def do_copy_to_globals(self, message):
         dst_var_name = message["arguments"]["dstVariableName"]
         src_var_name = message["arguments"]["srcVariableName"]
@@ -658,15 +549,126 @@ class Debugger(traitlets.HasTraits):
             },
         })
 
-    async def do_modules(self, message):
-        """Handle a modules message."""
-        modules = list(sys.modules.values())
-        startModule = message.get("startModule", 0)
-        moduleCount = message.get("moduleCount", len(modules))
-        mods = []
-        for i in range(startModule, moduleCount):
-            module = modules[i]
-            filename = getattr(getattr(module, "__spec__", None), "origin", None)
-            if filename and filename.endswith(".py"):
-                mods.append({"id": i, "name": module.__name__, "path": filename})
-        return {"body": {"modules": mods, "totalModules": len(modules)}}
+    # Started handlers (requires debug_client connection)
+
+    async def do_dump_cell(self, message):
+        """Handle a dump cell message."""
+        code = message["arguments"]["code"]
+        file_name = get_file_name(code)
+
+        with open(file_name, "w", encoding="utf-8") as f:
+            f.write(code)
+
+        return {
+            "type": "response",
+            "request_seq": message["seq"],
+            "success": True,
+            "command": message["command"],
+            "body": {"sourcePath": file_name},
+        }
+
+    async def do_set_breakpoints(self, message):
+        """Handle a set breakpoints message."""
+        source = message["arguments"]["source"]["path"]
+        self.breakpoint_list[source] = message["arguments"]["breakpoints"]
+        message_response = await self._forward_message(message)
+        # debugpy can set breakpoints on different lines than the ones requested,
+        # so we want to record the breakpoints that were actually added
+        if message_response.get("success"):
+            self.breakpoint_list[source] = [
+                {"line": breakpoint["line"]} for breakpoint in message_response["body"]["breakpoints"]
+            ]
+        return message_response
+
+    async def do_source(self, message):
+        """Handle a source message."""
+        reply = {"type": "response", "request_seq": message["seq"], "command": message["command"]}
+        source_path = message["arguments"]["source"]["path"]
+        if Path(source_path).is_file():
+            with open(source_path, encoding="utf-8") as f:
+                reply["success"] = True
+                reply["body"] = {"content": f.read()}
+        else:
+            reply["success"] = False
+            reply["message"] = "source unavailable"
+            reply["body"] = {}
+
+        return reply
+
+    async def do_stack_trace(self, message):
+        """Handle a stack trace message."""
+        reply = await self._forward_message(message)
+        # The stackFrames array can have the following content:
+        # { frames from the notebook}
+        # ...
+        # { 'id': xxx, 'name': '<module>', ... } <= this is the first frame of the code from the notebook
+        # { frames from ipykernel }
+        # ...
+        # {'id': yyy, 'name': '<module>', ... } <= this is the first frame of ipykernel code
+        # or only the frames from the notebook.
+        # We want to remove all the frames from ipykernel when they are present.
+        try:
+            sf_list = reply["body"]["stackFrames"]
+            module_idx = len(sf_list) - next(
+                i for i, v in enumerate(reversed(sf_list), 1) if v["name"] == "<module>" and i != 1
+            )
+            reply["body"]["stackFrames"] = reply["body"]["stackFrames"][: module_idx + 1]
+        except StopIteration:
+            pass
+        return reply
+
+    async def do_variables(self, message):
+        """Handle a variables message."""
+        reply = {}
+        if not self.stopped_threads:
+            variables = self.variable_explorer.get_children_variables(message["arguments"]["variablesReference"])
+            return self._build_variables_response(message, variables)
+
+        reply = await self._forward_message(message)
+        # TODO : check start and count arguments work as expected in debugpy
+        reply["body"]["variables"] = [var for var in reply["body"]["variables"] if self._accept_variable(var["name"])]
+        return reply
+
+    async def do_attach(self, message):
+        """Handle an attach message."""
+
+        message["arguments"]["connect"] = self.debugpy_client.get_host_port()
+        for path in self.breakpoint_list:
+            #
+            await self._forward_message({
+                "type": "request",
+                "seq": self.next_seq(),
+                "command": "setBreakpoints",
+                "arguments": {"breakpoints": [], "source": {"path": path}, "sourceModified": False},
+            })
+        if self.just_my_code:
+            message["arguments"]["debugOptions"] = ["justMyCode"]
+        await self.debugpy_client._send_request(message)
+        with anyio.move_on_after(10):
+            await self.debugpy_client.init_event.wait()
+        await self._forward_message({
+            "type": "request",
+            "seq": self.next_seq(),
+            "command": "configurationDone",
+        })
+        return await self.debugpy_client._wait_for_response(message)
+
+    async def do_configuration_done(self, message):
+        """Handle a configuration done message."""
+        # This is only supposed to be called during initialize but can come at anytime. Ref: https://microsoft.github.io/debug-adapter-protocol/specification#Events_Initialized
+        return {
+            "seq": message["seq"],
+            "type": "response",
+            "request_seq": message["seq"],
+            "success": True,
+            "command": message["command"],
+        }
+
+    async def do_disconnect(self, message):
+        response = await self._forward_message(message)
+        # Restore the leading whitespace remove transform.
+        cleanup_transforms = self.kernel.shell.input_transformer_manager.cleanup_transforms
+        for index in sorted(self._removed_cleanup):
+            func = self._removed_cleanup.pop(index)
+            cleanup_transforms.insert(index, func)
+        return response

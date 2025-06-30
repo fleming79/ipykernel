@@ -991,7 +991,7 @@ class Kernel(ConnectionFileMixin):
                     await tg.start(self._shell_execute_request_loop)
                     await tg.start(self._receive_msg_loop, SocketID.shell)
                     await tg.start(self._start_soon_scheduler, tg)
-                    await tg.start(self.debugger.main_start, self)
+                    await tg.start(self.debugger.start, self)
                     if not self.connection_file:
                         self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{uuid.uuid4()}.json"))
                     self.write_connection_file()
