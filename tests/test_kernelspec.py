@@ -24,6 +24,7 @@ def test_write_kernel_spec(kernel_name: KernelName):
     KernelSpec(**data)
     shutil.rmtree(path)
 
+
 def test_write_all_kernelspec_creates_expected_kernels(tmp_path):
     # Remove tmp_path if it exists to simulate a clean directory
     if tmp_path.exists():
@@ -34,5 +35,3 @@ def test_write_all_kernelspec_creates_expected_kernels(tmp_path):
         kernel_dir = tmp_path / kernel_name
         assert kernel_dir.exists()
         assert (kernel_dir / "kernel.json").exists()
-
-

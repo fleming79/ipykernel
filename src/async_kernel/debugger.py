@@ -1,4 +1,5 @@
 """Debugger implementation for the IPython kernel."""
+
 from __future__ import annotations
 
 import logging
@@ -33,7 +34,6 @@ try:
         SuspendedFramesManager,
         _FramesTracker,
     )
-
 
     _is_debugpy_available = True
 except ImportError:
@@ -363,7 +363,6 @@ class Debugger(traitlets.HasTraits):
                 self.stopped_threads.add(thread["id"])
             self._publish_event(event)
 
-
     def _accept_variable(self, variable_name):
         """Accept a variable by name."""
         return (
@@ -479,12 +478,14 @@ class Debugger(traitlets.HasTraits):
             # request to get the rich representation of the variable
             code = f"get_ipython().display_formatter.format({var_name})"
             frame_id = message["arguments"]["frameId"]
-            reply = await self._forward_message({
-                "type": "request",
-                "command": "evaluate",
-                "seq": self.next_seq(),
-                "arguments": {"expression": code, "frameId": frame_id, "context": "clipboard"},
-            })
+            reply = await self._forward_message(
+                {
+                    "type": "request",
+                    "command": "evaluate",
+                    "seq": self.next_seq(),
+                    "arguments": {"expression": code, "frameId": frame_id, "context": "clipboard"},
+                }
+            )
             if reply["success"]:
                 repr_data, repr_metadata = eval(reply["body"]["result"], {}, {})
         body = {
@@ -514,16 +515,18 @@ class Debugger(traitlets.HasTraits):
         src_frame_id = message["arguments"]["srcFrameId"]
         expression = f"globals()['{dst_var_name}']"
         seq = message["seq"]
-        return await self._forward_message({
-            "type": "request",
-            "command": "setExpression",
-            "seq": seq + 1,
-            "arguments": {
-                "expression": expression,
-                "value": src_var_name,
-                "frameId": src_frame_id,
-            },
-        })
+        return await self._forward_message(
+            {
+                "type": "request",
+                "command": "setExpression",
+                "seq": seq + 1,
+                "arguments": {
+                    "expression": expression,
+                    "value": src_var_name,
+                    "frameId": src_frame_id,
+                },
+            }
+        )
 
     # Started handlers (requires debug_client connection)
 
@@ -614,11 +617,13 @@ class Debugger(traitlets.HasTraits):
         await self.debugpy_client._send_request(message)
         with anyio.move_on_after(10):
             await self.init_event.wait()
-        await self._forward_message({
-            "type": "request",
-            "seq": self.next_seq(),
-            "command": "configurationDone",
-        })
+        await self._forward_message(
+            {
+                "type": "request",
+                "seq": self.next_seq(),
+                "command": "configurationDone",
+            }
+        )
         return await self.debugpy_client._wait_for_response(message)
 
     async def do_configuration_done(self, message):

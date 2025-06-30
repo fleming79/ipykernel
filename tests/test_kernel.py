@@ -218,23 +218,24 @@ async def test_start_soon(mode, exception: bool, client, kernel):
     for event in events:
         await event.wait()
 
+
 @pytest.mark.parametrize("kernel_name", list(KernelName))
-def test_kernel_start(kernel_name:KernelName):
+def test_kernel_start(kernel_name: KernelName):
     anyio_run = anyio.run
     anyio_sleep_forever = anyio.sleep_forever
 
     def _patch_run(coro, backend):
         nonlocal _start
         _start = coro
-        if kernel_name.startswith('async'):
-            assert backend == 'asyncio'
+        if kernel_name.startswith("async"):
+            assert backend == "asyncio"
         else:
-            assert backend == 'trio'
+            assert backend == "trio"
 
     anyio.run = _patch_run
     try:
         _start = None
-        Kernel.start(connection_file='test.json', kernel_name=kernel_name)
+        Kernel.start(connection_file="test.json", kernel_name=kernel_name)
         assert inspect.iscoroutinefunction(_start)
     finally:
         anyio.run = anyio_run

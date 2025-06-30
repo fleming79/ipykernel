@@ -842,13 +842,15 @@ class Kernel(ConnectionFileMixin):
             completions = list(_rectify_completions(code, raw_completions))
             comps = []
             for comp in completions:
-                comps.append({
-                    "start": comp.start,
-                    "end": comp.end,
-                    "text": comp.text,
-                    "type": comp.type,
-                    "signature": comp.signature,
-                })
+                comps.append(
+                    {
+                        "start": comp.start,
+                        "end": comp.end,
+                        "text": comp.text,
+                        "type": comp.type,
+                        "signature": comp.signature,
+                    }
+                )
         if completions:
             s = completions[0].start
             e = completions[0].end

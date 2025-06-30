@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 LAUNCHED_BY_DEBUGPY = "debugpy" in sys.modules
 
+
 def start_anyio_thread(
     func: Callable[[TaskStatus], CoroutineType],
     stop_event: threading.Event,
