@@ -142,7 +142,8 @@ class ThreadSafeCaller:
     synchronous and asynchronous code, or for safely invoking async operations
     from non-async threads.
     """
-    instances: ClassVar = weakref.WeakSet()
+
+    _instances: ClassVar = weakref.WeakSet()
     thread: threading.Thread
     __stack = None
 
@@ -150,7 +151,7 @@ class ThreadSafeCaller:
         self.log = log or logging.LoggerAdapter(logging.getLogger())
 
     async def __aenter__(self) -> Self:
-        self.instances.add(self)
+        self._instances.add(self)
         self.thread = threading.current_thread()
         self._jobs = deque()
         self._jobs_added = threading.Event()
@@ -174,24 +175,35 @@ class ThreadSafeCaller:
                 self._jobs_added.clear()
             await anyio.to_thread.run_sync(wait_threading_event, self._jobs_added)
 
-    def call_soon(self, func: Callable[P, Any | Awaitable], *args: P.args, **kwargs: P.kwargs):
+    def call_soon(self, func: Callable[P, Any | Awaitable], delay=0.0, /, *args: P.args, **kwargs: P.kwargs):
         """Schedules a function or coroutine for execution in the thread that owns it."""
         if threading.current_thread() is self.thread:
-            self.tg.start_soon(self.wrap_call, func, args, kwargs)
+            self.tg.start_soon(self.wrap_call, func, delay, args, kwargs)
         else:
-            self._jobs.append((func, args, kwargs))
+            self._jobs.append((func, delay, args, kwargs))
             self._jobs_added.set()
 
-    async def wrap_call(self, func: Callable[..., Any | Awaitable], args, kwargs):
+    async def wrap_call(self, func: Callable[..., Any | Awaitable], delay: float, args: tuple, kwargs: dict):
         """Asynchronously calls the given function with provided arguments, awaiting the result if it is awaitable.
 
         **Not intended to be called directly.**
 
         Overwrite this method as requried.
         """
+        if delay:
+            await anyio.sleep(delay)
         result = func(*args, **kwargs) if callable(func) else func
         try:
             while inspect.isawaitable(result):
                 result = await result
         except Exception as e:
             self.log.exception("Exception occurred while running %s", func, exc_info=e)
+
+    @classmethod
+    def get_instance(cls) -> Self:
+        thread = threading.current_thread()
+        for instance in cls._instances:
+            if instance.thread is thread:
+                return instance
+        msg = "A threadsafe caller was not found for this thread"
+        raise RuntimeError(msg)

@@ -75,7 +75,7 @@ class MsgType(TypedDict):
 class MsgRequest(TypedDict):
     "A message associated with the socket and ident"
 
-    socket_id: SocketID
+    socket_id: Literal[SocketID.control, SocketID.shell]
     ident: bytes | list[bytes]
     msg_type: str
     parent: dict
@@ -144,6 +144,7 @@ class Kernel(ConnectionFileMixin):
 
     shell = Instance(AsyncInteractiveShell)
     shell_class = traitlets.Type(AsyncInteractiveShell)
+    callers: traitlets.Dict[Literal[SocketID.control, SocketID.shell], utils.ThreadSafeCaller] = traitlets.Dict()
     banner = traitlets.Unicode()
     help_links = traitlets.Dict()
     user_module = traitlets.Any()
@@ -272,7 +273,8 @@ class Kernel(ConnectionFileMixin):
     async def _receive_msg_loop(self, socket_id: Literal[SocketID.control, SocketID.shell], *, task_status: TaskStatus):
         """Receive messages from the socket, unpack them and pass them to be processed with process_message."""
         process_message = self._process_control if socket_id is SocketID.control else self._process_shell
-        async with self._open_socket(socket_id) as socket:
+        async with utils.ThreadSafeCaller(log=self.log) as caller, self._open_socket(socket_id) as socket:
+            self.callers[socket_id] = caller
             with self.iopub_enabled_this_thread(slow_subscriber_sleep=False):
                 task_status.started()
                 while True:
@@ -682,7 +684,7 @@ class Kernel(ConnectionFileMixin):
         if not silent:
             await self._exec_send_stream.send((time.monotonic(), job))
         else:
-            self.start_soon(self._execute_request, job)
+            self.callers[job["socket_id"]].call_soon(self._execute_request, 0, job)
 
     async def _execute_request(self, job: MsgRequest):
         """Perform the actual execute_request."""
@@ -761,7 +763,7 @@ class Kernel(ConnectionFileMixin):
         # Override setting
         content["silent"] = True
         content["allow_stdin"] = False
-        self.start_soon(self._execute_request, job)
+        self.callers[job["socket_id"]].call_soon(self._execute_request, 0, job)
 
     async def control_shutdown_request(self, job: MsgRequest):
         """Handle a shutdown request."""
@@ -954,13 +956,6 @@ class Kernel(ConnectionFileMixin):
             raise StdinNotImplementedError
         return self._input_request(prompt, password=True)
 
-    def start_soon(self, func, *args, name: str | None = None):
-        "Run a coroutine in the main thread."
-        to_start = (func, args, name)
-        if threading.current_thread() is threading.main_thread():
-            self._start_soon_stream.send_nowait(to_start)
-        else:
-            anyio.from_thread.run_sync(self._start_soon_stream.send_nowait, to_start)
 
     @asynccontextmanager
     async def start_in_context(self):

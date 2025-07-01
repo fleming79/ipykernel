@@ -106,6 +106,7 @@ async def test_message_order(client):
 async def test_execute_request(client):
     reply = await utils.send_shell_message(client, "execute_request", {"code": "hello", "silent": False})
     assert reply["header"]["msg_type"] == "execute_reply"
+    assert reply["content"]["status"] == "error"
 
 
 async def test_execute_request_stop_on_error(client, kernel):
@@ -195,28 +196,6 @@ async def test_clear(kernel):
     kernel.do_clear()
 
 
-@pytest.mark.parametrize("mode", ["main", "external"])
-@pytest.mark.parametrize("exception", [True, False])
-async def test_start_soon(mode, exception: bool, client, kernel):
-    # Test we can start coroutines from various scopes
-
-    async def my_test(event: anyio.Event):
-        event.set()
-        if exception:
-            raise ValueError
-
-    events = []
-
-    for _ in range(2):
-        event = anyio.Event()
-        if mode == "main":
-            kernel.start_soon(my_test, event)
-        else:
-            await to_thread.run_sync(kernel.start_soon, my_test, event)
-        events.append(event)
-
-    for event in events:
-        await event.wait()
 
 
 @pytest.mark.parametrize("kernel_name", list(KernelName))

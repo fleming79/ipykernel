@@ -28,7 +28,7 @@ class TestThreadSafeCaller:
 
         async with ThreadSafeCaller() as ts_caller:
             is_called = anyio.Event()
-            ts_caller.call_soon(my_func, is_called, *args_kwargs[0], **args_kwargs[1])
+            ts_caller.call_soon(my_func, 0, is_called, *args_kwargs[0], **args_kwargs[1])
             await is_called.wait()
             assert val == args_kwargs
 
