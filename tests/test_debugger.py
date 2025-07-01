@@ -5,12 +5,18 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+import async_kernel.utils
 from tests import utils
 
 if TYPE_CHECKING:
     from jupyter_client.asynchronous.client import AsyncKernelClient
 
     from async_kernel import Kernel
+
+
+if async_kernel.utils.LAUNCHED_BY_DEBUGPY:
+    msg = "This test module tests debugy. Debugging tests in this module WILL NOT WORK."
+    raise RuntimeError(msg)
 
 
 # Tests support debugpy not being installed, in which case the tests don't do anything useful
@@ -20,6 +26,7 @@ try:
     import debugpy
 except ImportError:
     debugpy = None
+
 
 
 async def wait_for_debug_request(
