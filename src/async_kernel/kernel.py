@@ -138,17 +138,16 @@ class Kernel(ConnectionFileMixin):
     ).tag(config=True)
 
     session = Instance(Session)
-    profile_dir = Instance("IPython.core.profiledir.ProfileDir", allow_none=True)
 
     log = Instance(logging.LoggerAdapter)
 
     shell = Instance(AsyncInteractiveShell)
     shell_class = traitlets.Type(AsyncInteractiveShell)
-    callers: traitlets.Dict[Literal[SocketID.control, SocketID.shell], utils.ThreadSafeCaller] = traitlets.Dict()
+    threadsafe_callers: traitlets.Dict[Literal[SocketID.control, SocketID.shell], utils.ThreadSafeCaller] = (
+        traitlets.Dict()
+    )
     banner = traitlets.Unicode()
     help_links = traitlets.Dict()
-    user_module = traitlets.Any()
-    user_ns = Dict()
     comm_manager: Instance[CommManager] = Instance("async_kernel.comm.CommManager")
 
     def __new__(cls, *, kernel_name=KernelName.asyncio, connection_file="", **kwargs) -> Self:  # noqa: ARG004
@@ -182,8 +181,6 @@ class Kernel(ConnectionFileMixin):
             "shutdown_request": self.control_shutdown_request,
             "debug_request": self.debug_request,
         }
-        if jupyter_session_name := os.environ.get("JPY_SESSION_NAME"):
-            self.shell.user_ns["__session__"] = jupyter_session_name
         sys.excepthook = self.excepthook
 
     @property
@@ -197,17 +194,6 @@ class Kernel(ConnectionFileMixin):
             "help_links": self.help_links,
             "debugger": not utils.LAUNCHED_BY_DEBUGPY,
         }
-
-    @observe("user_module")
-    def _user_module_changed(self, change):
-        self.shell.user_module = change["new"]
-
-    @observe("user_ns")
-    def _user_ns_changed(self, change):
-        if self.trait_has_value("shell"):
-            self.shell.user_ns = change["new"]
-            self.shell.init_user_ns()
-            self.shell.set_completer_frame()
 
     @default("log")
     def _default_log(self):
@@ -234,13 +220,7 @@ class Kernel(ConnectionFileMixin):
 
     @default("shell")
     def _default_shell(self):
-        return self.shell_class.instance(
-            parent=self,
-            profile_dir=self.profile_dir,
-            user_module=self.user_module,
-            user_ns=self.user_ns,
-            kernel=self,
-        )
+        return self.shell_class.instance(parent=self, kernel=self)
 
     async def _start_heartbeat(self, task_status: TaskStatus):
         # Reference: https://jupyter-client.readthedocs.io/en/stable/messaging.html#heartbeat-for-kernels
@@ -255,7 +235,6 @@ class Kernel(ConnectionFileMixin):
                 zmq.proxy(socket, socket)
             except zmq.ContextTerminated:
                 socket.close()
-
         context = zmq.Context()
         ready_event = threading.Event()
         heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
@@ -274,7 +253,7 @@ class Kernel(ConnectionFileMixin):
         """Receive messages from the socket, unpack them and pass them to be processed with process_message."""
         process_message = self._process_control if socket_id is SocketID.control else self._process_shell
         async with utils.ThreadSafeCaller(log=self.log) as caller, self._open_socket(socket_id) as socket:
-            self.callers[socket_id] = caller
+            self.threadsafe_callers[socket_id] = caller
             with self.iopub_enabled_this_thread(slow_subscriber_sleep=False):
                 task_status.started()
                 while True:
@@ -684,7 +663,7 @@ class Kernel(ConnectionFileMixin):
         if not silent:
             await self._exec_send_stream.send((time.monotonic(), job))
         else:
-            self.callers[job["socket_id"]].call_later(self._execute_request, 0, job)
+            self.threadsafe_callers[job["socket_id"]].call_later(self._execute_request, 0, job)
 
     async def _execute_request(self, job: MsgRequest):
         """Perform the actual execute_request."""
@@ -763,7 +742,7 @@ class Kernel(ConnectionFileMixin):
         # Override setting
         content["silent"] = True
         content["allow_stdin"] = False
-        self.callers[job["socket_id"]].call_later(self._execute_request, 0, job)
+        self.threadsafe_callers[job["socket_id"]].call_later(self._execute_request, 0, job)
 
     async def control_shutdown_request(self, job: MsgRequest):
         """Handle a shutdown request."""

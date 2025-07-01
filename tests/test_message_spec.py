@@ -14,7 +14,7 @@ async def test_execute(client, kernel):
     msg_id = client.execute(code="x=1")
     reply = await utils.get_reply(client, msg_id)
     utils.validate_message(reply, "execute_reply", msg_id)
-    assert kernel.user_ns["x"] == 1
+    assert kernel.shell.user_ns["x"] == 1
 
 
 async def test_execute_silent(client):
