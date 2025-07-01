@@ -175,7 +175,7 @@ class ThreadSafeCaller:
                 self._jobs_added.clear()
             await anyio.to_thread.run_sync(wait_threading_event, self._jobs_added)
 
-    def call_soon(self, func: Callable[P, Any | Awaitable], delay=0.0, /, *args: P.args, **kwargs: P.kwargs):
+    def call_later(self, func: Callable[P, Any | Awaitable], delay=0.0, /, *args: P.args, **kwargs: P.kwargs):
         """Schedules a function or coroutine for execution in the thread that owns it."""
         if threading.current_thread() is self.thread:
             self.tg.start_soon(self.wrap_call, func, delay, args, kwargs)

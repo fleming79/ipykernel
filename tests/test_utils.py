@@ -14,7 +14,7 @@ class TestThreadSafeCaller:
     async def test_sync(self, anyio_backend):
         async with ThreadSafeCaller() as ts_caller:
             is_called = anyio.Event()
-            ts_caller.call_soon(is_called.set)
+            ts_caller.call_later(is_called.set)
             await is_called.wait()
 
     @pytest.mark.parametrize("args_kwargs", [((), {}), ((1, 2, 3), {"a": 10})])
@@ -28,7 +28,7 @@ class TestThreadSafeCaller:
 
         async with ThreadSafeCaller() as ts_caller:
             is_called = anyio.Event()
-            ts_caller.call_soon(my_func, 0, is_called, *args_kwargs[0], **args_kwargs[1])
+            ts_caller.call_later(my_func, 0, is_called, *args_kwargs[0], **args_kwargs[1])
             await is_called.wait()
             assert val == args_kwargs
 
@@ -37,9 +37,9 @@ class TestThreadSafeCaller:
         # Test the call works from another thread
         async with ThreadSafeCaller() as ts_caller:
             is_called = anyio.Event()
-            await anyio.to_thread.run_sync(ts_caller.call_soon, is_called.set)
+            await anyio.to_thread.run_sync(ts_caller.call_later, is_called.set)
             await is_called.wait()
 
     async def test_sleep_forever(self, anyio_backend):
         async with ThreadSafeCaller() as ts_caller:
-            ts_caller.call_soon(anyio.sleep_forever)
+            ts_caller.call_later(anyio.sleep_forever)

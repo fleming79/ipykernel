@@ -684,7 +684,7 @@ class Kernel(ConnectionFileMixin):
         if not silent:
             await self._exec_send_stream.send((time.monotonic(), job))
         else:
-            self.callers[job["socket_id"]].call_soon(self._execute_request, 0, job)
+            self.callers[job["socket_id"]].call_later(self._execute_request, 0, job)
 
     async def _execute_request(self, job: MsgRequest):
         """Perform the actual execute_request."""
@@ -763,7 +763,7 @@ class Kernel(ConnectionFileMixin):
         # Override setting
         content["silent"] = True
         content["allow_stdin"] = False
-        self.callers[job["socket_id"]].call_soon(self._execute_request, 0, job)
+        self.callers[job["socket_id"]].call_later(self._execute_request, 0, job)
 
     async def control_shutdown_request(self, job: MsgRequest):
         """Handle a shutdown request."""
