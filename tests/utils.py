@@ -4,19 +4,19 @@
 # Distributed under the terms of the Modified BSD License.
 from __future__ import annotations
 
-import sys
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 import anyio
 from jupyter_client.asynchronous.client import AsyncKernelClient
 
+import async_kernel.utils
 from tests.references import RMessage, references
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
 
-TIMEOUT = 5 if "debugpy" not in sys.modules else 1e6
+TIMEOUT = 5 if not async_kernel.utils.LAUNCHED_BY_DEBUGPY else 1e6
 
 
 class ExecuteContentType(TypedDict):

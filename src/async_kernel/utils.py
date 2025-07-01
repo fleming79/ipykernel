@@ -3,11 +3,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import errno
+import inspect
+import logging
 import sys
 import threading
+import weakref
+from collections import deque
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, ParamSpec
 
 import anyio
 import anyio.to_thread
@@ -15,12 +20,25 @@ import sniffio
 import zmq
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
     from types import CoroutineType
 
     from anyio.abc import TaskGroup, TaskStatus
 
 LAUNCHED_BY_DEBUGPY = "debugpy" in sys.modules
+
+P = ParamSpec("P")
+
+
+def wait_threading_event(event: threading.Event):
+    """Wait for the given threading.Event, marking the thread as a PyDev daemon and
+    disabling tracing during the wait."""
+    thread = threading.current_thread()
+    thread.pydev_do_not_trace = True  # type: ignore[attr-defined]
+    thread.is_pydev_daemon_thread = True  # type: ignore[attr-defined]
+    event.wait()
+    thread.pydev_do_not_trace = False  # type: ignore[attr-defined]
+    thread.is_pydev_daemon_thread = False  # type: ignore[attr-defined]
 
 
 def start_anyio_thread(
@@ -64,14 +82,7 @@ def start_anyio_thread(
             async with anyio.create_task_group() as tg:
                 await tg.start(func)
                 ready_event.set()
-
-                def _wait_stop():
-                    thread = threading.current_thread()
-                    thread.pydev_do_not_trace = True  # type: ignore[attr-defined]
-                    thread.is_pydev_daemon_thread = True  # type: ignore[attr-defined]
-                    stop_event.wait()
-
-                await anyio.to_thread.run_sync(_wait_stop)
+                await anyio.to_thread.run_sync(wait_threading_event, stop_event)
                 tg.cancel_scope.cancel()
 
         anyio.run(run_until_stop_event, backend=backend)
@@ -118,3 +129,66 @@ def bind_socket(socket: zmq.Socket, transport: Literal["tcp", "ipc"], ip: str, p
                 raise
     msg = f"Failed to bind a {socket}:{port}"
     raise RuntimeError(msg)
+
+
+class ThreadSafeCaller:
+    """
+    ThreadSafeCaller provides a mechanism to safely schedule and execute functions
+    or coroutines from multiple threads within an async context.
+
+    This class manages a queue of jobs that can be submitted from any thread,
+    ensuring that all scheduled calls are executed in the context of a dedicated
+    thread and async task group. It is particularly useful for integrating
+    synchronous and asynchronous code, or for safely invoking async operations
+    from non-async threads.
+    """
+    instances: ClassVar = weakref.WeakSet()
+    thread: threading.Thread
+
+    def __init__(self, log: logging.LoggerAdapter | None = None) -> None:
+        self.log = log or logging.LoggerAdapter(logging.getLogger())
+
+    @contextlib.asynccontextmanager
+    async def begin(self):
+        self.instances.add(self)
+        self.thread = threading.current_thread()
+        self._jobs = deque()
+        self._jobs_added = threading.Event()
+        async with anyio.create_task_group() as tg:
+            await tg.start(self._server_loop, tg)
+            self.tg = tg
+            try:
+                yield self
+            finally:
+                tg.cancel_scope.cancel()
+                self._jobs_added.set()
+
+    async def _server_loop(self, tg: TaskGroup, task_status: TaskStatus):
+        task_status.started()
+        while True:
+            while len(self._jobs):
+                tg.start_soon(self.wrap_call, *self._jobs.popleft())
+                self._jobs_added.clear()
+            await anyio.to_thread.run_sync(wait_threading_event, self._jobs_added)
+
+    def call(self, func: Callable[P, Any | Awaitable], *args: P.args, **kwargs: P.kwargs):
+        """Schedules a function or coroutine for execution the thread that owns it."""
+        if threading.current_thread() is self.thread:
+            self.tg.start_soon(self.wrap_call, func, args, kwargs)
+        else:
+            self._jobs.append((func, args, kwargs))
+            self._jobs_added.set()
+
+    async def wrap_call(self, func: Callable[..., Any | Awaitable], args, kwargs):
+        """Asynchronously calls the given function with provided arguments, awaiting the result if it is awaitable.
+
+        **Not intended to be called directly.**
+
+        Overwrite this method as requried.
+        """
+        result = func(*args, **kwargs) if callable(func) else func
+        try:
+            while inspect.isawaitable(result):
+                result = await result
+        except Exception as e:
+            self.log.exception("Exception occurred while running %s", func, exc_info=e)
