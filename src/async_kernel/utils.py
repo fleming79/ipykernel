@@ -12,7 +12,7 @@ import threading
 import weakref
 from collections import deque
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, ParamSpec
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, ParamSpec, Self
 
 import anyio
 import anyio.to_thread
@@ -144,35 +144,38 @@ class ThreadSafeCaller:
     """
     instances: ClassVar = weakref.WeakSet()
     thread: threading.Thread
+    __stack = None
 
-    def __init__(self, log: logging.LoggerAdapter | None = None) -> None:
+    def __init__(self, *, log: logging.LoggerAdapter | None = None) -> None:
         self.log = log or logging.LoggerAdapter(logging.getLogger())
 
-    @contextlib.asynccontextmanager
-    async def begin(self):
+    async def __aenter__(self) -> Self:
         self.instances.add(self)
         self.thread = threading.current_thread()
         self._jobs = deque()
         self._jobs_added = threading.Event()
-        async with anyio.create_task_group() as tg:
-            await tg.start(self._server_loop, tg)
-            self.tg = tg
-            try:
-                yield self
-            finally:
-                tg.cancel_scope.cancel()
-                self._jobs_added.set()
+        async with contextlib.AsyncExitStack() as stack:
+            self.tg = await stack.enter_async_context(anyio.create_task_group())
+            await self.tg.start(self._server_loop)
+            self.__stack = stack.pop_all()
+        return self
 
-    async def _server_loop(self, tg: TaskGroup, task_status: TaskStatus):
+    async def __aexit__(self, exc_type, exc_value, exc_tb):
+        if self.__stack is not None:
+            self.tg.cancel_scope.cancel()
+            self._jobs_added.set()
+            await self.__stack.__aexit__(exc_type, exc_value, exc_tb)
+
+    async def _server_loop(self, task_status: TaskStatus):
         task_status.started()
         while True:
             while len(self._jobs):
-                tg.start_soon(self.wrap_call, *self._jobs.popleft())
+                self.tg.start_soon(self.wrap_call, *self._jobs.popleft())
                 self._jobs_added.clear()
             await anyio.to_thread.run_sync(wait_threading_event, self._jobs_added)
 
-    def call(self, func: Callable[P, Any | Awaitable], *args: P.args, **kwargs: P.kwargs):
-        """Schedules a function or coroutine for execution the thread that owns it."""
+    def call_soon(self, func: Callable[P, Any | Awaitable], *args: P.args, **kwargs: P.kwargs):
+        """Schedules a function or coroutine for execution in the thread that owns it."""
         if threading.current_thread() is self.thread:
             self.tg.start_soon(self.wrap_call, func, args, kwargs)
         else:
