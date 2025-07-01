@@ -252,51 +252,39 @@ class Kernel(ConnectionFileMixin):
     async def _receive_msg_loop(self, socket_id: Literal[SocketID.control, SocketID.shell], *, task_status: TaskStatus):
         """Receive messages from the socket, unpack them and pass them to be processed with process_message."""
         process_message = self._process_control if socket_id is SocketID.control else self._process_shell
-        async with utils.ThreadSafeCaller(log=self.log) as caller, self._open_socket(socket_id) as socket:
-            self.threadsafe_callers[socket_id] = caller
-            with self.iopub_enabled_this_thread(slow_subscriber_sleep=False):
-                task_status.started()
-                while True:
-                    if not (msg_ := await socket.arecv_multipart(copy=False).wait()):
-                        self.log.error("Empty message received on socket %", socket)
-                        await anyio.sleep(0.1)
-                        continue
-                    copy = not isinstance(msg_[0], zmq.Message)
-                    ident, msg_ = self.session.feed_identities(msg_, copy=copy)
-                    parent = self.session.deserialize(msg_, content=True, copy=copy)
-                    msg_type = parent["header"]["msg_type"]
-                    self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, parent["content"])
-                    await process_message(
-                        MsgRequest(socket_id=socket_id, ident=ident, parent=parent, msg_type=msg_type)
-                    )
+        with self._open_socket(socket_id) as socket_:
+            async with utils.ThreadSafeCaller(log=self.log) as caller, zmq_anyio.Socket(socket_) as socket:
+                socket.linger = 0
+                self.threadsafe_callers[socket_id] = caller
+                with self.iopub_enabled_this_thread(slow_subscriber_sleep=False):
+                    task_status.started()
+                    while True:
+                        if not (msg_ := await socket.arecv_multipart(copy=False).wait()):
+                            self.log.error("Empty message received on socket %", socket)
+                            await anyio.sleep(0.1)
+                            continue
+                        copy = not isinstance(msg_[0], zmq.Message)
+                        ident, msg_ = self.session.feed_identities(msg_, copy=copy)
+                        parent = self.session.deserialize(msg_, content=True, copy=copy)
+                        msg_type = parent["header"]["msg_type"]
+                        self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, parent["content"])
+                        await process_message(
+                            MsgRequest(socket_id=socket_id, ident=ident, parent=parent, msg_type=msg_type)
+                        )
 
-    @contextlib.asynccontextmanager
-    async def _open_socket(self, socket_id: SocketID):
-        """Opens a normal zmq.Socket and an zmq_anyio.Socket yielding the zmq Socket closing when the context is exited.
-
-        The normal zmq socket is put into the self._sockets dict and is provided for sending.
-        The zmq socket is used for receiving asynchronously.
-        """
-        linger = 1000
+    def _open_socket(self, socket_id: SocketID):
+        """Open and bind a normal zmq.Socket storing a reference to the socket and the port details."""
         if socket_id in self._sockets:
             msg = f"{socket_id=} is already loaded"
             raise RuntimeError(msg)
         socket: zmq.Socket = self._zmq_context.socket(zmq.SocketType.ROUTER)
-        socket.linger = linger
+        socket.linger = 0
         port_name = f"{socket_id}_port"
         port = utils.bind_socket(socket=socket, transport=self.transport, ip=self.ip, port=getattr(self, port_name, 0))  # type: ignore[call-arg]
         setattr(self, port_name, port)
         self._sockets[socket_id] = socket
-        self.log.debug("{%} Channel on port: %i", socket_id, port)
-        socket_ = zmq_anyio.Socket(socket)
-        socket_.linger = linger
-        async with socket_:
-            await anyio.sleep(0)
-            try:
-                yield socket_
-            finally:
-                socket_.close(linger=0)
-                socket.close(linger=0)
+        self.log.debug("{%} socket on port: %i", socket_id, port)
+        return socket
 
     @contextmanager
     def _iopub_proxy(self):
@@ -958,8 +946,8 @@ class Kernel(ConnectionFileMixin):
             raise RuntimeError(msg)
         if self.connection_file and Path(self.connection_file).exists():
             self.load_connection_file()
-        with self._zmq_context, self._iopub_proxy() as iopub_context:
-            async with anyio.create_task_group() as tg, self._open_socket(SocketID.stdin):
+        with self._zmq_context, self._open_socket(SocketID.stdin), self._iopub_proxy() as iopub_context:
+            async with anyio.create_task_group() as tg:
                 self._iopub_context = iopub_context
                 try:
                     await utils.start_anyio_thread(self._run_control_loop, self._stop_event, tg, name="Control")
