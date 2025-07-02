@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING
 
+import debugpy
 import pytest
 
 import async_kernel.utils
@@ -17,16 +18,6 @@ if TYPE_CHECKING:
 if async_kernel.utils.LAUNCHED_BY_DEBUGPY:
     msg = "This test module tests debugy. Debugging tests in this module WILL NOT WORK."
     raise RuntimeError(msg)
-
-
-# Tests support debugpy not being installed, in which case the tests don't do anything useful
-# functionally as the debug message replies are usually empty dictionaries, but they confirm that
-# ipykernel doesn't block, or segfault, or raise an exception.
-try:
-    import debugpy
-except ImportError:
-    debugpy = None
-
 
 
 async def wait_for_debug_request(
