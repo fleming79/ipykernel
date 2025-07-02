@@ -21,7 +21,6 @@ import anyio.to_thread
 import sniffio
 from anyio import TASK_STATUS_IGNORED, create_memory_object_stream, create_task_group, wait_readable
 from anyio.abc import TaskGroup, TaskStatus
-from traitlets import HasTraits, Instance
 from zmq import Flag, Frame, PollEvent, Socket, SocketOption, ZMQError
 
 if TYPE_CHECKING:
@@ -214,40 +213,13 @@ class ThreadSafeCaller:
         raise RuntimeError(msg)
 
 
-class AsyncZMQSocketReader(HasTraits):
-    ""
-
-    _task_group: TaskGroup | None = None
-    _stack = None
-    _socket = Instance(Socket)
-
-    def __init__(self, socket: Socket) -> None:
-        self._socket = socket
+class AsyncZMQSocketReader:
+    def __init__(self, socket: Socket, linger=1000, buffer_size=1000) -> None:
+        self._socket = socket = Socket(socket)
+        socket.linger = linger
+        self.buffer_in, self._buffer_out = create_memory_object_stream[list[Frame]](buffer_size)
 
     async def __aenter__(self) -> Self:
-        self._recv_futures = deque()
-        self._send_stream, self._receive_stream = create_memory_object_stream[list[Frame]]()
-        async with AsyncExitStack() as stack:
-            self._task_group = task_group = await stack.enter_async_context(create_task_group())
-            await task_group.start(self._start)
-            self._stack = stack.pop_all()
-        return self
-
-    async def __aexit__(self, exc_type, exc_value, exc_tb):
-        if self._stack is not None:
-            try:
-                await self._stack.__aexit__(exc_type, exc_value, exc_tb)
-            finally:
-                self._stack = None
-        if tg := self._task_group:
-            tg.cancel_scope.cancel()
-
-    def __aiter__(self):
-        return self._receive_stream
-
-    async def _start(self, *, task_status: TaskStatus[None] = TASK_STATUS_IGNORED):
-        task_status.started()
-        socket = Socket(self._socket)
         if (
             sys.platform == "win32"
             and sniffio.current_async_library() == "asyncio"
@@ -259,12 +231,27 @@ class AsyncZMQSocketReader(HasTraits):
             selector = get_selector()
             selector._thread.pydev_do_not_trace = True  # type: ignore[assignment]
             # wait_readable enabled in Windows proactor event loop via https://github.com/agronholm/anyio/pull/831
-        try:
-            while True:
-                await wait_readable(self._socket)
 
-                while int(self._socket.get(SocketOption.EVENTS)) & PollEvent.POLLIN:
-                    result = self._socket.recv_multipart(flags=Flag.DONTWAIT, copy=False)
-                    await self._send_stream.send(result)
-        finally:
-            socket.close(linger=0)
+        async with AsyncExitStack() as stack:
+            self._buffer_out = await stack.enter_async_context(self._buffer_out)
+            self._task_group = task_group = await stack.enter_async_context(create_task_group())
+            await task_group.start(self._start)
+            stack.callback(self._socket.close)
+            stack.callback(task_group.cancel_scope.cancel)
+            self._stack = stack.pop_all()
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, exc_tb):
+        await self._stack.__aexit__(exc_type, exc_value, exc_tb)
+
+    def __aiter__(self):
+        return self._buffer_out
+
+    async def _start(self, *, task_status: TaskStatus[None] = TASK_STATUS_IGNORED):
+        task_status.started()
+
+        while True:
+            await wait_readable(self._socket)
+            while int(self._socket.get(SocketOption.EVENTS)) & PollEvent.POLLIN:
+                result = self._socket.recv_multipart(flags=Flag.DONTWAIT, copy=False)
+                await self.buffer_in.send(result)
