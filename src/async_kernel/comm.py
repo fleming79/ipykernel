@@ -68,9 +68,6 @@ class Comm(BaseComm):
             self._msg_callback(msg)
 
 
-"""Base class to manage comms"""
-
-
 class CommManager(comm.base_comm.CommManager, traitlets.HasTraits):
     """A comm manager for Kernel.
 

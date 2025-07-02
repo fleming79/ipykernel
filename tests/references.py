@@ -111,7 +111,7 @@ class ExecuteReply(Reply):
         elif d["status"] == "error":
             ExecuteReplyError().check(d)
         elif d["status"] == "aborted":
-            "Deprectated"
+            "Deprecated"
             raise NotImplementedError
             ExecuteReplyAborted().check(d)
 

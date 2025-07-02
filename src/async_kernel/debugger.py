@@ -45,7 +45,7 @@ T = TypeVar("T")
 
 
 class PendingResult(Generic[T]):
-    "A lightweight anyio non-compliant varient of a Future."
+    "A lightweight anyio non-compliant variant of a Future."
 
     def __init__(self) -> None:
         self._exception = None

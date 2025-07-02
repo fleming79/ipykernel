@@ -193,7 +193,7 @@ class ThreadSafeCaller:
 
         **Not intended to be called directly.**
 
-        Overwrite this method as requried.
+        Overwrite this method as required.
         """
         if delay:
             await anyio.sleep(delay)
