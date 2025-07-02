@@ -10,7 +10,6 @@ import contextlib
 import enum
 import getpass
 import logging
-import os
 import sys
 import threading
 import time
@@ -27,7 +26,6 @@ import anyio.to_thread
 import sniffio
 import traitlets
 import zmq
-import zmq_anyio
 from IPython.core.completer import provisionalcompleter as _provisionalcompleter
 from IPython.core.completer import rectify_completions as _rectify_completions
 from IPython.core.error import StdinNotImplementedError
@@ -35,10 +33,10 @@ from IPython.utils.tokenutil import token_at_cursor
 from jupyter_client.connect import ConnectionFileMixin
 from jupyter_client.session import Session
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import Dict, Instance, default, observe
+from traitlets import Dict, Instance, default
 from traitlets.utils.importstring import import_item
 
-from async_kernel import _version, utils
+from async_kernel import _version, temp_socket, utils
 from async_kernel.asyncshell import AsyncInteractiveShell
 from async_kernel.debugger import Debugger
 from async_kernel.kernelspec import KernelName
@@ -252,25 +250,23 @@ class Kernel(ConnectionFileMixin):
     async def _receive_msg_loop(self, socket_id: Literal[SocketID.control, SocketID.shell], *, task_status: TaskStatus):
         """Receive messages from the socket, unpack them and pass them to be processed with process_message."""
         process_message = self._process_control if socket_id is SocketID.control else self._process_shell
-        with self._open_socket(socket_id) as socket_:
-            async with utils.ThreadSafeCaller(log=self.log) as caller, zmq_anyio.Socket(socket_) as socket:
-                socket.linger = 0
+        with self._open_socket(socket_id) as socket:
+            async with utils.ThreadSafeCaller(log=self.log) as caller:
                 self.threadsafe_callers[socket_id] = caller
                 with self.iopub_enabled_this_thread(slow_subscriber_sleep=False):
                     task_status.started()
-                    while True:
-                        if not (msg_ := await socket.arecv_multipart(copy=False).wait()):
-                            self.log.error("Empty message received on socket %", socket)
-                            await anyio.sleep(0.1)
-                            continue
-                        copy = not isinstance(msg_[0], zmq.Message)
-                        ident, msg_ = self.session.feed_identities(msg_, copy=copy)
-                        parent = self.session.deserialize(msg_, content=True, copy=copy)
-                        msg_type = parent["header"]["msg_type"]
-                        self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, parent["content"])
-                        await process_message(
-                            MsgRequest(socket_id=socket_id, ident=ident, parent=parent, msg_type=msg_type)
-                        )
+                    async with temp_socket.AsyncSocketReader(socket) as reader:
+                        async for msg in reader:
+                            copy = not isinstance(msg[0], zmq.Message)
+                            ident, msg_ = self.session.feed_identities(msg, copy=copy)
+                            parent = self.session.deserialize(msg_, content=True, copy=copy)
+                            msg_type = parent["header"]["msg_type"]
+                            self.log.debug(
+                                "*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, parent["content"]
+                            )
+                            await process_message(
+                                MsgRequest(socket_id=socket_id, ident=ident, parent=parent, msg_type=msg_type)
+                            )
 
     def _open_socket(self, socket_id: SocketID):
         """Open and bind a normal zmq.Socket storing a reference to the socket and the port details."""
