@@ -200,8 +200,8 @@ class ThreadSafeCaller:
             self.log.exception("Exception occurred while running %s", func, exc_info=e)
 
     @classmethod
-    def get_instance(cls) -> Self:
-        thread = threading.current_thread()
+    def get_instance(cls, thread: None|threading.Thread) -> Self:
+        thread = thread or threading.current_thread()
         for instance in cls._instances:
             if instance.thread is thread:
                 return instance
