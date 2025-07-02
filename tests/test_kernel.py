@@ -11,7 +11,6 @@ import time
 
 import anyio
 import pytest
-from anyio import to_thread
 
 from async_kernel.kernel import Kernel
 from async_kernel.kernelspec import KernelName

@@ -22,18 +22,13 @@ if TYPE_CHECKING:
     from anyio.abc import TaskGroup, TaskStatus
 
     from async_kernel import Kernel
+
 try:
     if "PYDEVD_IPYTHON_COMPATIBLE_DEBUGGING" not in os.environ:
         os.environ["PYDEVD_IPYTHON_COMPATIBLE_DEBUGGING"] = "1"
 
-    # This import is required to have the next ones working...
+    # This import is required to provide _pydevd_bundle imports
     from debugpy.server import api  # noqa: F401
-
-    from _pydevd_bundle import pydevd_frame_utils  # isort: skip
-    from _pydevd_bundle.pydevd_suspended_frames import (  # isort: skip
-        SuspendedFramesManager,
-        _FramesTracker,
-    )
 
     _is_debugpy_available = True
 except ImportError:
@@ -99,7 +94,7 @@ class _DummyPyDB:
 
     def __init__(self):
         """Init."""
-        from _pydevd_bundle.pydevd_api import PyDevdAPI  # noqa: PLC0415
+        from _pydevd_bundle.pydevd_api import PyDevdAPI  # type: ignore[attr-defined]  # noqa: PLC0415
 
         self.variable_presentation = PyDevdAPI.VariablePresentation()
 
@@ -111,6 +106,8 @@ class VariableExplorer(traitlets.HasTraits):
 
     def __init__(self):
         """Initialize the explorer."""
+        from _pydevd_bundle.pydevd_suspended_frames import SuspendedFramesManager, _FramesTracker  # type: ignore[attr-defined]  # noqa: I001, PLC0415
+
         self.suspended_frame_manager = SuspendedFramesManager()
         self.py_db = _DummyPyDB()
         self.tracker = _FramesTracker(self.suspended_frame_manager, self.py_db)
@@ -118,7 +115,9 @@ class VariableExplorer(traitlets.HasTraits):
 
     def track(self):
         """Start tracking."""
-        var = self.kernel.user_ns
+        from _pydevd_bundle import pydevd_frame_utils  # type: ignore[attr-defined]  # noqa: PLC0415
+
+        var = self.kernel.shell.user_ns
         self.frame = _FakeFrame(_FakeCode("<module>", get_file_name("sys._getframe()")), var, var)
         self.tracker.track("thread1", pydevd_frame_utils.create_frames_list_from_frame(self.frame))
 
