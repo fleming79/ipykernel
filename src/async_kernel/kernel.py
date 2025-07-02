@@ -280,7 +280,7 @@ class Kernel(ConnectionFileMixin):
         port = utils.bind_socket(socket=socket, transport=self.transport, ip=self.ip, port=getattr(self, port_name, 0))  # type: ignore[call-arg]
         setattr(self, port_name, port)
         self._sockets[socket_id] = socket
-        self.log.debug("{%} socket on port: %i", socket_id, port)
+        self.log.debug("%s socket on port: %i", socket_id, port)
         return socket
 
     @contextmanager
@@ -489,7 +489,9 @@ class Kernel(ConnectionFileMixin):
                 try:
                     if received_time < self._stop_on_error_time:
                         self.log.info("Aborting execute_request: %s", job)
+                        self._publish_status("busy", job)
                         self._send_error_reply(job, evalue="Aborting due to prior exception")
+                        self._publish_status("idle", job)
                         continue
                     await self._execute_request(job)
                 except BaseException as e:
