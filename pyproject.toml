@@ -159,6 +159,7 @@ line-length = 120
 extend-select = [
   "B",        # flake8-bugbear
   "I",        # isort
+  "F",        # Pyflakes
   "ARG",      # flake8-unused-arguments
   "C4",       # flake8-comprehensions
   "EM",       # flake8-errmsg
@@ -167,6 +168,7 @@ extend-select = [
   "PGH",      # pygrep-hooks
   "PIE",      # flake8-pie
   "PL",       # pylint
+  "PLR",      # Refactor
   "PT",       # flake8-pytest-style
   "PTH",      # flake8-use-pathlib
   "RET",      # flake8-return

@@ -195,8 +195,6 @@ async def test_clear(kernel):
     kernel.do_clear()
 
 
-
-
 @pytest.mark.parametrize("kernel_name", list(KernelName))
 def test_kernel_start(kernel_name: KernelName):
     anyio_run = anyio.run

@@ -3,7 +3,6 @@
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
 
-
 import anyio.to_thread
 import pytest
 
@@ -31,7 +30,6 @@ class TestThreadSafeCaller:
             ts_caller.call_later(my_func, 0, is_called, *args_kwargs[0], **args_kwargs[1])
             await is_called.wait()
             assert val == args_kwargs
-
 
     async def test_to_thread(self, anyio_backend):
         # Test the call works from another thread

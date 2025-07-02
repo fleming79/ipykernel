@@ -233,6 +233,7 @@ class Kernel(ConnectionFileMixin):
                 zmq.proxy(socket, socket)
             except zmq.ContextTerminated:
                 socket.close()
+
         context = zmq.Context()
         ready_event = threading.Event()
         heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
@@ -918,7 +919,6 @@ class Kernel(ConnectionFileMixin):
         if not self._allow_stdin:
             raise StdinNotImplementedError
         return self._input_request(prompt, password=True)
-
 
     @asynccontextmanager
     async def start_in_context(self):
