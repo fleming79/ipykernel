@@ -36,7 +36,7 @@ from jupyter_core.paths import jupyter_runtime_dir
 from traitlets import Dict, Instance, default
 from traitlets.utils.importstring import import_item
 
-from async_kernel import _version, temp_socket, utils
+from async_kernel import _version, utils
 from async_kernel.asyncshell import AsyncInteractiveShell
 from async_kernel.debugger import Debugger
 from async_kernel.kernelspec import KernelName
@@ -255,7 +255,7 @@ class Kernel(ConnectionFileMixin):
                 self.threadsafe_callers[socket_id] = caller
                 with self.iopub_enabled_this_thread(slow_subscriber_sleep=False):
                     task_status.started()
-                    async with temp_socket.AsyncSocketReader(socket) as reader:
+                    async with utils.AsyncZMQSocketReader(socket) as reader:
                         async for msg in reader:
                             copy = not isinstance(msg[0], zmq.Message)
                             ident, msg_ = self.session.feed_identities(msg, copy=copy)
@@ -926,17 +926,6 @@ class Kernel(ConnectionFileMixin):
         if self.kernel_name is KernelName.asyncio_eager and sys.version_info >= (3, 12):
             loop = asyncio.get_running_loop()
             loop.set_task_factory(asyncio.eager_task_factory)
-        if (
-            sys.platform == "win32"
-            and self.kernel_name in [KernelName.asyncio, KernelName.asyncio_eager]
-            and (policy := asyncio.get_event_loop_policy())
-            and policy.__class__.__name__ == "WindowsProactorEventLoopPolicy"
-        ):
-            from anyio._core._asyncio_selector_thread import get_selector  # noqa: PLC0415
-
-            selector = get_selector()
-            selector._thread.pydev_do_not_trace = True  # type: ignore[assignment]
-
         if self._sockets:
             msg = "Already started"
             raise RuntimeError(msg)

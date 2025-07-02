@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import errno
 import inspect
@@ -11,13 +12,17 @@ import sys
 import threading
 import weakref
 from collections import deque
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, ParamSpec, Self
 
 import anyio
 import anyio.to_thread
 import sniffio
-import zmq
+from anyio import TASK_STATUS_IGNORED, create_memory_object_stream, create_task_group, wait_readable
+from anyio.abc import TaskGroup, TaskStatus
+from traitlets import HasTraits, Instance
+from zmq import Flag, Frame, PollEvent, Socket, SocketOption, ZMQError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -46,7 +51,7 @@ def start_anyio_thread(
     stop_event: threading.Event,
     tg: TaskGroup,
     *,
-    backend: Literal["anyio", "trio", ""] = "",
+    backend: Literal["asyncio", "trio", ""] = "",
     name="",
     pydev_do_not_trace=not LAUNCHED_BY_DEBUGPY,
     is_pydev_daemon_thread=not LAUNCHED_BY_DEBUGPY,
@@ -91,7 +96,7 @@ def start_anyio_thread(
     return anyio.to_thread.run_sync(ready_event.wait)
 
 
-def bind_socket(socket: zmq.Socket, transport: Literal["tcp", "ipc"], ip: str, port: int = 0, max_attempts=100) -> int:
+def bind_socket(socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port: int = 0, max_attempts=100) -> int:
     def _try_bind_socket(port: int):
         if transport == "tcp":
             if port <= 0:
@@ -121,7 +126,7 @@ def bind_socket(socket: zmq.Socket, transport: Literal["tcp", "ipc"], ip: str, p
     for attempt in range(max_attempts):
         try:
             return _try_bind_socket(port)
-        except zmq.ZMQError as e:
+        except ZMQError as e:
             # Raise if we have any error not related to socket binding
             if e.errno != errno.EADDRINUSE and e.errno != win_in_use:
                 raise
@@ -207,3 +212,59 @@ class ThreadSafeCaller:
                 return instance
         msg = "A threadsafe caller was not found for this thread"
         raise RuntimeError(msg)
+
+
+class AsyncZMQSocketReader(HasTraits):
+    ""
+
+    _task_group: TaskGroup | None = None
+    _stack = None
+    _socket = Instance(Socket)
+
+    def __init__(self, socket: Socket) -> None:
+        self._socket = socket
+
+    async def __aenter__(self) -> Self:
+        self._recv_futures = deque()
+        self._send_stream, self._receive_stream = create_memory_object_stream[list[Frame]]()
+        async with AsyncExitStack() as stack:
+            self._task_group = task_group = await stack.enter_async_context(create_task_group())
+            await task_group.start(self._start)
+            self._stack = stack.pop_all()
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, exc_tb):
+        if self._stack is not None:
+            try:
+                await self._stack.__aexit__(exc_type, exc_value, exc_tb)
+            finally:
+                self._stack = None
+        if tg := self._task_group:
+            tg.cancel_scope.cancel()
+
+    def __aiter__(self):
+        return self._receive_stream
+
+    async def _start(self, *, task_status: TaskStatus[None] = TASK_STATUS_IGNORED):
+        task_status.started()
+        socket = Socket(self._socket)
+        if (
+            sys.platform == "win32"
+            and sniffio.current_async_library() == "asyncio"
+            and (policy := asyncio.get_event_loop_policy())
+            and policy.__class__.__name__ == "WindowsProactorEventLoopPolicy"
+        ):
+            from anyio._core._asyncio_selector_thread import get_selector  # noqa: PLC0415
+
+            selector = get_selector()
+            selector._thread.pydev_do_not_trace = True  # type: ignore[assignment]
+            # wait_readable enabled in Windows proactor event loop via https://github.com/agronholm/anyio/pull/831
+        try:
+            while True:
+                await wait_readable(self._socket)
+
+                while int(self._socket.get(SocketOption.EVENTS)) & PollEvent.POLLIN:
+                    result = self._socket.recv_multipart(flags=Flag.DONTWAIT, copy=False)
+                    await self._send_stream.send(result)
+        finally:
+            socket.close(linger=0)
