@@ -8,13 +8,51 @@ from __future__ import annotations
 import inspect
 import threading
 import time
+from typing import Literal
 
 import anyio
 import pytest
+import zmq
 
-from async_kernel.kernel import Kernel
+from async_kernel.kernel import Kernel, SocketID
 from async_kernel.kernelspec import KernelName
 from tests import utils
+
+
+@pytest.mark.parametrize("mode", ["direct", "proxy"])
+async def test_iopub(kernel, mode: Literal["direct", "proxy"]):
+    n = 10
+
+    info = kernel.get_connection_info()
+    url = f"{info['transport']}://{info['ip']}:{info['iopub_port']}"
+    socket = kernel._sockets[SocketID.iopub]
+    assert url == socket.get_string(zmq.LAST_ENDPOINT)
+
+    def pubio_subscribe():
+        """Consume messages"""
+        ctx = zmq.Context()
+        s = ctx.socket(zmq.SUB)
+        s.connect(url)
+        s.setsockopt(zmq.SUBSCRIBE, b"")
+        try:
+            i = 0
+            while i < n:
+                msg = s.recv_multipart()
+                if msg[0] == b"0":
+                    assert int(msg[1]) == i
+                    i += 1
+        finally:
+            s.close()
+            ctx.term()
+
+    thread = threading.Thread(target=pubio_subscribe)
+    thread.start()
+    time.sleep(0.05)
+    if mode == "proxy":
+        socket = kernel._iopub_sockets.get(threading.current_thread())
+    for i in range(n):
+        socket.send_multipart([b"0", f"{i}".encode()])
+    thread.join()
 
 
 async def test_simple_print(client):

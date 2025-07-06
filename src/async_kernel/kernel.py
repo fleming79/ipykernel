@@ -15,13 +15,11 @@ import threading
 import time
 import traceback
 import uuid
-from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, Self, TypedDict
 
 import anyio
-import anyio.from_thread
 import anyio.to_thread
 import sniffio
 import traitlets
@@ -43,6 +41,7 @@ from async_kernel.debugger import Debugger
 from async_kernel.kernelspec import KernelName
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import CoroutineType
 
     from anyio.abc import TaskStatus
@@ -82,11 +81,11 @@ class MsgRequest(TypedDict):
 
 
 class SocketID(enum.StrEnum):
-    heartbeat = "heartbeat"
+    heartbeat = "hb"
     shell = "shell"
     stdin = "stdin"
     control = "control"
-    pub = "pub"
+    iopub = "iopub"
 
 
 class Kernel(ConnectionFileMixin):
@@ -122,7 +121,6 @@ class Kernel(ConnectionFileMixin):
     _control_handlers = Dict()
     _job: traitlets.Container[MsgRequest | dict] = Dict()  # type: ignore[assignment]
     _iopub_url = traitlets.Unicode("inproc://iopub")
-    _zmq_context = traitlets.Instance(zmq.Context, ())
     _iopub_sockets: traitlets.Dict[threading.Thread, zmq.Socket] = traitlets.Dict()
     debugger = Instance(Debugger, ())
 
@@ -227,7 +225,10 @@ class Kernel(ConnectionFileMixin):
             socket = self._zmq_context.socket(zmq.ROUTER)
             with self._bind_socket(SocketID.heartbeat, socket):
                 ready_event.set()
-                zmq.proxy(socket, socket)
+                try:
+                    zmq.proxy(socket, socket)
+                except zmq.ContextTerminated:
+                    return
 
         ready_event = threading.Event()
         heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
@@ -294,7 +295,7 @@ class Kernel(ConnectionFileMixin):
             msg = f"{socket_id=} is already loaded"
             raise RuntimeError(msg)
         port_name = f"{socket_id}_port"
-        port = utils.bind_socket(socket=socket, transport=self.transport, ip=self.ip, port=getattr(self, port_name, 0))  # type: ignore[call-arg]
+        port = utils.bind_socket(socket=socket, transport=self.transport, ip=self.ip, port=getattr(self, port_name))  # type: ignore[call-arg]
         setattr(self, port_name, port)
         self.log.debug("%s socket on port: %i", socket_id, port)
         self._sockets[socket_id] = socket
@@ -347,7 +348,7 @@ class Kernel(ConnectionFileMixin):
             frontend: zmq.Socket = self._zmq_context.socket(zmq.XSUB)
             frontend.bind(self._iopub_url)
             iopub_socket: zmq.Socket = self._zmq_context.socket(zmq.XPUB)
-            with self._bind_socket(SocketID.pub, iopub_socket):
+            with self._bind_socket(SocketID.iopub, iopub_socket):
                 ready_event.set()
                 try:
                     zmq.proxy(frontend, iopub_socket)
@@ -364,10 +365,9 @@ class Kernel(ConnectionFileMixin):
         task_status.started()
 
     @contextlib.contextmanager
-    def iopub_enabled_this_thread(self, *, slow_subscriber_sleep=0.5):
+    def iopub_enabled_this_thread(self, *, slow_subscriber_sleep=1):
         """A contextmanager to provide a iopub socket on the current thread."""
         thread = threading.current_thread()
-        socket: zmq.Socket | None
         if not (socket := self._iopub_sockets.get(thread)):
             self.log.info("Opening iopub socket for thread %s", thread.name)
             socket = self._zmq_context.socket(zmq.SocketType.PUB)
@@ -1001,4 +1001,4 @@ class Kernel(ConnectionFileMixin):
         """Stop the kernel."""
         if instance := cls._instance:
             cls._instance = None
-            cls._tg.cancel_scope.cancel()
+            instance._tg.cancel_scope.cancel()
