@@ -234,9 +234,7 @@ class Kernel(ConnectionFileMixin):
         heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
         heartbeat_thread.start()
         ready_event.wait(10)
-        heartbeat_thread.name = "Heartbeat"
-        heartbeat_thread.pydev_do_not_trace = True  # type: ignore[attr-defined]
-        heartbeat_thread.is_pydev_daemon_thread = True  # type: ignore[attr-defined]
+        utils.mark_thread_debugpy_ignore("heartbeat")
         task_status.started()
 
     async def _start_stdin(self, task_status: TaskStatus):
@@ -258,30 +256,34 @@ class Kernel(ConnectionFileMixin):
             from anyio._core._asyncio_selector_thread import get_selector  # noqa: PLC0415
 
             selector = get_selector()
-            selector._thread.pydev_do_not_trace = True  # type: ignore[assignment]
+            utils.mark_thread_debugpy_ignore(thread=selector._thread)
 
         process_message = self._process_control if socket_id is SocketID.control else self._process_shell
         socket = zmq.Socket(self._zmq_context, zmq.SocketType.ROUTER)
-        with self.iopub_enabled_this_thread(), self._bind_socket(socket_id, socket):
+        with self.iopub_enabled_this_thread(slow_subscriber_sleep=0.1), self._bind_socket(socket_id, socket):
             async with utils.ThreadSafeCaller(log=self.log):
-                task_status.started()
-                while True:
-                    while socket.get(SocketOption.EVENTS) & PollEvent.POLLIN:  # type: ignore[call-arg]
-                        msg = socket.recv_multipart(flags=Flag.DONTWAIT, copy=False)
-                        ident, msg_ = self.session.feed_identities(msg, copy=False)
-                        parent = self.session.deserialize(msg_, content=True, copy=False)
-                        msg_type = parent["header"]["msg_type"]
-                        self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, parent["content"])
-                        job = MsgRequest(
-                            socket_id=socket_id,
-                            socket=socket,
-                            ident=ident,
-                            parent=parent,
-                            msg_type=msg_type,
-                        )
-                        await process_message(job)
-                    # with anyio.move_on_after(1):
-                    await anyio.wait_readable(socket)
+                try:
+                    task_status.started()
+                    while True:
+                        while socket.get(SocketOption.EVENTS) & PollEvent.POLLIN:  # type: ignore[call-arg]
+                            msg = socket.recv_multipart(flags=Flag.DONTWAIT, copy=False)
+                            ident, msg_ = self.session.feed_identities(msg, copy=False)
+                            parent = self.session.deserialize(msg_, content=True, copy=False)
+                            msg_type = parent["header"]["msg_type"]
+                            self.log.debug(
+                                "*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, parent["content"]
+                            )
+                            job = MsgRequest(
+                                socket_id=socket_id,
+                                socket=socket,
+                                ident=ident,
+                                parent=parent,
+                                msg_type=msg_type,
+                            )
+                            await process_message(job)
+                        await anyio.wait_readable(socket)
+                except zmq.ContextTerminated:
+                    return
 
     @contextlib.contextmanager
     def _bind_socket(self, socket_id: SocketID, socket: zmq.Socket):
@@ -359,13 +361,11 @@ class Kernel(ConnectionFileMixin):
         iopub_thread = threading.Thread(target=pub_proxy, name="iopub proxy", daemon=True)
         iopub_thread.start()
         ready_event.wait(10)
-        iopub_thread.name = "IOPUB"
-        iopub_thread.pydev_do_not_trace = True  # type: ignore[attr-defined]
-        iopub_thread.is_pydev_daemon_thread = True  # type: ignore[attr-defined]
+        utils.mark_thread_debugpy_ignore("IOPUB")
         task_status.started()
 
     @contextlib.contextmanager
-    def iopub_enabled_this_thread(self, *, slow_subscriber_sleep=1):
+    def iopub_enabled_this_thread(self, *, slow_subscriber_sleep=0.1):
         """A contextmanager to provide a iopub socket on the current thread."""
         thread = threading.current_thread()
         if not (socket := self._iopub_sockets.get(thread)):
@@ -451,6 +451,7 @@ class Kernel(ConnectionFileMixin):
             async def run_control_loop():
                 # This code runs in a different thread having its own async event loop
                 async with anyio.create_task_group() as tg:
+                    await tg.start(self.debugger.start, self)
                     await tg.start(self._receive_msg_loop, SocketID.control)
                     ready_event.set()
 
@@ -958,14 +959,12 @@ class Kernel(ConnectionFileMixin):
             self.load_connection_file()
         try:
             async with anyio.create_task_group() as tg:
-                self._tg = tg
                 try:
                     await tg.start(self._start_heartbeat)
                     await tg.start(self._start_stdin)
                     await tg.start(self._start_iopub_proxy)
                     await tg.start(self._start_control_loop)
                     await tg.start(self._start_shell_loop)
-                    await tg.start(self.debugger.start, self)
                     assert len(self._sockets) == len(SocketID)
                     if not self.connection_file:
                         self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{uuid.uuid4()}.json"))
@@ -975,11 +974,21 @@ class Kernel(ConnectionFileMixin):
                     )
                     atexit.register(self.cleanup_connection_file)
                     await tg.start(self._start_iopub)
+                    await tg.start(self._wait_stopped, tg)
                     yield self
                 finally:
                     self.stop()
         finally:
             self._zmq_context.term()
+
+    async def _wait_stopped(self, tg, *, task_status: TaskStatus):
+        def wait_stopped():
+            utils.mark_thread_debugpy_ignore("stop waiter")
+            self._stop_event.wait()
+
+        task_status.started()
+        await anyio.to_thread.run_sync(wait_stopped)
+        tg.cancel_scope.cancel()
 
     @classmethod
     def start(cls, connection_file="", kernel_name=KernelName.asyncio) -> int:
@@ -1001,4 +1010,4 @@ class Kernel(ConnectionFileMixin):
         """Stop the kernel."""
         if instance := cls._instance:
             cls._instance = None
-            instance._tg.cancel_scope.cancel()
+            instance._stop_event.set()
