@@ -316,14 +316,11 @@ class Kernel(ConnectionFileMixin):
 
                 def flusher(string: str, name=name, echo=echo):
                     "Publish stdio or stderr when flush is called"
-                    if (thread := threading.current_thread()) not in self._iopub_sockets:
-                        self.log.debug("%s for thread %s: %s", name, thread.name, string)
-                    else:
-                        self.iopub_send(
-                            msg_or_type="stream",
-                            content={"name": name, "text": string},
-                            ident=f"stream.{name}".encode(),
-                        )
+                    self.iopub_send(
+                        msg_or_type="stream",
+                        content={"name": name, "text": string},
+                        ident=f"stream.{name}".encode(),
+                    )
                     if not self.quiet and echo:
                         echo.write(string)
                         echo.flush()
@@ -394,7 +391,7 @@ class Kernel(ConnectionFileMixin):
         ident: bytes | list[bytes] | None = None,
         buffers: list[bytes] | None = None,
     ):
-        """Send the message using the zmq iopub socket on the current thread."""
+        """Send a message on the zmq iopub socket."""
         if socket := self._iopub_sockets.get(thread := threading.current_thread()):
             msg = self.session.send(
                 stream=socket,
@@ -408,7 +405,20 @@ class Kernel(ConnectionFileMixin):
             if msg:
                 self.log.debug("iopub_send: msg_type:'%s', content: %s", msg["msg_type"], msg["content"])
         else:
-            self.log.debug("No iopub socket for thread %s", thread.name)
+            utils.ThreadSafeCaller.get_instance(self._control_thread).call_later(
+                self.iopub_send,
+                msg_or_type=msg_or_type,
+                content=content,
+                metadata=metadata,
+                parent=parent,
+                ident=ident,
+                buffers=buffers,
+            )
+            self.log.debug(
+                "Passing iopub to control thread from another thread (%s)."
+                " Use in context of `iopub_enabled_this_thread` to provide a direct socket.",
+                thread.name,
+            )
 
     def _publish_status(self, status: Literal["busy", "idle"], job: MsgRequest):
         """send status (busy/idle) on IOPub"""
@@ -462,6 +472,7 @@ class Kernel(ConnectionFileMixin):
         control_thread.start()
         ready_event.wait(10)
         control_thread.name = "Control"
+        self._control_thread = control_thread
         task_status.started()
 
     async def _start_shell_loop(self, task_status: TaskStatus):
