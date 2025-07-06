@@ -20,14 +20,14 @@ import anyio
 import anyio.to_thread
 import sniffio
 from anyio import TASK_STATUS_IGNORED, create_memory_object_stream, create_task_group, wait_readable
-from anyio.abc import TaskGroup, TaskStatus
+from anyio.abc import TaskStatus
 from zmq import Flag, Frame, PollEvent, Socket, SocketOption, ZMQError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import CoroutineType
 
-    from anyio.abc import TaskGroup, TaskStatus
+    from anyio.abc import TaskStatus
 
 LAUNCHED_BY_DEBUGPY = "debugpy" in sys.modules
 
@@ -45,10 +45,9 @@ def wait_threading_event(event: threading.Event):
     thread.is_pydev_daemon_thread = False  # type: ignore[attr-defined]
 
 
-def start_anyio_thread(
-    func: Callable[[TaskStatus], CoroutineType],
+async def start_anyio_thread(
+    func: Callable[[], CoroutineType],
     stop_event: threading.Event,
-    tg: TaskGroup,
     *,
     backend: Literal["asyncio", "trio", ""] = "",
     name="",
@@ -73,7 +72,6 @@ def start_anyio_thread(
     """
 
     backend = backend or sniffio.current_async_library()  # type: ignore[no-any-return]
-    ready_event = threading.Event()
 
     def run_func():
         thread = threading.current_thread()
@@ -84,15 +82,13 @@ def start_anyio_thread(
 
         async def run_until_stop_event():
             async with anyio.create_task_group() as tg:
-                await tg.start(func)
-                ready_event.set()
+                tg.start_soon(func)
                 await anyio.to_thread.run_sync(wait_threading_event, stop_event)
                 tg.cancel_scope.cancel()
 
         anyio.run(run_until_stop_event, backend=backend)
 
-    tg.start_soon(anyio.to_thread.run_sync, run_func)
-    return anyio.to_thread.run_sync(ready_event.wait)
+    await anyio.to_thread.run_sync(run_func)
 
 
 def bind_socket(socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port: int = 0, max_attempts=100) -> int:
