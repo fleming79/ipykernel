@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import errno
 import inspect
@@ -12,83 +11,22 @@ import sys
 import threading
 import weakref
 from collections import deque
-from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, ParamSpec, Self
 
 import anyio
 import anyio.to_thread
-import sniffio
-from anyio import TASK_STATUS_IGNORED, create_memory_object_stream, create_task_group, wait_readable
 from anyio.abc import TaskStatus
-from zmq import Flag, Frame, PollEvent, Socket, SocketOption, ZMQError
+from zmq import Socket, ZMQError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-    from types import CoroutineType
 
     from anyio.abc import TaskStatus
 
 LAUNCHED_BY_DEBUGPY = "debugpy" in sys.modules
 
 P = ParamSpec("P")
-
-
-def wait_threading_event(event: threading.Event):
-    """Wait for the given threading.Event, marking the thread as a PyDev daemon and
-    disabling tracing during the wait."""
-    thread = threading.current_thread()
-    thread.pydev_do_not_trace = True  # type: ignore[attr-defined]
-    thread.is_pydev_daemon_thread = True  # type: ignore[attr-defined]
-    event.wait()
-    thread.pydev_do_not_trace = False  # type: ignore[attr-defined]
-    thread.is_pydev_daemon_thread = False  # type: ignore[attr-defined]
-
-
-async def start_anyio_thread(
-    func: Callable[[], CoroutineType],
-    stop_event: threading.Event,
-    *,
-    backend: Literal["asyncio", "trio", ""] = "",
-    name="",
-    pydev_do_not_trace=not LAUNCHED_BY_DEBUGPY,
-    is_pydev_daemon_thread=not LAUNCHED_BY_DEBUGPY,
-):
-    """Run a coroutine function in a separate thread (and event loop) and manage its lifecycle using AnyIO.
-
-    This function takes an asynchronous function, a stop event, and a task group,
-    and starts the function in a separate thread. It ensures that the function
-    is properly started and can be stopped gracefully.
-
-    This coroutine returns once `task_status.started()`is called inside `func`
-    running until the `stop_event` is set.
-
-    Args:
-        func: The asynchronous function to run in a separate thread. It should
-            accept a TaskStatus object as an argument and return a coroutine.
-        stop_event: A threading.Event that signals when the function should stop.
-        tg: The AnyIO TaskGroup to use for managing the function's task.
-        task_status: An AnyIO TaskStatus object to signal when the function has started.
-    """
-
-    backend = backend or sniffio.current_async_library()  # type: ignore[no-any-return]
-
-    def run_func():
-        thread = threading.current_thread()
-        if name:
-            thread.name = name
-        thread.pydev_do_not_trace = pydev_do_not_trace  # type: ignore[attr-defined]
-        thread.is_pydev_daemon_thread = is_pydev_daemon_thread  # type: ignore[attr-defined]
-
-        async def run_until_stop_event():
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(func)
-                await anyio.to_thread.run_sync(wait_threading_event, stop_event)
-                tg.cancel_scope.cancel()
-
-        anyio.run(run_until_stop_event, backend=backend)
-
-    await anyio.to_thread.run_sync(run_func)
 
 
 def bind_socket(socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port: int = 0, max_attempts=100) -> int:
@@ -168,12 +106,21 @@ class ThreadSafeCaller:
             await self.__stack.__aexit__(exc_type, exc_value, exc_tb)
 
     async def _server_loop(self, task_status: TaskStatus):
+        def wait_threading_event():
+            thread = threading.current_thread()
+            thread.pydev_do_not_trace = True  # type: ignore[attr-defined]
+            thread.is_pydev_daemon_thread = True  # type: ignore[attr-defined]
+            self._jobs_added.wait()
+            thread.pydev_do_not_trace = False  # type: ignore[attr-defined]
+            thread.is_pydev_daemon_thread = False  # type: ignore[attr-defined]
+
         task_status.started()
         while True:
             while len(self._jobs):
                 self.tg.start_soon(self.wrap_call, *self._jobs.popleft())
                 self._jobs_added.clear()
-            await anyio.to_thread.run_sync(wait_threading_event, self._jobs_added)
+
+            await anyio.to_thread.run_sync(wait_threading_event)
 
     def call_later(self, func: Callable[P, Any | Awaitable], delay=0.0, /, *args: P.args, **kwargs: P.kwargs):
         """Schedules a function or coroutine for execution in the thread that owns it."""
@@ -200,7 +147,7 @@ class ThreadSafeCaller:
             self.log.exception("Exception occurred while running %s", func, exc_info=e)
 
     @classmethod
-    def get_instance(cls, thread: None | threading.Thread) -> Self:
+    def get_instance(cls, thread: None | threading.Thread = None) -> Self:
         thread = thread or threading.current_thread()
         for instance in cls._instances:
             if instance.thread is thread:
@@ -209,45 +156,14 @@ class ThreadSafeCaller:
         raise RuntimeError(msg)
 
 
-class AsyncZMQSocketReader:
-    def __init__(self, socket: Socket, linger=1000, buffer_size=1000) -> None:
-        self._socket = socket = Socket(socket)
-        socket.linger = linger
-        self.buffer_in, self._buffer_out = create_memory_object_stream[list[Frame]](buffer_size)
+# import sys
 
-    async def __aenter__(self) -> Self:
-        if (
-            sys.platform == "win32"
-            and sniffio.current_async_library() == "asyncio"
-            and (policy := asyncio.get_event_loop_policy())
-            and policy.__class__.__name__ == "WindowsProactorEventLoopPolicy"
-        ):
-            from anyio._core._asyncio_selector_thread import get_selector  # noqa: PLC0415
+# file_handler = logging.FileHandler(filename="tmp.log")
+# # stdout_handler = logging.StreamHandler(stream=sys.stdout)
+# handlers = [file_handler]
 
-            selector = get_selector()
-            selector._thread.pydev_do_not_trace = True  # type: ignore[assignment]
-            # wait_readable enabled in Windows proactor event loop via https://github.com/agronholm/anyio/pull/831
-
-        async with AsyncExitStack() as stack:
-            self._buffer_out = await stack.enter_async_context(self._buffer_out)
-            self._task_group = task_group = await stack.enter_async_context(create_task_group())
-            await task_group.start(self._start)
-            stack.callback(self._socket.close)
-            stack.callback(task_group.cancel_scope.cancel)
-            self._stack = stack.pop_all()
-        return self
-
-    async def __aexit__(self, exc_type, exc_value, exc_tb):
-        await self._stack.__aexit__(exc_type, exc_value, exc_tb)
-
-    def __aiter__(self):
-        return self._buffer_out
-
-    async def _start(self, *, task_status: TaskStatus[None] = TASK_STATUS_IGNORED):
-        task_status.started()
-
-        while True:
-            await wait_readable(self._socket)
-            while int(self._socket.get(SocketOption.EVENTS)) & PollEvent.POLLIN:
-                result = self._socket.recv_multipart(flags=Flag.DONTWAIT, copy=False)
-                await self.buffer_in.send(result)
+# logging.basicConfig(
+#     level=logging.DEBUG,
+#     format="[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s",
+#     handlers=handlers,
+# )
