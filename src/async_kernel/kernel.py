@@ -260,7 +260,7 @@ class Kernel(ConnectionFileMixin):
 
         process_message = self._process_control if socket_id is SocketID.control else self._process_shell
         socket = zmq.Socket(self._zmq_context, zmq.SocketType.ROUTER)
-        with self.iopub_enabled_this_thread(slow_subscriber_sleep=0.4), self._bind_socket(socket_id, socket):
+        with self.iopub_enabled_this_thread(slow_subscriber_sleep=0.0), self._bind_socket(socket_id, socket):
             async with utils.ThreadSafeCaller(log=self.log):
                 try:
                     task_status.started()
@@ -979,6 +979,7 @@ class Kernel(ConnectionFileMixin):
                     await tg.start(self._start_control_loop)
                     await tg.start(self._start_shell_loop)
                     assert len(self._sockets) == len(SocketID)
+                    time.sleep(0.5)  # sleep to give internal iopub sockets time to connect.
                     if not self.connection_file:
                         self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{uuid.uuid4()}.json"))
                     self.write_connection_file()
