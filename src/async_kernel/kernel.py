@@ -434,16 +434,16 @@ class Kernel(ConnectionFileMixin):
 
     @contextlib.contextmanager
     def _bind_socket(self, socket_id: SocketID, socket: zmq.Socket):
-        """Bind a zmq.Socket storing a reference to the socket and the port details.
-
-        If `socket` is provided, a shadow copy of the socket is . The
-        socket is closed once the context is left.
-        """
+        """Bind a zmq.Socket storing a reference to the socket and the port
+        details and closing the socket on leaving the context."""
         socket.linger = 500
         if socket_id in self._sockets:
             msg = f"{socket_id=} is already loaded"
             raise RuntimeError(msg)
         port_name = f"{socket_id}_port"
+        if socket_id is not SocketID.iopub:
+            # ref: https://github.com/ipython/ipykernel/issues/270
+            socket.router_handover = 1
         port = utils.bind_socket(socket=socket, transport=self.transport, ip=self.ip, port=getattr(self, port_name))  # type: ignore[call-arg]
         setattr(self, port_name, port)
         self.log.debug("%s socket on port: %i", socket_id, port)
@@ -920,13 +920,15 @@ class Kernel(ConnectionFileMixin):
             completions = list(_rectify_completions(code, raw_completions))
             comps = []
             for comp in completions:
-                comps.append({
-                    "start": comp.start,
-                    "end": comp.end,
-                    "text": comp.text,
-                    "type": comp.type,
-                    "signature": comp.signature,
-                })
+                comps.append(
+                    {
+                        "start": comp.start,
+                        "end": comp.end,
+                        "text": comp.text,
+                        "type": comp.type,
+                        "signature": comp.signature,
+                    }
+                )
         if completions:
             s = completions[0].start
             e = completions[0].end
