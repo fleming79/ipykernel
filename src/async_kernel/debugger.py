@@ -240,7 +240,6 @@ class Debugger(traitlets.HasTraits):
     breakpoint_list = traitlets.Dict()
     stopped_threads = traitlets.Set()
     _removed_cleanup = traitlets.Dict()
-    _initialize_reply = traitlets.Dict()
     just_my_code = traitlets.Bool(True)
     variable_explorer = traitlets.Instance(VariableExplorer, ())
     debugpy_client = traitlets.Instance(DebugpyClient)

@@ -111,7 +111,6 @@ class Kernel(ConnectionFileMixin):
 
     _instance: Self | None = None
     _io_modified = traitlets.Bool(False)
-    _stopped = Instance(anyio.Event, ())
     _stop_event = Instance(threading.Event, ())
     _stop_on_error_time: float = 0
     _interrupt_events: traitlets.Container[set[threading.Event]] = traitlets.Set()
@@ -146,7 +145,7 @@ class Kernel(ConnectionFileMixin):
     help_links = traitlets.Dict()
     comm_manager: Instance[CommManager] = Instance("async_kernel.comm.CommManager")
 
-    def __new__(cls, *, kernel_name=KernelName.asyncio, connection_file="", **kwargs) -> Self:  # noqa: ARG004
+    def __new__(cls, *, connection_file="", kernel_name=KernelName.asyncio, **kwargs) -> Self:  # noqa: ARG004
         #  There is only one instance.
         if not (instance := cls._instance):
             cls._instance = instance = super().__new__(cls)
@@ -218,6 +217,64 @@ class Kernel(ConnectionFileMixin):
     def _default_shell(self):
         return self.shell_class.instance(parent=self, kernel=self)
 
+    @classmethod
+    def start(cls, connection_file="", kernel_name=KernelName.asyncio) -> int:
+        """Start the kernel."""
+
+        async def _start() -> None:
+            async with kernel.start_in_context():
+                await anyio.sleep_forever()
+
+        kernel = cls(kernel_name=kernel_name, connection_file=connection_file)
+        try:
+            anyio.run(_start, backend="trio" if kernel.kernel_name is KernelName.trio else "asyncio")
+        finally:
+            pass
+        return 0
+
+    @classmethod
+    def stop(cls):
+        """Stop the kernel."""
+        if instance := cls._instance:
+            cls._instance = None
+            instance._stop_event.set()
+
+    @asynccontextmanager
+    async def start_in_context(self):
+        """Start the Kernel in an already running anyio event loop."""
+        if self._sockets:
+            msg = "Already started"
+            raise RuntimeError(msg)
+        if self.kernel_name is KernelName.asyncio_eager and sys.version_info >= (3, 12):
+            loop = asyncio.get_running_loop()
+            loop.set_task_factory(asyncio.eager_task_factory)
+        if self.connection_file and Path(self.connection_file).exists():
+            self.load_connection_file()
+        try:
+            async with anyio.create_task_group() as tg:
+                try:
+                    await tg.start(self._start_heartbeat)
+                    await tg.start(self._start_stdin)
+                    await tg.start(self._start_iopub_proxy)
+                    await tg.start(self._start_control_loop)
+                    await tg.start(self._start_shell_loop)
+                    assert len(self._sockets) == len(SocketID)
+                    time.sleep(0.5)  # sleep to give internal iopub sockets time to connect.
+                    if not self.connection_file:
+                        self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{uuid.uuid4()}.json"))
+                    self.write_connection_file()
+                    print(
+                        f'To connect a client to this kernel, use:\n      --existing "{self.connection_file}"',
+                    )
+                    atexit.register(self.cleanup_connection_file)
+                    await tg.start(self._start_iopub)
+                    await tg.start(self._wait_stopped, tg)
+                    yield self
+                finally:
+                    self.stop()
+        finally:
+            self._zmq_context.term()
+
     async def _start_heartbeat(self, task_status: TaskStatus):
         # Reference: https://jupyter-client.readthedocs.io/en/stable/messaging.html#heartbeat-for-kernels
 
@@ -243,6 +300,96 @@ class Kernel(ConnectionFileMixin):
         with self._bind_socket(SocketID.stdin, socket):
             task_status.started()
             await anyio.sleep_forever()
+
+    async def _start_iopub_proxy(self, task_status: TaskStatus):
+        """Provide an io proxy"""
+
+        def pub_proxy():
+            # We use an internal proxy to collect pub messages for distribution.
+            # Each thread needs to open its own socket to publish to the internal proxy.
+            # When thread-safe sockets become available, this could be changed...
+            # which could come from any thread in this process.
+            # Ref: https://zguide.zeromq.org/docs/chapter2/#Working-with-Messages (fig 14)
+            frontend: zmq.Socket = self._zmq_context.socket(zmq.XSUB)
+            frontend.bind(self._iopub_url)
+            iopub_socket: zmq.Socket = self._zmq_context.socket(zmq.XPUB)
+            with self._bind_socket(SocketID.iopub, iopub_socket):
+                ready_event.set()
+                try:
+                    zmq.proxy(frontend, iopub_socket)
+                except zmq.ContextTerminated:
+                    frontend.close(linger=500)
+
+        ready_event = threading.Event()
+        iopub_thread = threading.Thread(target=pub_proxy, name="iopub proxy", daemon=True)
+        utils.mark_thread_debugpy_ignore(iopub_thread, "iopub")
+        iopub_thread.start()
+        ready_event.wait(10)
+        task_status.started()
+
+    async def _start_control_loop(self, task_status: TaskStatus):
+        def control():
+            async def run_control_loop():
+                # This code runs in a different thread having its own async event loop
+                async with anyio.create_task_group() as tg:
+                    await tg.start(self.debugger.start, self)
+                    await tg.start(self._receive_msg_loop, SocketID.control)
+                    ready_event.set()
+
+            anyio.run(run_control_loop)
+
+        ready_event = threading.Event()
+        control_thread = threading.Thread(target=control, daemon=True)
+        control_thread.start()
+        ready_event.wait(10)
+        control_thread.name = "Control"
+        self._control_thread = control_thread
+        task_status.started()
+
+    async def _start_shell_loop(self, task_status: TaskStatus):
+        async with anyio.create_task_group() as tg:
+            await tg.start(self._shell_execute_request_loop)
+            await tg.start(self._receive_msg_loop, SocketID.shell)
+            task_status.started()
+
+    async def _start_iopub(self, task_status: TaskStatus):
+        self._save_io()
+        cls: type[OutStream] = import_item(self.outstream_class)
+        if self.outstream_class:
+            for name in ["stdout", "stderr"]:
+                echo = getattr(sys, name)
+
+                def flusher(string: str, name=name, echo=echo):
+                    "Publish stdio or stderr when flush is called"
+                    self.iopub_send(
+                        msg_or_type="stream",
+                        content={"name": name, "text": string},
+                        ident=f"stream.{name}".encode(),
+                    )
+                    if not self.quiet and echo:
+                        echo.write(string)
+                        echo.flush()
+
+                wrapper = cls(name=name, flusher=flusher)  # type: ignore[call-arg]
+                setattr(sys, name, wrapper)
+        task_status.started()
+        self.comm_manager.kernel = self
+        try:
+            await anyio.sleep_forever()
+        finally:
+            self.comm_manager.kernel = None
+            self._reset_io()
+
+    async def _wait_stopped(self, tg, *, task_status: TaskStatus):
+        def wait_stopped():
+            thread = threading.current_thread()
+            utils.mark_thread_debugpy_ignore(thread)
+            self._stop_event.wait()
+            utils.mark_thread_debugpy_ignore(thread, unhide=True)
+
+        task_status.started()
+        await anyio.to_thread.run_sync(wait_stopped)
+        tg.cancel_scope.cancel()
 
     async def _receive_msg_loop(self, socket_id: Literal[SocketID.control, SocketID.shell], *, task_status: TaskStatus):
         """Receive messages from the socket, unpack them and pass them to be processed with process_message."""
@@ -306,60 +453,6 @@ class Kernel(ConnectionFileMixin):
         finally:
             socket.close(linger=500)
             self._sockets.pop(socket_id)
-
-    async def _start_iopub(self, task_status: TaskStatus):
-        self._save_io()
-        cls: type[OutStream] = import_item(self.outstream_class)
-        if self.outstream_class:
-            for name in ["stdout", "stderr"]:
-                echo = getattr(sys, name)
-
-                def flusher(string: str, name=name, echo=echo):
-                    "Publish stdio or stderr when flush is called"
-                    self.iopub_send(
-                        msg_or_type="stream",
-                        content={"name": name, "text": string},
-                        ident=f"stream.{name}".encode(),
-                    )
-                    if not self.quiet and echo:
-                        echo.write(string)
-                        echo.flush()
-
-                wrapper = cls(name=name, flusher=flusher)  # type: ignore[call-arg]
-                setattr(sys, name, wrapper)
-        task_status.started()
-        self.comm_manager.kernel = self
-        try:
-            await anyio.sleep_forever()
-        finally:
-            self.comm_manager.kernel = None
-            self._reset_io()
-
-    async def _start_iopub_proxy(self, task_status: TaskStatus):
-        """Provide an io proxy"""
-
-        def pub_proxy():
-            # We use an internal proxy to collect pub messages for distribution.
-            # Each thread needs to open its own socket to publish to the internal proxy.
-            # When thread-safe sockets become available, this could be changed...
-            # which could come from any thread in this process.
-            # Ref: https://zguide.zeromq.org/docs/chapter2/#Working-with-Messages (fig 14)
-            frontend: zmq.Socket = self._zmq_context.socket(zmq.XSUB)
-            frontend.bind(self._iopub_url)
-            iopub_socket: zmq.Socket = self._zmq_context.socket(zmq.XPUB)
-            with self._bind_socket(SocketID.iopub, iopub_socket):
-                ready_event.set()
-                try:
-                    zmq.proxy(frontend, iopub_socket)
-                except zmq.ContextTerminated:
-                    frontend.close(linger=500)
-
-        ready_event = threading.Event()
-        iopub_thread = threading.Thread(target=pub_proxy, name="iopub proxy", daemon=True)
-        utils.mark_thread_debugpy_ignore(iopub_thread, "iopub")
-        iopub_thread.start()
-        ready_event.wait(10)
-        task_status.started()
 
     @contextlib.contextmanager
     def iopub_enabled_this_thread(self, *, slow_subscriber_sleep=0.4):
@@ -459,31 +552,6 @@ class Kernel(ConnectionFileMixin):
             "traceback": traceback or [],
         }
         self.send_reply(job, content)
-
-    async def _start_control_loop(self, task_status: TaskStatus):
-        def control():
-            async def run_control_loop():
-                # This code runs in a different thread having its own async event loop
-                async with anyio.create_task_group() as tg:
-                    await tg.start(self.debugger.start, self)
-                    await tg.start(self._receive_msg_loop, SocketID.control)
-                    ready_event.set()
-
-            anyio.run(run_control_loop)
-
-        ready_event = threading.Event()
-        control_thread = threading.Thread(target=control, daemon=True)
-        control_thread.start()
-        ready_event.wait(10)
-        control_thread.name = "Control"
-        self._control_thread = control_thread
-        task_status.started()
-
-    async def _start_shell_loop(self, task_status: TaskStatus):
-        async with anyio.create_task_group() as tg:
-            await tg.start(self._shell_execute_request_loop)
-            await tg.start(self._receive_msg_loop, SocketID.shell)
-            task_status.started()
 
     async def _process_control(self, job: MsgRequest):
         # Inside control thread
@@ -932,7 +1000,6 @@ class Kernel(ConnectionFileMixin):
     async def do_shutdown(self, restart):
         """Handle kernel shutdown."""
         self.stop()
-        await self._stopped.wait()
         return {"status": "ok", "restart": restart}
 
     def do_clear(self):
@@ -961,72 +1028,3 @@ class Kernel(ConnectionFileMixin):
         if not self._allow_stdin:
             raise StdinNotImplementedError
         return self._input_request(prompt, password=True)
-
-    @asynccontextmanager
-    async def start_in_context(self):
-        """Start the Kernel in an already running anyio event loop."""
-        if self._sockets:
-            msg = "Already started"
-            raise RuntimeError(msg)
-        if self.kernel_name is KernelName.asyncio_eager and sys.version_info >= (3, 12):
-            loop = asyncio.get_running_loop()
-            loop.set_task_factory(asyncio.eager_task_factory)
-        if self.connection_file and Path(self.connection_file).exists():
-            self.load_connection_file()
-        try:
-            async with anyio.create_task_group() as tg:
-                try:
-                    await tg.start(self._start_heartbeat)
-                    await tg.start(self._start_stdin)
-                    await tg.start(self._start_iopub_proxy)
-                    await tg.start(self._start_control_loop)
-                    await tg.start(self._start_shell_loop)
-                    assert len(self._sockets) == len(SocketID)
-                    time.sleep(0.5)  # sleep to give internal iopub sockets time to connect.
-                    if not self.connection_file:
-                        self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{uuid.uuid4()}.json"))
-                    self.write_connection_file()
-                    print(
-                        f'To connect a client to this kernel, use:\n      --existing "{self.connection_file}"',
-                    )
-                    atexit.register(self.cleanup_connection_file)
-                    await tg.start(self._start_iopub)
-                    await tg.start(self._wait_stopped, tg)
-                    yield self
-                finally:
-                    self.stop()
-        finally:
-            self._zmq_context.term()
-
-    async def _wait_stopped(self, tg, *, task_status: TaskStatus):
-        def wait_stopped():
-            thread = threading.current_thread()
-            utils.mark_thread_debugpy_ignore(thread)
-            self._stop_event.wait()
-            utils.mark_thread_debugpy_ignore(thread, unhide=True)
-
-        task_status.started()
-        await anyio.to_thread.run_sync(wait_stopped)
-        tg.cancel_scope.cancel()
-
-    @classmethod
-    def start(cls, connection_file="", kernel_name=KernelName.asyncio) -> int:
-        """Start the kernel."""
-
-        async def _start() -> None:
-            async with kernel.start_in_context():
-                await anyio.sleep_forever()
-
-        kernel = cls(kernel_name=kernel_name, connection_file=connection_file)
-        try:
-            anyio.run(_start, backend="trio" if kernel.kernel_name is KernelName.trio else "asyncio")
-        finally:
-            pass
-        return 0
-
-    @classmethod
-    def stop(cls):
-        """Stop the kernel."""
-        if instance := cls._instance:
-            cls._instance = None
-            instance._stop_event.set()
