@@ -19,6 +19,9 @@ if TYPE_CHECKING:
     from async_kernel.kernel import Kernel
 
 
+__all__ = ["AsyncDisplayHook", "AsyncDisplayPublisher", "AsyncInteractiveShell"]
+
+
 class AsyncDisplayHook(DisplayHook):
     """A displayhook subclass that publishes data using ZeroMQ. This is intended
     to work with an InteractiveShell instance. It sends a dict of different
