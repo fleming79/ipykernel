@@ -260,7 +260,7 @@ class Kernel(ConnectionFileMixin):
 
         process_message = self._process_control if socket_id is SocketID.control else self._process_shell
         socket = zmq.Socket(self._zmq_context, zmq.SocketType.ROUTER)
-        with self.iopub_enabled_this_thread(slow_subscriber_sleep=0.1), self._bind_socket(socket_id, socket):
+        with self.iopub_enabled_this_thread(slow_subscriber_sleep=0.4), self._bind_socket(socket_id, socket):
             async with utils.ThreadSafeCaller(log=self.log):
                 try:
                     task_status.started()
@@ -362,7 +362,7 @@ class Kernel(ConnectionFileMixin):
         task_status.started()
 
     @contextlib.contextmanager
-    def iopub_enabled_this_thread(self, *, slow_subscriber_sleep=0.1):
+    def iopub_enabled_this_thread(self, *, slow_subscriber_sleep=0.4):
         """A contextmanager to provide a iopub socket on the current thread."""
         thread = threading.current_thread()
         if not (socket := self._iopub_sockets.get(thread)):
