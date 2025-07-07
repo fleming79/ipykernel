@@ -1,8 +1,11 @@
 """Compiler helpers for the debugger."""
 
+from __future__ import annotations
+
 import os
-import sys
+import pathlib
 import tempfile
+from typing import ClassVar
 
 from IPython.core.compilerop import CachingCompiler
 
@@ -46,61 +49,40 @@ def murmur2_x86(data, seed):
     return h
 
 
-convert_to_long_pathname = lambda filename: filename  # noqa: E731
-
-if sys.platform == "win32":
-    try:
-        import ctypes
-        from ctypes.wintypes import DWORD, LPCWSTR, LPWSTR, MAX_PATH
-
-        _GetLongPathName = ctypes.windll.kernel32.GetLongPathNameW
-        _GetLongPathName.argtypes = [LPCWSTR, LPWSTR, DWORD]
-        _GetLongPathName.restype = DWORD
-
-        def _convert_to_long_pathname(filename):
-            buf = ctypes.create_unicode_buffer(MAX_PATH)
-            rv = _GetLongPathName(filename, buf, MAX_PATH)
-            if rv != 0 and rv <= MAX_PATH:
-                filename = buf.value
-            return filename
-
-        # test that it works so if there are any issues we fail just once here
-        _convert_to_long_pathname(__file__)
-    except Exception:
-        pass
-    else:
-        convert_to_long_pathname = _convert_to_long_pathname
-
-
-def get_tmp_directory():
-    """Get a temp directory."""
-    tmp_dir = convert_to_long_pathname(tempfile.gettempdir())
-    pid = os.getpid()
-    return tmp_dir + os.sep + "ipykernel_" + str(pid)
-
-
-def get_tmp_hash_seed():
-    """Get a temp hash seed."""
-    return 0xC70F6907
-
-
-def get_file_name(code):
-    """Get a file name."""
-    cell_name = os.environ.get("IPYKERNEL_CELL_NAME")
-    if cell_name is None:
-        name = murmur2_x86(code, get_tmp_hash_seed())
-        cell_name = get_tmp_directory() + os.sep + str(name) + ".py"
-    return cell_name
-
-
 class XCachingCompiler(CachingCompiler):
-    """A custom caching compiler."""
+    """A custom caching compiler that writes the code to a tempfile corresponding to the hash of the code."""
+
+    hash_method: ClassVar = "Murmur2"
 
     def __init__(self, *args, **kwargs):
         """Initialize the compiler."""
         super().__init__(*args, **kwargs)
-        self.log = None
 
     def get_code_name(self, raw_code, transformed_code, number):
         """Get the code name."""
-        return get_file_name(raw_code)
+        return str(self.get_file_name(raw_code))
+
+    def get_file_name(self, code) -> pathlib.Path:
+        """Get a file name."""
+        name = murmur2_x86(code, self.hash_seed)
+        return self.tmp_directory.joinpath(f"{name}{self.tmp_file_suffix}")
+
+    @property
+    def tmp_directory(self) -> pathlib.Path:
+        """Get a temp directory."""
+        if not (tempdir := getattr(self, "_tempdir", None)):
+            self._tempdir = tempdir = pathlib.Path(tempfile.gettempdir(), f"async_kernel_{os.getpid()}").resolve()
+        return tempdir
+
+    @property
+    def hash_seed(self):
+        """Get a temp hash seed."""
+        return 0xC70F6907
+
+    @property
+    def tmp_file_prefix(self):
+        return f"{self.tmp_directory}{os.sep}"
+
+    @property
+    def tmp_file_suffix(self):
+        return ".py"

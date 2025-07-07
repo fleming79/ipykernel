@@ -809,6 +809,7 @@ class Kernel(ConnectionFileMixin):
                     store_history=store_history,
                     silent=silent,
                     transformed_cell=shell.transform_cell(code),
+                    shell_futures=True,
                 )
                 result.append(result_)
                 interrupt.set()

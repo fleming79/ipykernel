@@ -16,7 +16,6 @@ import traitlets
 from IPython.core.inputtransformer2 import leading_empty_lines
 
 from async_kernel import utils
-from async_kernel.compiler import get_file_name, get_tmp_directory, get_tmp_hash_seed
 
 if TYPE_CHECKING:
     from anyio.abc import TaskGroup, TaskStatus
@@ -117,8 +116,9 @@ class VariableExplorer(traitlets.HasTraits):
         """Start tracking."""
         from _pydevd_bundle import pydevd_frame_utils  # type: ignore[attr-defined]  # noqa: PLC0415
 
-        var = self.kernel.shell.user_ns
-        self.frame = _FakeFrame(_FakeCode("<module>", get_file_name("sys._getframe()")), var, var)
+        shell = self.kernel.shell
+        var = shell.user_ns
+        self.frame = _FakeFrame(_FakeCode("<module>", shell.compile.get_file_name("sys._getframe()")), var, var)
         self.tracker.track("thread1", pydevd_frame_utils.create_frames_list_from_frame(self.frame))
 
     def untrack_all(self):
@@ -242,7 +242,6 @@ class Debugger(traitlets.HasTraits):
     _removed_cleanup = traitlets.Dict()
     _initialize_reply = traitlets.Dict()
     just_my_code = traitlets.Bool(True)
-    debugpy_initialized = traitlets.Bool()
     variable_explorer = traitlets.Instance(VariableExplorer, ())
     debugpy_client = traitlets.Instance(DebugpyClient)
     log = traitlets.Instance(logging.LoggerAdapter)
@@ -397,11 +396,6 @@ class Debugger(traitlets.HasTraits):
     async def do_initialize(self, message):
         "Initialize debugpy server starting as required."
         if not self.debugpy_client.connected:
-            if not self.debugpy_initialized:
-                tmp_dir = get_tmp_directory()
-                if not Path(tmp_dir).exists():
-                    Path(tmp_dir).mkdir(parents=True)
-                self.debugpy_initialized = True
             await self.taskgroup.start(self.debugpy_client.connect_tcp_socket)
             # Don't remove leading empty lines when debugging so the breakpoints are correctly positioned
             cleanup_transforms = self.kernel.shell.input_transformer_manager.cleanup_transforms
@@ -417,6 +411,7 @@ class Debugger(traitlets.HasTraits):
         breakpoint_list = []
         for key, value in self.breakpoint_list.items():
             breakpoint_list.append({"source": key, "breakpoints": value})
+        compiler = self.kernel.shell.compile
         return {
             "type": "response",
             "request_seq": message["seq"],
@@ -424,10 +419,10 @@ class Debugger(traitlets.HasTraits):
             "command": message["command"],
             "body": {
                 "isStarted": self.debugpy_client.connected,
-                "hashMethod": "Murmur2",
-                "hashSeed": get_tmp_hash_seed(),
-                "tmpFilePrefix": get_tmp_directory() + os.sep,
-                "tmpFileSuffix": ".py",
+                "hashMethod": compiler.hash_method,
+                "hashSeed": compiler.hash_seed,
+                "tmpFilePrefix": compiler.tmp_file_prefix,
+                "tmpFileSuffix": compiler.tmp_file_suffix,
                 "breakpoints": breakpoint_list,
                 "stoppedThreads": list(self.stopped_threads),
                 "richRendering": True,
@@ -531,9 +526,9 @@ class Debugger(traitlets.HasTraits):
     async def do_dump_cell(self, message):
         """Handle a dump cell message."""
         code = message["arguments"]["code"]
-        file_name = get_file_name(code)
-
-        with open(file_name, "w", encoding="utf-8") as f:
+        path = self.kernel.shell.compile.get_file_name(code)
+        path.parent.mkdir(exist_ok=True)
+        with path.open("w") as f:
             f.write(code)
 
         return {
@@ -541,7 +536,7 @@ class Debugger(traitlets.HasTraits):
             "request_seq": message["seq"],
             "success": True,
             "command": message["command"],
-            "body": {"sourcePath": file_name},
+            "body": {"sourcePath": str(path)},
         }
 
     async def do_set_breakpoints(self, message):

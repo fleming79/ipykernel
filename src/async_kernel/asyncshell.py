@@ -118,6 +118,7 @@ class AsyncInteractiveShell(InteractiveShell):
     display_pub: Instance[AsyncDisplayPublisher]
     kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
     compiler_class = Type(XCachingCompiler)
+    compile: Instance[XCachingCompiler]
 
     @default("banner1")
     def _default_banner1(self):
