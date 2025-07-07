@@ -232,9 +232,9 @@ class Kernel(ConnectionFileMixin):
 
         ready_event = threading.Event()
         heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
+        utils.mark_thread_debugpy_ignore(heartbeat_thread, "heartbeat")
         heartbeat_thread.start()
         ready_event.wait(10)
-        utils.mark_thread_debugpy_ignore("heartbeat")
         task_status.started()
 
     async def _start_stdin(self, task_status: TaskStatus):
@@ -256,7 +256,7 @@ class Kernel(ConnectionFileMixin):
             from anyio._core._asyncio_selector_thread import get_selector  # noqa: PLC0415
 
             selector = get_selector()
-            utils.mark_thread_debugpy_ignore(thread=selector._thread)
+            utils.mark_thread_debugpy_ignore(selector._thread)
 
         process_message = self._process_control if socket_id is SocketID.control else self._process_shell
         socket = zmq.Socket(self._zmq_context, zmq.SocketType.ROUTER)
@@ -356,9 +356,9 @@ class Kernel(ConnectionFileMixin):
 
         ready_event = threading.Event()
         iopub_thread = threading.Thread(target=pub_proxy, name="iopub proxy", daemon=True)
+        utils.mark_thread_debugpy_ignore(iopub_thread, "iopub")
         iopub_thread.start()
         ready_event.wait(10)
-        utils.mark_thread_debugpy_ignore("IOPUB")
         task_status.started()
 
     @contextlib.contextmanager
@@ -403,7 +403,9 @@ class Kernel(ConnectionFileMixin):
                 buffers=buffers,
             )
             if msg:
-                self.log.debug("iopub_send: msg_type:'%s', content: %s", msg["msg_type"], msg["content"])
+                self.log.debug(
+                    "iopub_send: (thread=%s) msg_type:'%s', content: %s", thread.name, msg["msg_type"], msg["content"]
+                )
         else:
             utils.ThreadSafeCaller.get_instance(self._control_thread).call_later(
                 self.iopub_send,
@@ -994,8 +996,10 @@ class Kernel(ConnectionFileMixin):
 
     async def _wait_stopped(self, tg, *, task_status: TaskStatus):
         def wait_stopped():
-            utils.mark_thread_debugpy_ignore("stop waiter")
+            thread = threading.current_thread()
+            utils.mark_thread_debugpy_ignore(thread)
             self._stop_event.wait()
+            utils.mark_thread_debugpy_ignore(thread, unhide=True)
 
         task_status.started()
         await anyio.to_thread.run_sync(wait_stopped)

@@ -107,9 +107,9 @@ class ThreadSafeCaller:
 
     async def _server_loop(self, task_status: TaskStatus):
         def wait_threading_event():
-            mark_thread_debugpy_ignore()
+            mark_thread_debugpy_ignore(threading.current_thread())
             self._jobs_added.wait()
-            mark_thread_debugpy_ignore(unhide=True)
+            mark_thread_debugpy_ignore(threading.current_thread(), unhide=True)
 
         task_status.started()
         while True:
@@ -153,9 +153,8 @@ class ThreadSafeCaller:
         raise RuntimeError(msg)
 
 
-def mark_thread_debugpy_ignore(name="", thread: threading.Thread | None = None, *, unhide=False):
+def mark_thread_debugpy_ignore(thread: threading.Thread, name="", *, unhide=False):
     """Modifies the given thread's attributes to hide or unhide it from the debugger (e.g., debugpy)."""
-    thread = thread or threading.current_thread()
     thread.pydev_do_not_trace = not unhide  # type: ignore[attr-defined]
     # thread.is_pydev_daemon_thread = not unhide  # type: ignore[attr-defined]
     if name:

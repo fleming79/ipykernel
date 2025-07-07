@@ -209,10 +209,9 @@ class DebugpyClient(traitlets.HasTraits):
             import debugpy  # noqa: PLC0415
 
             self._host_port = debugpy.listen(0)
-            thread = threading.current_thread()
+            utils.mark_thread_debugpy_ignore(threading.current_thread())
             # This thread can't be stopped by the debugger when debugging
-            thread.pydev_do_not_trace = True  # type: ignore[attr-defined]
-            thread.is_pydev_daemon_thread = True  # type: ignore[attr-defined]
+
         try:
             self.log.debug("++ debugpy socketstream connecting ++")
             async with await anyio.connect_tcp(*self._host_port) as socketstream:
