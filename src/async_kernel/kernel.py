@@ -66,7 +66,7 @@ class MsgType(TypedDict):
     header: MsgHeader
     parent_header: MsgHeader
     metadata: dict[str, Any]
-    content: dict[str, dict]
+    content: dict[str, Any]
     buffers: list[bytearray | bytes]
 
 
@@ -77,7 +77,7 @@ class MsgRequest(TypedDict):
     socket: zmq.Socket
     ident: bytes | list[bytes]
     msg_type: str
-    parent: dict
+    parent: MsgType
 
 
 class SocketID(enum.StrEnum):
@@ -268,7 +268,7 @@ class Kernel(ConnectionFileMixin):
                         while socket.get(SocketOption.EVENTS) & PollEvent.POLLIN:  # type: ignore[call-arg]
                             msg = socket.recv_multipart(flags=Flag.DONTWAIT, copy=False)
                             ident, msg_ = self.session.feed_identities(msg, copy=False)
-                            parent = self.session.deserialize(msg_, content=True, copy=False)
+                            parent: MsgType = self.session.deserialize(msg_, content=True, copy=False)  # type: ignore[assignment]
                             msg_type = parent["header"]["msg_type"]
                             self.log.debug(
                                 "*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, parent["content"]
@@ -277,7 +277,7 @@ class Kernel(ConnectionFileMixin):
                                 socket_id=socket_id,
                                 socket=socket,
                                 ident=ident,
-                                parent=parent,
+                                parent=parent,  # type: ignore[call-arg]
                                 msg_type=msg_type,
                             )
                             await process_message(job)
@@ -398,7 +398,7 @@ class Kernel(ConnectionFileMixin):
                 msg_or_type=msg_or_type,
                 content=content,
                 metadata=metadata,
-                parent=parent if parent is not None else self._job.get("parent"),
+                parent=parent if parent is not None else self._job.get("parent"),  # type: ignore[call-arg]
                 ident=ident,
                 buffers=buffers,
             )
@@ -427,7 +427,7 @@ class Kernel(ConnectionFileMixin):
         self.iopub_send(
             msg_or_type="status",
             content={"execution_state": status},
-            parent=job["parent"],
+            parent=job["parent"],  # type: ignore[call-arg]
             ident=self._topic("status"),
         )
 
@@ -439,11 +439,13 @@ class Kernel(ConnectionFileMixin):
             stream=job["socket"],
             msg_or_type=job["msg_type"].replace("request", "reply"),
             content=content,
-            parent=job["parent"]["header"],
+            parent=job["parent"]["header"],  # type: ignore[call-arg]
             ident=job["ident"],
         )
         if msg:
-            self.log.debug("send_reply: '%s' %s", msg["msg_type"], msg["content"])
+            self.log.debug(
+                "send_reply: '%s' msg_id: %s %s", msg["msg_type"], job["parent"]["header"]["msg_id"], msg["content"]
+            )
 
     def _send_error_reply(
         self, job: MsgRequest, *, ename="RuntimeError", evalue="", traceback: list[str] | None = None
@@ -583,7 +585,7 @@ class Kernel(ConnectionFileMixin):
             stream=socket,
             msg_or_type="input_request",
             content={"prompt": prompt, "password": password},
-            parent=self._job["parent"],
+            parent=self._job["parent"],  # type: ignore[call-arg]
             ident=self._job["ident"],
         )
         # Await a response.
@@ -705,7 +707,7 @@ class Kernel(ConnectionFileMixin):
                 self.iopub_send(
                     msg_or_type="execute_input",
                     content={"code": content["code"], "execution_count": self.shell.execution_count},
-                    parent=job["parent"],
+                    parent=job["parent"],  # type: ignore[call-arg]
                     ident=self._topic("execute_input"),
                 )
             # Call do_execute with the appropriate arguments
@@ -744,14 +746,14 @@ class Kernel(ConnectionFileMixin):
         reply_content = await self.do_inspect(
             content["code"],
             content["cursor_pos"],
-            content.get("detail_level", 0),
+            int(content.get("detail_level", 0)),
             set(content.get("omit_sections", [])),
         )
         self.send_reply(job, reply_content)
 
     async def history_request(self, job: MsgRequest):
         """Handle a history request."""
-        reply_content = await self.do_history(**job["parent"]["content"])
+        reply_content = await self.do_history(**job["parent"]["content"])  # type: ignore[call-arg]
         self.send_reply(job, reply_content)
 
     async def comm_open(self, job: MsgRequest):
