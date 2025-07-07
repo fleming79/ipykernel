@@ -81,7 +81,7 @@ class ThreadSafeCaller:
     from non-async threads.
     """
 
-    _instances: ClassVar = weakref.WeakSet()
+    _instances: ClassVar[weakref.WeakSet[Self]] = weakref.WeakSet()
     thread: threading.Thread
     __stack = None
 
