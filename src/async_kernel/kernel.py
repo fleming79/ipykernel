@@ -110,7 +110,6 @@ class Kernel(ConnectionFileMixin):
     """
 
     _instance: Self | None = None
-    _io_modified = traitlets.Bool(False)
     _stop_event = Instance(threading.Event, ())
     _stop_on_error_time: float = 0
     _interrupt_events: traitlets.Container[set[threading.Event]] = traitlets.Set()
@@ -353,7 +352,8 @@ class Kernel(ConnectionFileMixin):
             task_status.started()
 
     async def _start_iopub(self, task_status: TaskStatus):
-        self._save_io()
+        # Save IO
+        self._original_io = sys.stdout, sys.stderr, sys.displayhook
         cls: type[OutStream] = import_item(self.outstream_class)
         if self.outstream_class:
             for name in ["stdout", "stderr"]:
@@ -378,7 +378,8 @@ class Kernel(ConnectionFileMixin):
             await anyio.sleep_forever()
         finally:
             self.comm_manager.kernel = None
-            self._reset_io()
+            # Reset IO
+            sys.stdout, sys.stderr, sys.displayhook = self._original_io
 
     async def _wait_stopped(self, tg, *, task_status: TaskStatus):
         def wait_stopped():
@@ -686,46 +687,6 @@ class Kernel(ConnectionFileMixin):
             raise EOFError
         return value
 
-    def _forward_input(self, allow_stdin=False):
-        """Forward raw_input and getpass to the current frontend.
-
-        via input_request
-        """
-        self._allow_stdin = allow_stdin
-        self._sys_raw_input = builtins.input
-        builtins.input = self.raw_input
-        self._save_getpass = getpass.getpass
-        getpass.getpass = self.getpass
-
-    def _restore_input(self):
-        """Restore raw_input, getpass"""
-        builtins.input = self._sys_raw_input
-        getpass.getpass = self._save_getpass
-
-    def _save_io(self):
-        if not self._io_modified:
-            self._original_io = sys.stdout, sys.stderr, sys.displayhook
-            self._io_modified = True
-
-    def _reset_io(self):
-        """restore original io
-
-        restores state after init_io
-        """
-        if not self._io_modified:
-            return
-        stdout, stderr, displayhook = sys.stdout, sys.stderr, sys.displayhook
-        sys.stdout, sys.stderr, sys.displayhook = self._original_io
-        self._io_modified = False
-        if finish_displayhook := getattr(displayhook, "finish_displayhook", None):
-            finish_displayhook()
-        if self.outstream_class:
-            outstream_factory = import_item(str(self.outstream_class))
-            if isinstance(stderr, outstream_factory):
-                stderr.close()
-            if isinstance(stdout, outstream_factory):
-                stdout.close()
-
     async def kernel_info_request(self, job: MsgRequest):
         """Handle a kernel info request."""
 
@@ -868,7 +829,11 @@ class Kernel(ConnectionFileMixin):
         interrupt = threading.Event()
         if not silent:
             self._interrupt_events.add(interrupt)
-            self._forward_input(allow_stdin)
+            self._allow_stdin = allow_stdin
+            self._sys_raw_input = builtins.input
+            builtins.input = self.raw_input
+            self._save_getpass = getpass.getpass
+            getpass.getpass = self.getpass
         try:
 
             async def run() -> None:
@@ -890,7 +855,8 @@ class Kernel(ConnectionFileMixin):
         finally:
             self._interrupt_events.discard(interrupt)
             if not silent:
-                self._restore_input()
+                builtins.input = self._sys_raw_input
+                getpass.getpass = self._save_getpass
         reply_content = {}
         if result and (res := result[0]):
             err = res.error_before_exec if res.error_before_exec is not None else res.error_in_exec

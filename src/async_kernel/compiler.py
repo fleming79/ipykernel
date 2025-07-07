@@ -11,6 +11,7 @@ from IPython.core.compilerop import CachingCompiler
 
 __all__ = ["XCachingCompiler", "murmur2_x86"]
 
+
 def murmur2_x86(data, seed):
     """Get the murmur2 hash."""
     m = 0x5BD1E995
