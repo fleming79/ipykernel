@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 
     from anyio.abc import TaskStatus
 
+__all__ = ["ThreadSafeCaller", "bind_socket", "mark_thread_debugpy_ignore"]
+
 LAUNCHED_BY_DEBUGPY = "debugpy" in sys.modules
 
 P = ParamSpec("P")
@@ -67,6 +69,13 @@ def bind_socket(socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port:
                 raise
     msg = f"Failed to bind a {socket}:{port}"
     raise RuntimeError(msg)
+
+
+def mark_thread_debugpy_ignore(thread: threading.Thread, name="", *, unhide=False):
+    """Modifies the given thread's attributes to hide or unhide it from the debugger (e.g., debugpy)."""
+    thread.pydev_do_not_trace = not unhide  # type: ignore[attr-defined]
+    if name:
+        thread.name = name
 
 
 class ThreadSafeCaller:
@@ -151,24 +160,3 @@ class ThreadSafeCaller:
                 return instance
         msg = "A threadsafe caller was not found for this thread"
         raise RuntimeError(msg)
-
-
-def mark_thread_debugpy_ignore(thread: threading.Thread, name="", *, unhide=False):
-    """Modifies the given thread's attributes to hide or unhide it from the debugger (e.g., debugpy)."""
-    thread.pydev_do_not_trace = not unhide  # type: ignore[attr-defined]
-    # thread.is_pydev_daemon_thread = not unhide  # type: ignore[attr-defined]
-    if name:
-        thread.name = name
-
-
-# import sys
-
-# file_handler = logging.FileHandler(filename="tmp.log")
-# # stdout_handler = logging.StreamHandler(stream=sys.stdout)
-# handlers = [file_handler]
-
-# logging.basicConfig(
-#     level=logging.DEBUG,
-#     format="[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s",
-#     handlers=handlers,
-# )
