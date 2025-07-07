@@ -9,6 +9,7 @@ from typing import ClassVar
 
 from IPython.core.compilerop import CachingCompiler
 
+__all__ = ["XCachingCompiler", "murmur2_x86"]
 
 def murmur2_x86(data, seed):
     """Get the murmur2 hash."""
