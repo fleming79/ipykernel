@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from async_kernel.comm import CommManager
     from async_kernel.iostream import OutStream
 
+__all__ = ["Kernel", "MsgHeader", "MsgRequest", "MsgType", "SocketID"]
 
 class MsgHeader(TypedDict):
     # https://jupyter-client.readthedocs.io/en/stable/messaging.html#message-header
