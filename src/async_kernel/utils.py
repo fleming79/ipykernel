@@ -166,6 +166,8 @@ class ThreadSafeCaller:
 class PendingResult(Generic[T]):
     "A future equivalent (non-compliant) for anyio."
 
+    __slots__ = ["_event_done", "_exception", "result"]
+
     def __init__(self) -> None:
         self._exception = None
         self._event_done = anyio.Event()
