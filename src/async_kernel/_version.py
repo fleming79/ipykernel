@@ -8,7 +8,7 @@ import re
 import sys
 
 # Version string must appear intact for hatch versioning
-__version__ = "0.1a1"
+__version__ = "0.1b0"
 
 # Build up version_info tuple for backwards compatibility
 pattern = r"(?P<major>\d+).(?P<minor>\d+).(?P<patch>\d+)(?P<rest>.*)"

@@ -9,13 +9,14 @@ import sys
 import threading
 import typing as t
 from pathlib import Path
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING
 
 import anyio.abc
 import traitlets
 from IPython.core.inputtransformer2 import leading_empty_lines
 
 from async_kernel import utils
+from async_kernel.utils import PendingResult
 
 if TYPE_CHECKING:
     from anyio.abc import TaskGroup, TaskStatus
@@ -39,34 +40,6 @@ except Exception as e:
         _is_debugpy_available = False
     else:
         raise e
-
-T = TypeVar("T")
-
-
-class PendingResult(Generic[T]):
-    "A lightweight anyio non-compliant variant of a Future."
-
-    def __init__(self) -> None:
-        self._exception = None
-        self._event_done = anyio.Event()
-
-    async def wait(self) -> T:
-        await self._event_done.wait()
-        if self._exception:
-            raise self._exception
-        return self.result
-
-    def set_result(self, value):
-        if self._event_done.is_set():
-            raise RuntimeError
-        self.result = value
-        self._event_done.set()
-
-    def set_exception(self, exception: Exception):
-        if self._event_done.is_set():
-            raise RuntimeError
-        self._exception = exception
-
 
 class _FakeCode:
     """Fake code class."""

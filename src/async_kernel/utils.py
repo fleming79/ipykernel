@@ -12,7 +12,7 @@ import threading
 import weakref
 from collections import deque
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, ParamSpec, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, ParamSpec, Self, TypeVar
 
 import anyio
 import anyio.to_thread
@@ -24,11 +24,12 @@ if TYPE_CHECKING:
 
     from anyio.abc import TaskStatus
 
-__all__ = ["ThreadSafeCaller", "bind_socket", "mark_thread_debugpy_ignore"]
+__all__ = ["PendingResult", "ThreadSafeCaller", "bind_socket", "mark_thread_debugpy_ignore"]
 
 LAUNCHED_BY_DEBUGPY = "debugpy" in sys.modules
 
 P = ParamSpec("P")
+T = TypeVar("T")
 
 
 def bind_socket(socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port: int = 0, max_attempts=100) -> int:
@@ -160,3 +161,28 @@ class ThreadSafeCaller:
                 return instance
         msg = "A threadsafe caller was not found for this thread"
         raise RuntimeError(msg)
+
+
+class PendingResult(Generic[T]):
+    "A future equivalent (non-compliant) for anyio."
+
+    def __init__(self) -> None:
+        self._exception = None
+        self._event_done = anyio.Event()
+
+    async def wait(self) -> T:
+        await self._event_done.wait()
+        if self._exception:
+            raise self._exception
+        return self.result
+
+    def set_result(self, value):
+        if self._event_done.is_set():
+            raise RuntimeError
+        self.result = value
+        self._event_done.set()
+
+    def set_exception(self, exception: Exception):
+        if self._event_done.is_set():
+            raise RuntimeError
+        self._exception = exception
