@@ -8,11 +8,13 @@ from IPython.core.displayhook import DisplayHook
 from IPython.core.displaypub import DisplayPublisher
 from IPython.core.error import StdinNotImplementedError
 from IPython.core.interactiveshell import InteractiveShell, InteractiveShellABC
+from IPython.core.magic import Magics, line_magic, magics_class
 from IPython.core.usage import default_banner
 from jupyter_client.session import extract_header
 from traitlets import CBool, CBytes, Dict, Instance, Type, default, observe
 from typing_extensions import override
 
+import async_kernel
 from async_kernel.compiler import XCachingCompiler
 
 if TYPE_CHECKING:
@@ -167,6 +169,45 @@ class AsyncInteractiveShell(InteractiveShell):
         self.kernel.iopub_send(msg_or_type="error", content={"traceback": stb, "ename": ename, "evalue": str(evalue)})
         # store the formatted traceback
         self._last_traceback = stb
+
+    def init_magics(self):
+        """Initialize magics."""
+        super().init_magics()
+        self.register_magics(KernelMagics)
+
+    @override
+    def enable_gui(self, gui=None):
+        pass
+
+
+@magics_class
+class KernelMagics(Magics):
+    """Kernel magics."""
+
+    @line_magic
+    def connect_info(self, arg_s):
+        print(async_kernel.Kernel().get_connection_info())
+
+    @line_magic
+    def matplotlib(self, *args):
+        import matplotlib as mpl  # type: ignore[import] # noqa: PLC0415
+
+        mpl.interactive(True)
+        if args:
+            backend: str = args[0]
+            match backend:
+                case "ipympl" | "widget":
+                    mpl.use("module://ipympl.backend_nbagg")
+                    print("To access the interactive figure display the canvas directly. (Figure.canvas)")
+                case "--list":
+                    from matplotlib.backends import registry  # type: ignore[attr-defined] # noqa: PLC0415
+
+                    print(registry.backend_registry.list_all())
+                case _:
+                    # IPython.core.pylabtools.activate_matplotlib(backend)
+                    async_kernel.Kernel().shell.enable_matplotlib(backend)
+
+            print(f'The current matplotlib backend is: "{mpl.get_backend()}"')
 
 
 InteractiveShellABC.register(AsyncInteractiveShell)
