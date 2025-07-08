@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, Self, TypedDict
 
 import anyio
 import anyio.to_thread
+import IPython.core.release
 import sniffio
 import traitlets
 import zmq
@@ -141,7 +142,7 @@ class Kernel(ConnectionFileMixin):
     shell = Instance(AsyncInteractiveShell)
     shell_class = traitlets.Type(AsyncInteractiveShell)
     banner = traitlets.Unicode()
-    help_links = traitlets.Dict()
+    help_links = traitlets.Tuple()
     comm_manager: Instance[CommManager] = Instance("async_kernel.comm.CommManager")
 
     def __new__(cls, *, connection_file="", kernel_name=KernelName.asyncio, **kwargs) -> Self:  # noqa: ARG004
@@ -188,6 +189,39 @@ class Kernel(ConnectionFileMixin):
             "help_links": self.help_links,
             "debugger": not utils.LAUNCHED_BY_DEBUGPY,
         }
+
+    @default("banner")
+    def _default_banner(self):
+        return (
+            f"Python {sys.version}\n"
+            f"Async kernel (name='{self.kernel_name}')\n"
+            f"IPython shell {IPython.core.release.version}"
+        )
+
+    @default("help_links")
+    def _default_help_links(self):
+        return (
+            {
+                "text": "Async Kernel Reference ",
+                "url": "TODO",
+            },
+            {
+                "text": "IPython Reference",
+                "url": "https://ipython.readthedocs.io/en/stable/",
+            },
+            {
+                "text": "IPython magic Reference",
+                "url": "https://ipython.readthedocs.io/en/stable/interactive/magics.html",
+            },
+            {
+                "text": "Matplotlib ipympl Reference",
+                "url": "https://matplotlib.org/ipympl/",
+            },
+            {
+                "text": "Matplotlib Reference",
+                "url": "https://matplotlib.org/contents.html",
+            },
+        )
 
     @default("log")
     def _default_log(self):
