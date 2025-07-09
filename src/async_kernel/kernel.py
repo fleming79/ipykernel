@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from types import CoroutineType, FrameType
 
-    from anyio.abc import TaskStatus
+    from anyio.abc import TaskGroup, TaskStatus
     from IPython.core.interactiveshell import ExecutionResult
 
     from async_kernel.comm import CommManager
@@ -442,7 +442,7 @@ class Kernel(ConnectionFileMixin):
             # Reset IO
             sys.stdout, sys.stderr, sys.displayhook = self._original_io
 
-    async def _wait_stopped(self, tg, *, task_status: TaskStatus):
+    async def _wait_stopped(self, tg: TaskGroup, *, task_status: TaskStatus):
         def wait_stopped():
             with utils.do_not_debug_this_thread():
                 self._stop_event.wait()
