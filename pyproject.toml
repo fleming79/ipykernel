@@ -165,6 +165,7 @@ extend-select = [
   "EM",       # flake8-errmsg
   "ICN",      # flake8-import-conventions
   "G",        # flake8-logging-format
+  "PERF",     # Perflint
   "PGH",      # pygrep-hooks
   "PIE",      # flake8-pie
   "PL",       # pylint
@@ -175,6 +176,7 @@ extend-select = [
   "RUF",      # Ruff-specific
   "SIM",      # flake8-simplify
   "T20",      # flake8-print
+  "TRY",      # tryceratops
   "FURB",     # Refurb
   "UP",       # pyupgrade
   "YTT",      # flake8-2020
@@ -186,33 +188,19 @@ extend-select = [
 ]
 ignore = [
   "PLR",    # Design related pylint codes
-  # Allow non-abstract empty methods in abstract base classes
-  "B027",
+  "B027", # Allow non-abstract empty methods in abstract base classes
   "T201", # `print` found
-  # Unnecessary `dict` call (rewrite as a literal)
   "SIM105", # Use `contextlib.suppress(ValueError)` instead of try-except-pass
-  # Mutable class attributes should be annotated with `typing.ClassVar`
-  "RUF012",
-  # Unused function argument:
-  "ARG001",
-  # Unused method argument:
-  "ARG002",
-  # `open()` should be replaced by `Path.open()`
-  "PTH123",
+  "RUF012", # Mutable class attributes should be annotated with `typing.ClassVar`
+  "ARG001", # Unused function argument
+  "ARG002",  # Unused method argument
+  "PTH123", # `open()` should be replaced by `Path.open()`
   "UP031", # Use format specifiers instead of percent format
   "PT023", # Use `@pytest.mark.skip` over `@pytest.mark.skip()`
-  "PT001", # autofixable: Use `@pytest.fixture` over `@pytest.fixture()`
 ]
 
-[tool.ruff.lint.per-file-ignores]
-# B011 Do not call assert False since python -O removes these calls
-# C408 Unnecessary `dict` call
-# T201 `print` found
-# B007 Loop control variable `i` not used within the loop body.
-# PLW0603 Using the global statement to update ...
-# PLC1901 `stderr == ""` can be simplified to `not stderr` as an empty string is falsey
-# B018 Found useless expression. Either assign it to a variable or remove it.
-# S603 `subprocess` call: check for execution of untrusted input
+[tool.ruff.format]
+docstring-code-format = true
 
 [tool.interrogate]
 ignore-init-module=true

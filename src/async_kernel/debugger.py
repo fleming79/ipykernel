@@ -39,7 +39,8 @@ except Exception as e:
     if e.__class__.__name__ == "DebuggerInitializationError":
         _is_debugpy_available = False
     else:
-        raise e
+        raise
+
 
 class _FakeCode:
     """Fake code class."""
@@ -159,9 +160,8 @@ class DebugpyClient(traitlets.HasTraits):
                     self.log.debug("_put_message :%s %s", msg["type"], msg)
                     if msg["type"] == "event":
                         self.event_callback(msg)
-                    else:
-                        if pending_result := self._pending_responses.pop(msg["request_seq"], None):
-                            pending_result.set_result(msg)
+                    elif pending_result := self._pending_responses.pop(msg["request_seq"], None):
+                        pending_result.set_result(msg)
                 else:
                     self.tcp_buffer = self.HEADER + buf
                     return
@@ -220,7 +220,7 @@ class Debugger(traitlets.HasTraits):
     kernel: Kernel
     taskgroup: TaskGroup
     init_event = traitlets.Instance(anyio.Event, ())
-    forbidden_names = [
+    _forbidden_names = (
         "__name__",
         "__doc__",
         "__package__",
@@ -241,7 +241,7 @@ class Debugger(traitlets.HasTraits):
         "_",
         "__",
         "___",
-    ]
+    )
 
     @traitlets.default("log")
     def _default_log(self):
@@ -335,7 +335,7 @@ class Debugger(traitlets.HasTraits):
     def _accept_variable(self, variable_name):
         """Accept a variable by name."""
         return (
-            variable_name not in self.forbidden_names
+            variable_name not in self._forbidden_names
             and not bool(re.search(r"^_\d", variable_name))
             and not variable_name.startswith("_i")
         )
@@ -426,7 +426,7 @@ class Debugger(traitlets.HasTraits):
         valid_name = str.isidentifier(var_name)
         if not valid_name:
             reply["body"] = {"data": {}, "metadata": {}}
-            if var_name == "special variables" or var_name == "function variables":
+            if var_name in {"special variables", "function variables"}:
                 reply["success"] = True
             return reply
         repr_data = {}
@@ -527,9 +527,8 @@ class Debugger(traitlets.HasTraits):
     async def do_source(self, message):
         """Handle a source message."""
         reply = {"type": "response", "request_seq": message["seq"], "command": message["command"]}
-        source_path = message["arguments"]["source"]["path"]
-        if Path(source_path).is_file():
-            with open(source_path, encoding="utf-8") as f:
+        if (path := Path(message["arguments"]["source"]["path"])).is_file():
+            with path.open("r", encoding="utf-8") as f:
                 reply["success"] = True
                 reply["body"] = {"content": f.read()}
         else:
@@ -570,7 +569,9 @@ class Debugger(traitlets.HasTraits):
 
         reply = await self._forward_message(message)
         # TODO : check start and count arguments work as expected in debugpy
-        reply["body"]["variables"] = [var for var in reply["body"]["variables"] if self._accept_variable(var["name"])]
+        if "body" in reply:
+            variables = [var for var in reply["body"]["variables"] if self._accept_variable(var["name"])]
+            reply["body"]["variables"] = variables
         return reply
 
     async def do_attach(self, message):

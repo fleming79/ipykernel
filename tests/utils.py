@@ -66,7 +66,7 @@ def validate_message(msg: Mapping[str, Any], msg_type=None, parent=None):
         ref.check(content)
     except Exception as e:
         e.add_note(f"\n{msg_type=}\n{parent=}\n{content=}")
-        raise e
+        raise
 
 
 async def execute(client: AsyncKernelClient, /, code="", **kwargs):
@@ -103,7 +103,8 @@ async def assemble_output(client: AsyncKernelClient, timeout=TIMEOUT):
                 elif content["name"] == "stderr":
                     stderr += content["text"]
                 else:
-                    raise KeyError("bad stream: %r" % content["name"])
+                    msg = f"bad stream: {content['name']}"
+                    raise KeyError(msg)
     return stdout, stderr
 
 

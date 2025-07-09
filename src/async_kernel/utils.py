@@ -64,7 +64,7 @@ def bind_socket(socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port:
             return _try_bind_socket(port)
         except ZMQError as e:
             # Raise if we have any error not related to socket binding
-            if e.errno != errno.EADDRINUSE and e.errno != win_in_use:
+            if e.errno not in {errno.EADDRINUSE, win_in_use}:
                 raise
             if attempt == max_attempts - 1:
                 raise
@@ -78,6 +78,7 @@ def mark_thread_debugpy_ignore(thread: threading.Thread, name="", *, unhide=Fals
     if name:
         thread.name = name
 
+
 @contextlib.contextmanager
 def do_not_debug_this_thread(name=""):
     "A context to mark the thread for debugpy to not debug."
@@ -86,6 +87,7 @@ def do_not_debug_this_thread(name=""):
         yield
     finally:
         mark_thread_debugpy_ignore(threading.current_thread(), unhide=True)
+
 
 class ThreadSafeCaller:
     """

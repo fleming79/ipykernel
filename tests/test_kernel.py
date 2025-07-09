@@ -94,7 +94,7 @@ async def test_save_history(client, tmp_path):
     await utils.wait_for_idle(client)
     _, reply = await utils.execute(client, f"%hist -f {file}")
     assert reply["status"] == "ok"
-    with open(file, encoding="utf-8") as f:
+    with file.open("r", encoding="utf-8") as f:
         content = f.read()
     assert "a=1" in content
     assert 'b="abcþ"' in content
@@ -129,10 +129,9 @@ async def test_message_order(client):
     _, reply = await utils.execute(client, "a = 1")
     offset = reply["execution_count"] + 1
     cell = "a += 1\na"
-    msg_ids = []
+
     # submit N executions as fast as we can
-    for _ in range(N):
-        msg_ids.append(client.execute(cell))
+    msg_ids = [client.execute(cell) for _ in range(N)]
     # check message-handling order
     for i, msg_id in enumerate(msg_ids, offset):
         reply = await client.get_shell_msg()
@@ -190,7 +189,7 @@ async def test_comm_info_request(client):
     assert reply["header"]["msg_type"] == "comm_info_reply"
 
 
-async def test_interrupt_request(client, kernel, mocker):
+async def test_interrupt_request(client, kernel):
     await utils.clear_pub_message(client)
     event = threading.Event()
     kernel._interrupt_events.add(event)

@@ -55,6 +55,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Kernel", "MsgHeader", "MsgRequest", "MsgType", "SocketID"]
 
+
 class MsgHeader(TypedDict):
     # https://jupyter-client.readthedocs.io/en/stable/messaging.html#message-header
     msg_id: str
@@ -648,7 +649,7 @@ class Kernel(ConnectionFileMixin):
                     self._send_error_reply(
                         job, ename=str(type(e).__name__), evalue=str(e), traceback=traceback.format_stack()
                     )
-                    self.log.error("Exception in message handler:", exc_info=e)
+                    self.log.exception("Exception in message handler:", exc_info=e)
                 finally:
                     self._publish_status("idle", job)
 
@@ -733,7 +734,7 @@ class Kernel(ConnectionFileMixin):
         try:
             value = reply["content"]["value"]  # type:ignore[index]
         except Exception:
-            self.log.error("Bad input_reply: %s", self._job["parent"])
+            self.log.exception("Bad input_reply: %s", self._job["parent"])
             value = ""
         if value == "\x04":
             # EOF
@@ -806,7 +807,6 @@ class Kernel(ConnectionFileMixin):
         finally:
             self._publish_status("idle", job)
 
-
     async def interrupt_request(self, job: MsgRequest):
         """Handle an interrupt request."""
         self._interrupt_requested = True
@@ -814,7 +814,7 @@ class Kernel(ConnectionFileMixin):
             signal.raise_signal(signal.SIGINT)
             time.sleep(0)
         else:
-            os.kill(os.getpid(),  signal.SIGINT)
+            os.kill(os.getpid(), signal.SIGINT)
         for event in tuple(self._interrupt_events):
             event.set()
         self.send_reply(job)
@@ -909,6 +909,7 @@ class Kernel(ConnectionFileMixin):
                     pass
                 finally:
                     interrupt.set()
+
             async with anyio.create_task_group() as tg:
                 tg.start_soon(run)
                 await anyio.to_thread.run_sync(interrupt.wait)
@@ -926,38 +927,35 @@ class Kernel(ConnectionFileMixin):
             "user_expressions": self.shell.user_expressions(user_expressions) if not err and user_expressions else {},
         }
         if err:
-            reply_content.update({
-                "traceback": self.shell._last_traceback or [],
-                "ename": type(err).__name__,
-                "evalue": str(err),
-            })
+            reply_content.update(
+                {
+                    "traceback": self.shell._last_traceback or [],
+                    "ename": type(err).__name__,
+                    "evalue": str(err),
+                }
+            )
         return reply_content
 
     async def do_complete(self, code, cursor_pos):
         """Completions from IPython, using Jedi."""
-        if cursor_pos is None:
-            cursor_pos = len(code)
+        cursor_pos = cursor_pos if cursor_pos is not None else len(code)
         with _provisionalcompleter():
-            raw_completions = self.shell.Completer.completions(code, cursor_pos)
-            completions = list(_rectify_completions(code, raw_completions))
-            comps = []
-            for comp in completions:
-                comps.append(
-                    {
-                        "start": comp.start,
-                        "end": comp.end,
-                        "text": comp.text,
-                        "type": comp.type,
-                        "signature": comp.signature,
-                    }
-                )
+            completions = list(_rectify_completions(code, self.shell.Completer.completions(code, cursor_pos)))
+        comps = [
+            {
+                "start": comp.start,
+                "end": comp.end,
+                "text": comp.text,
+                "type": comp.type,
+                "signature": comp.signature,
+            }
+            for comp in completions
+        ]
         if completions:
-            s = completions[0].start
-            e = completions[0].end
+            s, e = completions[0].start, completions[0].end
             matches = [c.text for c in completions]
         else:
-            s = cursor_pos
-            e = cursor_pos
+            s = e = cursor_pos
             matches = []
         return {
             "matches": matches,
