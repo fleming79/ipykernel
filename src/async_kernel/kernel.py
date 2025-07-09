@@ -781,6 +781,7 @@ class Kernel(ConnectionFileMixin):
         silent = content["silent"]
         stop_on_error = content.pop("stop_on_error", True)
         self._publish_status("busy", job)
+        cell_id = None if silent else job["parent"].get("metadata", {}).get("cellId")
         try:
             # Re-broadcast our input for the benefit of listening clients, and
             # start computing output
@@ -793,7 +794,7 @@ class Kernel(ConnectionFileMixin):
                     ident=self._topic("execute_input"),
                 )
             # Call do_execute with the appropriate arguments
-            reply_content = await self._do_execute(**content)
+            reply_content = await self._do_execute(cell_id=cell_id, **content)
             if not silent and stop_on_error and reply_content.get("status") == "error":
                 self._stop_on_error_time = time.monotonic()
                 self.log.info("An error occurred in a non-silent execution request at %s", self._stop_on_error_time)
@@ -878,15 +879,12 @@ class Kernel(ConnectionFileMixin):
         store_history=True,
         user_expressions: dict | None = None,
         allow_stdin=False,
+        cell_id: str | None = None,
     ):
         """Handle code execution."""
         # ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute
-        if not (shell := self.shell):
-            msg = "shell is missing!"
-            raise RuntimeError(msg)
-        reply_content: dict[str, Any] = {}
-        result: list[ExecutionResult] = []
         interrupt = threading.Event()
+        result: ExecutionResult | None = None
         if not silent:
             self._interrupt_events.add(interrupt)
             self._allow_stdin = allow_stdin
@@ -896,49 +894,43 @@ class Kernel(ConnectionFileMixin):
             getpass.getpass = self.getpass
         try:
 
-            async def run() -> None:
+            async def run():
+                nonlocal result
                 try:
-                    result_ = await shell.run_cell_async(
+                    result = await self.shell.run_cell_async(
                         raw_cell=code,
                         store_history=store_history,
                         silent=silent,
-                        transformed_cell=shell.transform_cell(code),
+                        transformed_cell=self.shell.transform_cell(code),
                         shell_futures=True,
+                        cell_id=cell_id,
                     )
-                    result.append(result_)
                 except asyncio.CancelledError:
                     pass
                 finally:
                     interrupt.set()
-
             async with anyio.create_task_group() as tg:
                 tg.start_soon(run)
                 await anyio.to_thread.run_sync(interrupt.wait)
-                if not result:
+                if result is None:
                     tg.cancel_scope.cancel()
         finally:
             self._interrupt_events.discard(interrupt)
             if not silent:
                 builtins.input = self._sys_raw_input
                 getpass.getpass = self._save_getpass
-        reply_content = {}
-        if result and (res := result[0]):
-            err = res.error_before_exec if res.error_before_exec is not None else res.error_in_exec
-        else:
-            err = KernelInterruptError
-        if not err:
-            reply_content["status"] = "ok"
-        else:
-            if traceback := shell._last_traceback:
-                self.log.info("Exception in execute request")
-            reply_content["status"] = "error"
-            reply_content["traceback"] = traceback or []
-            reply_content["ename"] = str(type(err).__name__)
-            reply_content["evalue"] = str(err)
-        reply_content["execution_count"] = shell.execution_count - 1
-        reply_content["user_expressions"] = (
-            shell.user_expressions(user_expressions) if not err and user_expressions else {}
-        )
+        err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError
+        reply_content = {
+            "status": "ok" if not err else "error",
+            "execution_count": self.shell.execution_count - 1,
+            "user_expressions": self.shell.user_expressions(user_expressions) if not err and user_expressions else {},
+        }
+        if err:
+            reply_content.update({
+                "traceback": self.shell._last_traceback or [],
+                "ename": type(err).__name__,
+                "evalue": str(err),
+            })
         return reply_content
 
     async def do_complete(self, code, cursor_pos):
