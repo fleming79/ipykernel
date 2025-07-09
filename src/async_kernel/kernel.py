@@ -10,6 +10,8 @@ import contextlib
 import enum
 import getpass
 import logging
+import os
+import signal
 import sys
 import threading
 import time
@@ -43,7 +45,7 @@ from async_kernel.kernelspec import KernelName
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from types import CoroutineType
+    from types import CoroutineType, FrameType
 
     from anyio.abc import TaskStatus
     from IPython.core.interactiveshell import ExecutionResult
@@ -90,6 +92,12 @@ class SocketID(enum.StrEnum):
     iopub = "iopub"
 
 
+class KernelInterruptError(InterruptedError):
+    "Raised to interrupt the kernel."
+
+    # We subclass from InterruptedError so the async event loop can catch the exception.
+
+
 class Kernel(ConnectionFileMixin):
     """An async kernel with an anyio backend providing an IPython InteractiveShell with zmq.
 
@@ -106,12 +114,14 @@ class Kernel(ConnectionFileMixin):
     ``` python
     kernel = Kernel()
     async with kernel.start_in_context():
-        await anyio.sleep_forever()
+        await utils.run_forever_ignore_keyboard_interrupt()
     ```
 
     """
 
     _instance: Self | None = None
+    _interrupt_requested = False
+    _last_interrupt_frame = None
     _stop_event = Instance(threading.Event, ())
     _stop_on_error_time: float = 0
     _interrupt_events: traitlets.Container[set[threading.Event]] = traitlets.Set()
@@ -122,6 +132,7 @@ class Kernel(ConnectionFileMixin):
     _job: traitlets.Container[MsgRequest | dict] = Dict()  # type: ignore[assignment]
     _iopub_url = traitlets.Unicode("inproc://iopub")
     _iopub_sockets: traitlets.Dict[threading.Thread, zmq.Socket] = traitlets.Dict()
+    _interrupting = traitlets.Instance(threading.Event, ())
     debugger = Instance(Debugger, ())
 
     quiet = traitlets.Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
@@ -178,6 +189,7 @@ class Kernel(ConnectionFileMixin):
             "debug_request": self.debug_request,
         }
         sys.excepthook = self.excepthook
+        signal.signal(signal.SIGINT, self._signal_handler)
 
     @property
     def kernel_info(self):
@@ -262,6 +274,8 @@ class Kernel(ConnectionFileMixin):
         kernel = cls(kernel_name=kernel_name, connection_file=connection_file)
         try:
             anyio.run(_start, backend="trio" if kernel.kernel_name is KernelName.trio else "asyncio")
+        except KeyboardInterrupt:
+            print("\nKernel stopped")
         finally:
             pass
         return 0
@@ -297,24 +311,36 @@ class Kernel(ConnectionFileMixin):
                     if not self.connection_file:
                         self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{uuid.uuid4()}.json"))
                     self.write_connection_file()
-                    print(
-                        f'To connect a client to this kernel, use:\n      --existing "{self.connection_file}"',
-                    )
                     atexit.register(self.cleanup_connection_file)
-                    await tg.start(self._start_iopub)
                     await tg.start(self._wait_stopped, tg)
+                    print(f"""Kernel started. To connect a client use: --existing "{self.connection_file}" """)
+                    await tg.start(self._start_iopub)
                     yield self
                 finally:
                     self.stop()
         finally:
             self._zmq_context.term()
 
+    def _signal_handler(self, signum, frame: FrameType | None):
+        "Handle interrupt signals."
+        if self._interrupt_requested:
+            self._interrupt_requested = False
+            if frame and frame.f_locals is self.shell.user_ns:
+                raise KernelInterruptError
+            if self._last_interrupt_frame is frame:
+                # A blocking call that is not an execute_request
+                raise KernelInterruptError
+
+            self._last_interrupt_frame = frame
+        else:
+            signal.default_int_handler(signum, frame)
+
     async def _start_heartbeat(self, task_status: TaskStatus):
         # Reference: https://jupyter-client.readthedocs.io/en/stable/messaging.html#heartbeat-for-kernels
 
         def heartbeat():
             socket = self._zmq_context.socket(zmq.ROUTER)
-            with self._bind_socket(SocketID.heartbeat, socket):
+            with utils.do_not_debug_this_thread("heartbeat"), self._bind_socket(SocketID.heartbeat, socket):
                 ready_event.set()
                 try:
                     zmq.proxy(socket, socket)
@@ -323,7 +349,6 @@ class Kernel(ConnectionFileMixin):
 
         ready_event = threading.Event()
         heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
-        utils.mark_thread_debugpy_ignore(heartbeat_thread, "heartbeat")
         heartbeat_thread.start()
         ready_event.wait(10)
         task_status.started()
@@ -347,7 +372,7 @@ class Kernel(ConnectionFileMixin):
             frontend: zmq.Socket = self._zmq_context.socket(zmq.XSUB)
             frontend.bind(self._iopub_url)
             iopub_socket: zmq.Socket = self._zmq_context.socket(zmq.XPUB)
-            with self._bind_socket(SocketID.iopub, iopub_socket):
+            with utils.do_not_debug_this_thread("iopub"), self._bind_socket(SocketID.iopub, iopub_socket):
                 ready_event.set()
                 try:
                     zmq.proxy(frontend, iopub_socket)
@@ -356,7 +381,6 @@ class Kernel(ConnectionFileMixin):
 
         ready_event = threading.Event()
         iopub_thread = threading.Thread(target=pub_proxy, name="iopub proxy", daemon=True)
-        utils.mark_thread_debugpy_ignore(iopub_thread, "iopub")
         iopub_thread.start()
         ready_event.wait(10)
         task_status.started()
@@ -378,6 +402,7 @@ class Kernel(ConnectionFileMixin):
         ready_event.wait(10)
         control_thread.name = "Control"
         self._control_thread = control_thread
+        await anyio.to_thread.run_sync(ready_event.wait, 10)
         task_status.started()
 
     async def _start_shell_loop(self, task_status: TaskStatus):
@@ -418,10 +443,8 @@ class Kernel(ConnectionFileMixin):
 
     async def _wait_stopped(self, tg, *, task_status: TaskStatus):
         def wait_stopped():
-            thread = threading.current_thread()
-            utils.mark_thread_debugpy_ignore(thread)
-            self._stop_event.wait()
-            utils.mark_thread_debugpy_ignore(thread, unhide=True)
+            with utils.do_not_debug_this_thread():
+                self._stop_event.wait()
 
         task_status.started()
         await anyio.to_thread.run_sync(wait_stopped)
@@ -605,21 +628,18 @@ class Kernel(ConnectionFileMixin):
             except Exception as e:
                 self._send_error_reply(job, ename=str(type(e).__name__), evalue=str(e))
                 self.log.exception("Execute request exception for %s", job, exc_info=e)
-            except KeyboardInterrupt:
-                # Ctrl-c shouldn't crash the kernel here.
-                self.log.error("KeyboardInterrupt caught in kernel.")
             finally:
                 if msg_type != "execute_request":
                     self._publish_status("idle", job)
 
     async def _process_shell(self, job: MsgRequest):
-        msg_type = job["msg_type"]
-        if msg_type == "execute_request":
+        self._last_interrupt_frame = None
+        if job["msg_type"] == "execute_request":
             await self.execute_request(job)
         else:
-            handler = self._shell_handlers.get(msg_type)
+            handler = self._shell_handlers.get(job["msg_type"])
             if handler is None:
-                self.log.error("Unknown message type: %r", msg_type)
+                self.log.error("Unknown message type: %r", job["msg_type"])
             else:
                 try:
                     self._publish_status("busy", job)
@@ -629,9 +649,6 @@ class Kernel(ConnectionFileMixin):
                         job, ename=str(type(e).__name__), evalue=str(e), traceback=traceback.format_stack()
                     )
                     self.log.error("Exception in message handler:", exc_info=e)
-                except KeyboardInterrupt:
-                    # Ctrl-c shouldn't crash the self here.
-                    self.log.error("KeyboardInterrupt caught in kernel.")
                 finally:
                     self._publish_status("idle", job)
 
@@ -694,6 +711,9 @@ class Kernel(ConnectionFileMixin):
         )
         # Await a response.
         while True:
+            if self._last_interrupt_frame:
+                # Input request
+                raise KernelInterruptError
             try:
                 # Use polling with select() so KeyboardInterrupts can get
                 # through; doing a blocking recv() means stdin reads are
@@ -706,10 +726,8 @@ class Kernel(ConnectionFileMixin):
                     ident, reply = self.session.recv(socket)
                     if (ident, reply) != (None, None):
                         break
-            except KeyboardInterrupt:
-                # re-raise KeyboardInterrupt, to truncate traceback
-                msg = "Interrupted by user"
-                raise KeyboardInterrupt(msg) from None
+            except KernelInterruptError:
+                raise
             except Exception:
                 self.log.warning("Invalid Message:", exc_info=True)
         try:
@@ -787,9 +805,16 @@ class Kernel(ConnectionFileMixin):
         finally:
             self._publish_status("idle", job)
 
+
     async def interrupt_request(self, job: MsgRequest):
         """Handle an interrupt request."""
-        for event in self._interrupt_events:
+        self._interrupt_requested = True
+        if sys.platform == "win32":
+            signal.raise_signal(signal.SIGINT)
+            time.sleep(0)
+        else:
+            os.kill(os.getpid(),  signal.SIGINT)
+        for event in tuple(self._interrupt_events):
             event.set()
         self.send_reply(job)
 
@@ -872,15 +897,19 @@ class Kernel(ConnectionFileMixin):
         try:
 
             async def run() -> None:
-                result_ = await shell.run_cell_async(
-                    raw_cell=code,
-                    store_history=store_history,
-                    silent=silent,
-                    transformed_cell=shell.transform_cell(code),
-                    shell_futures=True,
-                )
-                result.append(result_)
-                interrupt.set()
+                try:
+                    result_ = await shell.run_cell_async(
+                        raw_cell=code,
+                        store_history=store_history,
+                        silent=silent,
+                        transformed_cell=shell.transform_cell(code),
+                        shell_futures=True,
+                    )
+                    result.append(result_)
+                except asyncio.CancelledError:
+                    pass
+                finally:
+                    interrupt.set()
 
             async with anyio.create_task_group() as tg:
                 tg.start_soon(run)
@@ -896,7 +925,7 @@ class Kernel(ConnectionFileMixin):
         if result and (res := result[0]):
             err = res.error_before_exec if res.error_before_exec is not None else res.error_in_exec
         else:
-            err = KeyboardInterrupt("Interrupted by client request")
+            err = KernelInterruptError
         if not err:
             reply_content["status"] = "ok"
         else:

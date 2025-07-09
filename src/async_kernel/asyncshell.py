@@ -164,7 +164,7 @@ class AsyncInteractiveShell(InteractiveShell):
         # For Keyboard interrupt, remove the kernel source code from the
         # traceback.
         ename = str(etype.__name__)
-        if ename == "KeyboardInterrupt":
+        if ename == "KernelInterruptError":
             stb.pop(-2)
         self.kernel.iopub_send(msg_or_type="error", content={"traceback": stb, "ename": ename, "evalue": str(evalue)})
         # store the formatted traceback

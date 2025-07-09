@@ -64,8 +64,6 @@ def launch():
                 kernel_name=KernelName(args.kernel_name),
             )
             sys.exit(0)
-        except KeyboardInterrupt:
-            sys.exit(0)
         except Exception as e:
             print(e)
             sys.exit(1)

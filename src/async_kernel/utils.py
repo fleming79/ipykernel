@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
     from anyio.abc import TaskStatus
 
-__all__ = ["PendingResult", "ThreadSafeCaller", "bind_socket", "mark_thread_debugpy_ignore"]
+__all__ = ["PendingResult", "ThreadSafeCaller", "bind_socket", "do_not_debug_this_thread", "mark_thread_debugpy_ignore"]
 
 LAUNCHED_BY_DEBUGPY = "debugpy" in sys.modules
 
@@ -78,6 +78,14 @@ def mark_thread_debugpy_ignore(thread: threading.Thread, name="", *, unhide=Fals
     if name:
         thread.name = name
 
+@contextlib.contextmanager
+def do_not_debug_this_thread(name=""):
+    "A context to mark the thread for debugpy to not debug."
+    mark_thread_debugpy_ignore(threading.current_thread(), name)
+    try:
+        yield
+    finally:
+        mark_thread_debugpy_ignore(threading.current_thread(), unhide=True)
 
 class ThreadSafeCaller:
     """
