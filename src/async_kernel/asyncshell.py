@@ -11,7 +11,6 @@ from IPython.core.error import StdinNotImplementedError
 from IPython.core.interactiveshell import InteractiveShell, InteractiveShellABC
 from IPython.core.magic import Magics, line_magic, magics_class
 from IPython.core.usage import default_banner
-from jupyter_client.session import extract_header
 from traitlets import CBool, CBytes, Dict, Instance, Type, default, observe
 from typing_extensions import override
 
@@ -32,10 +31,6 @@ class AsyncDisplayHook(DisplayHook):
 
     kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
     content: Dict[str, Any] = Dict()
-
-    def set_job(self, job):
-        """Set the parent for outbound messages."""
-        self.job = job
 
     def start_displayhook(self):
         """Start the display hook."""
@@ -62,10 +57,6 @@ class AsyncDisplayPublisher(DisplayPublisher):
 
     kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
     topic = CBytes(b"display_data")
-
-    def set_parent(self, parent):
-        """Set the parent for outbound messages."""
-        self.parent_header = extract_header(parent)
 
     @override
     def publish(  # type: ignore[override]
