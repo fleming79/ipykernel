@@ -769,6 +769,7 @@ class Kernel(ConnectionFileMixin):
             - Ignore `interrupt_request`.
             - Stop on error is not relevant.
         """
+        # ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute
         content = job["parent"]["content"]
         silent = content["silent"]
         if not silent:
