@@ -9,7 +9,8 @@ from async_kernel.kernel import Kernel
 from async_kernel.kernelspec import KernelName, write_all_kernelspec
 
 
-def launch():
+def main():
+    "Main entry point to launch kernel or add/remove installed kerenel specs."
     kernel_dir = pathlib.Path(sys.prefix) / "share/jupyter/kernels"
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -67,7 +68,8 @@ def launch():
         except Exception as e:
             print(e)
             sys.exit(1)
+        return
 
 
 if __name__ == "__main__":
-    launch()
+    main()

@@ -68,8 +68,8 @@ def write_all_kernelspec(base: Path, *, module_name="async_kernel", kernel_names
         kernel_names = (KernelName.asyncio, KernelName.trio)
         if sys.version_info >= (3, 12):
             kernel_names = (*kernel_names, KernelName.asyncio_eager)
-    if base.exists():
-        shutil.rmtree(base)
     for kernel_name in kernel_names:
         dest = base / kernel_name
+        if dest.exists():
+            shutil.rmtree(dest)
         write_kernel_spec(dest, kernel_name=kernel_name, module_name=module_name)

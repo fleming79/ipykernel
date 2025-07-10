@@ -38,7 +38,7 @@ dependencies = [
 # Tracker = ""
 
 [project.scripts]
-async_kernel = "async_kernel.__main__:launch"
+async_kernel = "async_kernel.__main__:main"
 
 [project.optional-dependencies]
 docs = [
