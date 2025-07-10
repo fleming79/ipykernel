@@ -1,3 +1,6 @@
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
+
 import unittest.mock
 
 from async_kernel.comm import Comm, CommManager

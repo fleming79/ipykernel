@@ -1,5 +1,6 @@
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any

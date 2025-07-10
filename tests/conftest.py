@@ -1,3 +1,6 @@
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
+
 import os
 import sys
 from typing import TYPE_CHECKING

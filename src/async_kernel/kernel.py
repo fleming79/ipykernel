@@ -115,7 +115,7 @@ class Kernel(ConnectionFileMixin):
     ``` python
     kernel = Kernel()
     async with kernel.start_in_context():
-        await utils.run_forever_ignore_keyboard_interrupt()
+        await anyio.sleep_forever()
     ```
 
     """
@@ -196,8 +196,8 @@ class Kernel(ConnectionFileMixin):
     def kernel_info(self):
         return {
             "protocol_version": _version.kernel_protocol_version,
-            "implementation": _version.implementation,
-            "implementation_version": _version.implementation_version,
+            "implementation": "async_kernel",
+            "implementation_version": _version.__version__,
             "language_info": _version.language_info,
             "banner": self.banner,
             "help_links": self.help_links,

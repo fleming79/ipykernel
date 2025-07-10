@@ -1,3 +1,6 @@
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
+
 """The cli entry point for async_kernel."""
 
 import argparse
