@@ -1,14 +1,18 @@
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
 
+import inspect
 import shutil
 import sys
 import types
 from unittest import mock
 
+import anyio
 import pytest
 
 import async_kernel.__main__ as main
+from async_kernel import Kernel
+from async_kernel.kernelspec import KernelName
 
 
 @pytest.fixture
@@ -83,3 +87,26 @@ def test_start_kernel_failure(monkeypatch, capsys):
     assert e.value.code == 1
     out = capsys.readouterr().out
     assert "fail!" in out
+
+
+@pytest.mark.parametrize("kernel_name", list(KernelName))
+def test_kernel_start(kernel_name: KernelName):
+    anyio_run = anyio.run
+    anyio_sleep_forever = anyio.sleep_forever
+    _start = None
+
+    def _patch_run(coro, backend):
+        nonlocal _start
+        _start = coro
+        if kernel_name.startswith("async"):
+            assert backend == "asyncio"
+        else:
+            assert backend == "trio"
+
+    anyio.run = _patch_run
+    try:
+        Kernel.start(connection_file="test.json", kernel_name=kernel_name)
+        assert inspect.iscoroutinefunction(_start)
+    finally:
+        anyio.run = anyio_run
+        anyio.sleep_forever = anyio_sleep_forever

@@ -158,17 +158,18 @@ class Kernel(ConnectionFileMixin):
     help_links = traitlets.Tuple()
     comm_manager: Instance[CommManager] = Instance("async_kernel.comm.CommManager")
 
-    def __new__(cls, *, connection_file="", kernel_name=KernelName.asyncio, **kwargs) -> Self:  # noqa: ARG004
+    def __new__(cls, *, connection_file="", kernel_name: KernelName | None = None, **kwargs) -> Self:  # noqa: ARG004
         #  There is only one instance.
         if not (instance := cls._instance):
             cls._instance = instance = super().__new__(cls)
         return instance
 
-    def __init__(self, *, connection_file="", kernel_name=KernelName.asyncio, **kwargs):
+    def __init__(self, *, connection_file="", kernel_name: KernelName | None = None, **kwargs):
         """Initialize the kernel."""
         if self._shell_handlers:
             return  # Only initialize once
-        self.kernel_name = kernel_name
+        if kernel_name:
+            self.kernel_name = kernel_name
         self.connection_file = connection_file
         super().__init__(**kwargs)
         self._shell_handlers = {
@@ -928,13 +929,11 @@ class Kernel(ConnectionFileMixin):
             "user_expressions": self.shell.user_expressions(user_expressions) if not err and user_expressions else {},
         }
         if err:
-            reply_content.update(
-                {
-                    "traceback": self.shell._last_traceback or [],
-                    "ename": type(err).__name__,
-                    "evalue": str(err),
-                }
-            )
+            reply_content.update({
+                "traceback": self.shell._last_traceback or [],
+                "ename": type(err).__name__,
+                "evalue": str(err),
+            })
         return reply_content
 
     async def do_complete(self, code, cursor_pos):
@@ -1024,11 +1023,6 @@ class Kernel(ConnectionFileMixin):
         """Handle kernel shutdown."""
         self.stop()
         return {"status": "ok", "restart": restart}
-
-    def do_clear(self):
-        """Clear the kernel."""
-        self.shell.reset(False)
-        return {"status": "ok"}
 
     def excepthook(self, etype, evalue, tb):
         """Handle an exception."""

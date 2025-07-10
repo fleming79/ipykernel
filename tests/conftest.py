@@ -10,6 +10,7 @@ import pytest
 from jupyter_client.asynchronous.client import AsyncKernelClient
 
 from async_kernel.kernel import Kernel
+from async_kernel.kernelspec import KernelName
 
 if TYPE_CHECKING:
     pytest_plugins = ["anyio.pytest_plugin"]
@@ -29,9 +30,9 @@ def pytest_configure(config):
     os.environ["PYTEST_TIMEOUT"] = str(1e6) if "debugpy" in sys.modules else str(60)
 
 
-@pytest.fixture(scope="module")
-def anyio_backend():
-    return "asyncio"
+@pytest.fixture(scope="module", params=["asyncio", "trio"])
+def anyio_backend(request):
+    return request.param
 
 
 @pytest.fixture(scope="module", params=["tcp", "ipc"])
@@ -57,6 +58,8 @@ async def kernel(anyio_backend, tmp_path_factory, transport: str):
 
 @pytest.fixture(scope="module")
 async def client(kernel: Kernel):
+    if kernel.kernel_name is KernelName.trio:
+        pytest.skip("AsyncKernelClient needs asyncio")
     client = AsyncKernelClient()
     client.load_connection_info(kernel.get_connection_info())
     client.start_channels()
