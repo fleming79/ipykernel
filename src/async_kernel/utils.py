@@ -174,7 +174,7 @@ class ThreadSafeCaller:
 
 
 class PendingResult(Generic[T]):
-    "A future equivalent (non-compliant) for anyio."
+    """An anyio compatible synchronization primitive for awaiting a result."""
 
     __slots__ = ["_event_done", "_exception", "result"]
 
@@ -198,3 +198,4 @@ class PendingResult(Generic[T]):
         if self._event_done.is_set():
             raise RuntimeError
         self._exception = exception
+        self._event_done.set()
