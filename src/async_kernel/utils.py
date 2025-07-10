@@ -45,7 +45,7 @@ def bind_socket(socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port:
                 while True:
                     port = port + 1
                     path = f"{ip}-{port}"
-                    if Path(path).exists():
+                    if not Path(path).exists():
                         break
             else:
                 path = f"{ip}-{port}"

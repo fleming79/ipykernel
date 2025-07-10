@@ -110,11 +110,6 @@ class ExecuteReply(Reply):
             ExecuteReplyOkay().check(d)
         elif d["status"] == "error":
             ExecuteReplyError().check(d)
-        elif d["status"] == "aborted":
-            "Deprecated"
-            raise NotImplementedError
-            ExecuteReplyAborted().check(d)
-
 
 class ExecuteReplyOkay(Reply):
     status = Enum("ok")
@@ -126,10 +121,6 @@ class ExecuteReplyError(Reply):
     ename = Unicode()
     evalue = Unicode()
     traceback = List(Unicode())
-
-
-class ExecuteReplyAborted(Reply):
-    status = Enum("aborted")
 
 
 class InspectReply(Reply, MimeBundle):

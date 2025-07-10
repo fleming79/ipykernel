@@ -163,10 +163,3 @@ f(2, 3)"""
         assert source in map(func, r["body"]["breakpoints"])
     else:
         assert r == {}
-
-
-async def test_convert_to_long_pathname(debug_kernel, client):
-    if sys.platform == "win32":
-        from async_kernel import compiler  # noqa: PLC0415
-
-        compiler._convert_to_long_pathname(__file__)

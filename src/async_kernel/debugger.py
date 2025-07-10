@@ -42,6 +42,7 @@ except Exception as e:
     else:
         raise
 
+_HOST_PORT: None | tuple[str, int] = None
 
 class _FakeCode:
     """Fake code class."""
@@ -119,7 +120,6 @@ class DebugpyClient(traitlets.HasTraits):
     _pending_responses: traitlets.Dict[int, PendingResult] = traitlets.Dict()
     capabilities = traitlets.Dict()
     kernel: traitlets.Instance[Kernel] = traitlets.Instance("async_kernel.Kernel", ())
-    _host_port = None
     _socketstream: anyio.abc.SocketStream | None = None
 
     def __init__(self, log, event_callback):
@@ -170,25 +170,25 @@ class DebugpyClient(traitlets.HasTraits):
 
     def get_host_port(self):
         """Get the host debugpy port."""
-        if not self._host_port:
+        if not _HOST_PORT:
             msg = "host port not available until debugpy is listening!"
             raise RuntimeError(msg)
-        host, port = self._host_port
+        host, port = _HOST_PORT
         return {"host": host, "port": port}
 
     async def connect_tcp_socket(self, *, task_status: TaskStatus):
         """Connect to the tcp socket."""
-
-        if not self._host_port:
+        global _HOST_PORT  # noqa: PLW0603
+        if not _HOST_PORT:
             import debugpy  # noqa: PLC0415
 
-            self._host_port = debugpy.listen(0)
+            _HOST_PORT = debugpy.listen(0)
             utils.mark_thread_debugpy_ignore(threading.current_thread())
             # This thread can't be stopped by the debugger when debugging
 
         try:
             self.log.debug("++ debugpy socketstream connecting ++")
-            async with await anyio.connect_tcp(*self._host_port) as socketstream:
+            async with await anyio.connect_tcp(*_HOST_PORT) as socketstream:
                 self._socketstream = socketstream
                 self.log.debug("++ debugpy socketstream connected ++")
                 task_status.started()

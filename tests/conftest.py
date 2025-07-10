@@ -34,13 +34,19 @@ def anyio_backend():
     return "asyncio"
 
 
+@pytest.fixture(scope="module", params=["tcp", "ipc"])
+def transport(request):
+    return request.param
+
+
 @pytest.fixture(scope="module")
-async def kernel(anyio_backend, tmp_path_factory):
+async def kernel(anyio_backend, tmp_path_factory, transport: str):
     # Set a blank connection_file
     connection_file = tmp_path_factory.mktemp("async_kernel") / "temp_connection.json"
     os.environ["IPYTHONDIR"] = str(tmp_path_factory.mktemp("ipython_config"))
     kernel = Kernel()
     kernel.connection_file = str(connection_file.resolve())
+    kernel.transport = transport
     try:
         async with kernel.start_in_context():
             yield kernel

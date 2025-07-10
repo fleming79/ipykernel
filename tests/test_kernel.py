@@ -22,11 +22,9 @@ from tests import utils
 @pytest.mark.parametrize("mode", ["direct", "proxy"])
 async def test_iopub(kernel, mode: Literal["direct", "proxy"]):
     n = 10
-
-    info = kernel.get_connection_info()
-    url = f"{info['transport']}://{info['ip']}:{info['iopub_port']}"
     socket = kernel._sockets[SocketID.iopub]
-    assert url == socket.get_string(zmq.LAST_ENDPOINT)
+    url = socket.get_string(zmq.LAST_ENDPOINT)
+    assert url.endswith(str(kernel.iopub_port))
 
     def pubio_subscribe():
         """Consume messages"""
