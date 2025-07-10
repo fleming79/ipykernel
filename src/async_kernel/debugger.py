@@ -252,22 +252,22 @@ class Debugger(traitlets.HasTraits):
         """Initialize the debugger."""
         self.debugpy_client = DebugpyClient(log=self.log, event_callback=self._handle_event)
         self.started_debug_handlers = {
-            "dumpCell": self.do_dump_cell,
             "setBreakpoints": self.do_set_breakpoints,
             "source": self.do_source,
             "stackTrace": self.do_stack_trace,
             "variables": self.do_variables,
             "attach": self.do_attach,
             "configurationDone": self.do_configuration_done,
+            "copyToGlobals": self.do_copy_to_globals,
             "disconnect": self.do_disconnect,
         }
         self.static_debug_handlers = {
             "initialize": self.do_initialize,
+            "dumpCell": self.do_dump_cell,
             "debugInfo": self.do_debug_info,
             "inspectVariables": self.do_inspect_variables,
             "richInspectVariables": self.do_rich_inspect_variables,
             "modules": self.do_modules,
-            "copyToGlobals": self.do_copy_to_globals,
         }
 
     async def start(self, kernel: Kernel, *, task_status: TaskStatus):
@@ -320,16 +320,12 @@ class Debugger(traitlets.HasTraits):
             "body": {"variables": var_list},
         }
 
-    def _accept_stopped_thread(self, thread_name):
-        forbid_list = ["IPythonHistorySavingThread"]
-        return thread_name not in forbid_list
-
     async def handle_stopped_event(self, event):
         """Handle a stopped event."""
         req = {"seq": self.next_seq(), "type": "request", "command": "threads"}
         rep = await self._forward_message(req)
         for thread in rep["body"]["threads"]:
-            if self._accept_stopped_thread(thread["name"]):
+            if thread["name"] not in ["IPythonHistorySavingThread"]:
                 self.stopped_threads.add(thread["id"])
             self._publish_event(event)
 
@@ -408,7 +404,7 @@ class Debugger(traitlets.HasTraits):
         """Handle an inspect variables message."""
         self.variable_explorer.untrack_all()
         # looks like the implementation of untrack_all in ptvsd
-        # destroys objects we nee din track. We have no choice but
+        # destroys objects we need in track. We have no choice but
         # reinstantiate the object
         self.variable_explorer = VariableExplorer()
         self.variable_explorer.track()
@@ -423,7 +419,7 @@ class Debugger(traitlets.HasTraits):
             "success": False,
             "command": message["command"],
         }
-        var_name = message["arguments"]["variableName"]
+        var_name = message["arguments"].get("variableName", "")
         valid_name = str.isidentifier(var_name)
         if not valid_name:
             reply["body"] = {"data": {}, "metadata": {}}
@@ -475,27 +471,6 @@ class Debugger(traitlets.HasTraits):
                 mods.append({"id": i, "name": module.__name__, "path": filename})
         return {"body": {"modules": mods, "totalModules": len(modules)}}
 
-    async def do_copy_to_globals(self, message):
-        dst_var_name = message["arguments"]["dstVariableName"]
-        src_var_name = message["arguments"]["srcVariableName"]
-        src_frame_id = message["arguments"]["srcFrameId"]
-        expression = f"globals()['{dst_var_name}']"
-        seq = message["seq"]
-        return await self._forward_message(
-            {
-                "type": "request",
-                "command": "setExpression",
-                "seq": seq + 1,
-                "arguments": {
-                    "expression": expression,
-                    "value": src_var_name,
-                    "frameId": src_frame_id,
-                },
-            }
-        )
-
-    # Started handlers (requires debug_client connection)
-
     async def do_dump_cell(self, message):
         """Handle a dump cell message."""
         code = message["arguments"]["code"]
@@ -511,6 +486,24 @@ class Debugger(traitlets.HasTraits):
             "command": message["command"],
             "body": {"sourcePath": str(path)},
         }
+
+    # Started handlers (requires debug_client connection)
+
+    async def do_copy_to_globals(self, message):
+        dst_var_name = message["arguments"]["dstVariableName"]
+        src_var_name = message["arguments"]["srcVariableName"]
+        src_frame_id = message["arguments"]["srcFrameId"]
+        expression = f"globals()['{dst_var_name}']"
+        return await self._forward_message({
+            "type": "request",
+            "command": "setExpression",
+            "seq": message["seq"],
+            "arguments": {
+                "expression": expression,
+                "value": src_var_name,
+                "frameId": src_frame_id,
+            },
+        })
 
     async def do_set_breakpoints(self, message):
         """Handle a set breakpoints message."""

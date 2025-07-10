@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 
-TIMEOUT = 5 if not async_kernel.utils.LAUNCHED_BY_DEBUGPY else 1e6
+TIMEOUT = 10 if not async_kernel.utils.LAUNCHED_BY_DEBUGPY else 1e6
 
 
 class ExecuteContentType(TypedDict):
