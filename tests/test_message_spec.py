@@ -10,6 +10,11 @@ import pytest
 from tests import utils
 
 
+@pytest.fixture(scope="module", params=["tcp", "ipc"])
+def transport(request):
+    return request.param
+
+
 async def test_execute(client, kernel):
     msg_id = client.execute(code="x=1")
     reply = await utils.get_reply(client, msg_id)
