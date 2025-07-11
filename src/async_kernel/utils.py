@@ -154,10 +154,10 @@ class ThreadSafeCaller:
 
         Overwrite this method as required.
         """
-        if delay:
-            await anyio.sleep(delay)
-        result = func(*args, **kwargs) if callable(func) else func
         try:
+            if delay:
+                await anyio.sleep(float(delay))
+            result = func(*args, **kwargs) if callable(func) else func
             while inspect.isawaitable(result):
                 result = await result
         except Exception as e:

@@ -3,22 +3,30 @@
 
 from __future__ import annotations
 
+import json
+import pathlib
 from typing import TYPE_CHECKING, Any
 
 from IPython.core.displayhook import DisplayHook
 from IPython.core.displaypub import DisplayPublisher
 from IPython.core.error import StdinNotImplementedError
-from IPython.core.interactiveshell import InteractiveShell, InteractiveShellABC
+from IPython.core.interactiveshell import ExecutionResult, InteractiveShell, InteractiveShellABC
 from IPython.core.magic import Magics, line_magic, magics_class
 from IPython.core.usage import default_banner
+from jupyter_client.jsonutil import json_default
+from jupyter_core.paths import jupyter_runtime_dir
 from traitlets import CBool, CBytes, Dict, Instance, Type, default, observe
 from typing_extensions import override
 
 import async_kernel
+from async_kernel import utils
 from async_kernel.compiler import XCachingCompiler
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from async_kernel.kernel import Kernel
+    from async_kernel.utils import P
 
 
 __all__ = ["AsyncDisplayHook", "AsyncDisplayPublisher", "AsyncInteractiveShell"]
@@ -129,6 +137,14 @@ class AsyncInteractiveShell(InteractiveShell):
     # will print a warning in the absence of readline.
     autoindent = CBool(False)
 
+    def call_later(self, func: Callable[P, Any | Awaitable], delay=0.0, /, *args: P.args, **kwargs: P.kwargs):
+        """Schedules a function or coroutine for execution in the current thread."""
+        utils.ThreadSafeCaller.get_instance().call_later(func, delay, *args, **kwargs)
+
+    def call_soon(self, func: Callable[P, Any | Awaitable], *args: P.args, **kwargs: P.kwargs):
+        """Schedules a function or coroutine for execution in the current thread."""
+        utils.ThreadSafeCaller.get_instance().call_later(func, 0, *args, **kwargs)
+
     @observe("exit_now")
     def _update_exit_now(self, change):
         """stop eventloop when exit_now fires"""
@@ -146,10 +162,40 @@ class AsyncInteractiveShell(InteractiveShell):
         self.exit_now = True
 
     @override
-    def run_cell(self, *args, **kwargs):
-        """Run a cell."""
-        self._last_traceback = None
-        return super().run_cell(*args, **kwargs)
+    def init_user_ns(self):
+        super().init_user_ns()
+        self.user_ns.update({"call_later": self.call_later, "call_soon": self.call_soon})
+
+    @override
+    async def run_cell_async(
+        self,
+        raw_cell: str,
+        store_history=False,
+        silent=False,
+        shell_futures=True,
+        *,
+        transformed_cell: str | None = None,
+        preprocessing_exc_tuple: tuple | None = None,
+        cell_id: str | None = None,
+    ) -> ExecutionResult:
+        if not silent:
+            self._last_traceback = None
+        result = None
+        try:
+            result = await super().run_cell_async(
+                raw_cell=raw_cell,
+                store_history=store_history,
+                silent=silent,
+                shell_futures=shell_futures,
+                transformed_cell=transformed_cell,
+                preprocessing_exc_tuple=preprocessing_exc_tuple,
+                cell_id=cell_id,
+            )
+            return result  # noqa: RET504
+        finally:
+            self.events.trigger("post_execute")
+            if not silent:
+                self.events.trigger("post_run_cell", result)
 
     @override
     def _showtraceback(self, etype, evalue, stb):
@@ -178,28 +224,26 @@ class KernelMagics(Magics):
 
     @line_magic
     def connect_info(self, arg_s):
-        print(async_kernel.Kernel().get_connection_info())
+        """Print information for connecting other clients to this kernel."""
 
-    @line_magic
-    def matplotlib(self, *args):
-        import matplotlib as mpl  # type: ignore[import] # noqa: PLC0415
+        kernel = async_kernel.Kernel()
+        connection_file = pathlib.Path(kernel.connection_file)
 
-        mpl.interactive(True)
-        if args:
-            backend: str = args[0]
-            match backend:
-                case "ipympl" | "widget":
-                    mpl.use("module://ipympl.backend_nbagg")
-                    print("To access the interactive figure display the canvas directly. (Figure.canvas)")
-                case "--list":
-                    from matplotlib.backends import registry  # type: ignore[attr-defined] # noqa: PLC0415
+        # if it's in the default dir, truncate to basename
+        if jupyter_runtime_dir() == str(connection_file.parent):
+            connection_file = connection_file.name
 
-                    print(registry.backend_registry.list_all())
-                case _:
-                    # IPython.core.pylabtools.activate_matplotlib(backend)
-                    async_kernel.Kernel().shell.enable_matplotlib(backend)
-
-            print(f'The current matplotlib backend is: "{mpl.get_backend()}"')
+        info = kernel.get_connection_info()
+        print(
+            json.dumps(info, indent=2, default=json_default),
+            f"Paste the above JSON into a file, and connect with:\n"
+            f"    $> jupyter <app> --existing <file>\n"
+            f"or, if you are local, you can connect with just:\n"
+            f"    $> jupyter <app> --existing {connection_file}\n"
+            f"or even just:\n"
+            f"    $> jupyter <app> --existing\n"
+            f"if this is the most recent Jupyter kernel you have started.",
+        )
 
 
 InteractiveShellABC.register(AsyncInteractiveShell)

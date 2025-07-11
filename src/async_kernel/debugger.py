@@ -44,6 +44,7 @@ except Exception as e:
 
 _HOST_PORT: None | tuple[str, int] = None
 
+
 class _FakeCode:
     """Fake code class."""
 
@@ -494,16 +495,18 @@ class Debugger(traitlets.HasTraits):
         src_var_name = message["arguments"]["srcVariableName"]
         src_frame_id = message["arguments"]["srcFrameId"]
         expression = f"globals()['{dst_var_name}']"
-        return await self._forward_message({
-            "type": "request",
-            "command": "setExpression",
-            "seq": message["seq"],
-            "arguments": {
-                "expression": expression,
-                "value": src_var_name,
-                "frameId": src_frame_id,
-            },
-        })
+        return await self._forward_message(
+            {
+                "type": "request",
+                "command": "setExpression",
+                "seq": message["seq"],
+                "arguments": {
+                    "expression": expression,
+                    "value": src_var_name,
+                    "frameId": src_frame_id,
+                },
+            }
+        )
 
     async def do_set_breakpoints(self, message):
         """Handle a set breakpoints message."""

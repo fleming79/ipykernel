@@ -192,6 +192,8 @@ class Kernel(ConnectionFileMixin):
         }
         sys.excepthook = self.excepthook
         signal.signal(signal.SIGINT, self._signal_handler)
+        if not os.environ.get("MPLBACKEND"):
+            os.environ["MPLBACKEND"] = "module://matplotlib_inline.backend_inline"
 
     @property
     def kernel_info(self):
@@ -929,11 +931,13 @@ class Kernel(ConnectionFileMixin):
             "user_expressions": self.shell.user_expressions(user_expressions) if not err and user_expressions else {},
         }
         if err:
-            reply_content.update({
-                "traceback": self.shell._last_traceback or [],
-                "ename": type(err).__name__,
-                "evalue": str(err),
-            })
+            reply_content.update(
+                {
+                    "traceback": self.shell._last_traceback or [],
+                    "ename": type(err).__name__,
+                    "evalue": str(err),
+                }
+            )
         return reply_content
 
     async def do_complete(self, code, cursor_pos):

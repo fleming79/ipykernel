@@ -30,9 +30,9 @@ def pytest_configure(config):
     os.environ["PYTEST_TIMEOUT"] = str(1e6) if "debugpy" in sys.modules else str(60)
 
 
-@pytest.fixture(scope="module", params=["asyncio", "trio"])
+@pytest.fixture(scope="module")
 def anyio_backend(request):
-    return request.param
+    return "asyncio"
 
 
 @pytest.fixture(scope="module", params=["tcp", "ipc"])

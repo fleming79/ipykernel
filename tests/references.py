@@ -111,6 +111,7 @@ class ExecuteReply(Reply):
         elif d["status"] == "error":
             ExecuteReplyError().check(d)
 
+
 class ExecuteReplyOkay(Reply):
     status = Enum("ok")
     user_expressions = Dict()

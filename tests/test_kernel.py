@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import inspect
 import threading
 import time
 from typing import Literal
@@ -14,8 +13,7 @@ import anyio
 import pytest
 import zmq
 
-from async_kernel.kernel import Kernel, SocketID
-
+from async_kernel.kernel import SocketID
 from tests import utils
 
 
@@ -235,3 +233,32 @@ async def test_properties(kernel) -> None:
 
     kernel.user_module = user_mod()
     kernel.user_ns = {}
+
+
+async def test_matplotlib_inline_on_import(kernel, client):
+    pytest.importorskip("matplotlib", reason="this test requires matplotlib")
+    code = "\n".join(["import matplotlib, matplotlib.pyplot as plt", "backend = matplotlib.get_backend()"])
+    _, reply = await utils.execute(client, code, user_expressions={"backend": "backend"})
+    backend_bundle = reply["user_expressions"]["backend"]
+    assert "backend_inline" in backend_bundle["data"]["text/plain"]
+
+
+@pytest.mark.parametrize("code", ["%connect_info", "%matplotlib --list"])
+async def test_magic(client, code: str):
+    assert code
+    _, reply = await utils.execute(client, code)
+    assert reply["status"] == "ok"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "call_later(str, 0, 123)",
+        "call_later(print, 'invalid_time')",
+        "call_soon, print, 'hello'",
+    ],
+)
+async def test_namespace_default(client, code: str):
+    assert code
+    _, reply = await utils.execute(client, code)
+    assert reply["status"] == "ok"
