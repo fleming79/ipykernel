@@ -421,19 +421,17 @@ class Kernel(ConnectionFileMixin):
         cls: type[OutStream] = import_item(self.outstream_class)
         if self.outstream_class:
             for name in ["stdout", "stderr"]:
-                echo = getattr(sys, name)
 
-                def flusher(string: str, name=name, echo=echo):
+                def flusher(string: str, name=name):
                     "Publish stdio or stderr when flush is called"
                     self.iopub_send(
                         msg_or_type="stream",
                         content={"name": name, "text": string},
                         ident=f"stream.{name}".encode(),
                     )
-                    if not self.quiet and echo:
+                    if not self.quiet and (echo := (sys.__stdout__ if name == "stdout" else sys.__stderr__)):
                         echo.write(string)
                         echo.flush()
-
                 wrapper = cls(name=name, flusher=flusher)  # type: ignore[call-arg]
                 setattr(sys, name, wrapper)
         task_status.started()

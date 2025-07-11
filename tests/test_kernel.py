@@ -50,14 +50,18 @@ async def test_iopub(kernel, mode: Literal["direct", "proxy"]):
         socket.send_multipart([b"0", f"{i}".encode()])
     thread.join()
 
-
-async def test_simple_print(client):
+@pytest.mark.parametrize("quiet", [True, False])
+async def test_simple_print(kernel, client, quiet: bool):
     """simple print statement in kernel"""
-    await utils.clear_pub_message(client)
-    client.execute("print('hi')")
-    stdout, stderr = await utils.assemble_output(client)
-    assert stdout == "hi\n"
-    assert stderr == ""
+    kernel.quiet = quiet
+    try:
+        await utils.clear_pub_message(client)
+        client.execute("print('test_simple_print')")
+        stdout, stderr = await utils.assemble_output(client)
+        assert stdout == "test_simple_print\n"
+        assert stderr == ""
+    finally:
+        kernel.quiet = True
 
 
 async def test_raw_input(client):
