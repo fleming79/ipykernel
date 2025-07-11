@@ -22,6 +22,11 @@ if async_kernel.utils.LAUNCHED_BY_DEBUGPY:
     raise RuntimeError(msg)
 
 
+@pytest.fixture(scope="module", params=["tcp", "ipc"])
+def transport(request):
+    return request.param
+
+
 async def wait_for_debug_request(
     kernel: Kernel, client: AsyncKernelClient, command, arguments: dict | None = None, full_reply=False
 ):

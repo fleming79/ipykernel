@@ -255,7 +255,7 @@ async def test_magic(client, code: str):
     [
         "call_later(str, 0, 123)",
         "call_later(print, 'invalid_time')",
-        "call_soon, print, 'hello'",
+        "call_soon(print, 'hello')",
     ],
 )
 async def test_namespace_default(client, code: str):

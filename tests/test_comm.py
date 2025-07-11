@@ -13,7 +13,6 @@ def anyio_backend(request):
     return request.param
 
 
-
 async def test_comm(kernel) -> None:
     assert isinstance(kernel.comm_manager, CommManager)
     c = Comm(target_name="bar")
