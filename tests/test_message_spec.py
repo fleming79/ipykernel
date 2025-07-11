@@ -249,11 +249,14 @@ async def test_stream(client):
     assert stdout.startswith("hi")
 
 
-async def test_display_data(client):
+@pytest.mark.parametrize("clear", [True, False])
+async def test_display_data(client, clear: bool):
     # kernel.display_formatter
     await utils.clear_pub_message(client)
-    msg_id, reply = await utils.execute(client, "from IPython.display import display; display(1)")
+    msg_id, reply = await utils.execute(client, f"from IPython.display import display; display(1, clear={clear})")
     await utils.check_pub_message(client, msg_id, execution_state="busy")
     await utils.check_pub_message(client, msg_id, msg_type="execute_input")
+    if clear:
+        await utils.check_pub_message(client, msg_id, msg_type="clear_output")
     await utils.check_pub_message(client, msg_id, msg_type="display_data", data={"text/plain": "1"})
     await utils.check_pub_message(client, msg_id, execution_state="idle")

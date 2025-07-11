@@ -218,6 +218,10 @@ class ExecuteResult(MimeBundle):
 class HistoryReply(Reply):
     history = List(List())
 
+class ClearOutput(Reference):
+    # ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#clear-output
+    wait = Bool()
+
 
 references = {
     "execute_reply": ExecuteReply(),
@@ -235,4 +239,5 @@ references = {
     "stream": Stream(),
     "display_data": DisplayData(),
     "header": RHeader(),
+    "clear_output": ClearOutput(),
 }
