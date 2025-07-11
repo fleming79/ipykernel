@@ -254,7 +254,6 @@ class Debugger(traitlets.HasTraits):
         self.debugpy_client = DebugpyClient(log=self.log, event_callback=self._handle_event)
         self.started_debug_handlers = {
             "setBreakpoints": self.do_set_breakpoints,
-            "source": self.do_source,
             "stackTrace": self.do_stack_trace,
             "variables": self.do_variables,
             "attach": self.do_attach,
@@ -265,6 +264,7 @@ class Debugger(traitlets.HasTraits):
         self.static_debug_handlers = {
             "initialize": self.do_initialize,
             "dumpCell": self.do_dump_cell,
+            "source": self.do_source,
             "debugInfo": self.do_debug_info,
             "inspectVariables": self.do_inspect_variables,
             "richInspectVariables": self.do_rich_inspect_variables,
@@ -479,7 +479,6 @@ class Debugger(traitlets.HasTraits):
         path.parent.mkdir(exist_ok=True)
         with path.open("w") as f:
             f.write(code)
-
         return {
             "type": "response",
             "request_seq": message["seq"],

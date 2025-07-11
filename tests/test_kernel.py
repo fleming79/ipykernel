@@ -229,7 +229,15 @@ async def test_debug_static(kernel, client, command: str):
         {"type": "request", "seq": 1, "command": command, "arguments": {"code": 'print("hello")'}},
     )
     assert reply["content"]["status"] == "ok"
-
+    if command == "dumpCell":
+        path = reply["content"]["body"]["sourcePath"]
+        reply = await utils.send_control_message(
+            client,
+            "debug_request",
+            {"type": "request", "seq": 1, "command": "source", "arguments": {"source": {"path": path}}},
+        )
+        assert reply["content"]["status"] == "ok"
+        assert reply["content"]["body"] == {"content": 'print("hello")'}
 
 async def test_properties(kernel) -> None:
     class user_mod:
