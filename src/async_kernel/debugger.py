@@ -523,7 +523,7 @@ class Debugger(traitlets.HasTraits):
     async def do_source(self, message):
         """Handle a source message."""
         reply = {"type": "response", "request_seq": message["seq"], "command": message["command"]}
-        if (path := Path(message["arguments"]["source"]["path"])).is_file():
+        if (path := Path(message["arguments"].get("source", {}).get("path", "missing"))).is_file():
             with path.open("r", encoding="utf-8") as f:
                 reply["success"] = True
                 reply["body"] = {"content": f.read()}

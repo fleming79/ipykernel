@@ -220,7 +220,7 @@ async def test_is_complete_request(client):
     assert reply["header"]["msg_type"] == "is_complete_reply"
 
 
-@pytest.mark.parametrize("command", ["debugInfo", "inspectVariables", "richInspectVariables", "modules", "dumpCell"])
+@pytest.mark.parametrize("command", ["debugInfo", "inspectVariables", "richInspectVariables", "modules", "dumpCell", "source"])
 async def test_debug_static(kernel, client, command: str):
     # These are tests on the debugger that don't required the debugger to be connected.
     reply = await utils.send_control_message(
