@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, Self, TypedDict
 
 import anyio
 import anyio.to_thread
-import IPython.core.release
 import sniffio
 import traitlets
 import zmq
@@ -154,7 +153,6 @@ class Kernel(ConnectionFileMixin):
 
     shell = Instance(AsyncInteractiveShell)
     shell_class = traitlets.Type(AsyncInteractiveShell)
-    banner = traitlets.Unicode()
     help_links = traitlets.Tuple()
     comm_manager: Instance[CommManager] = Instance("async_kernel.comm.CommManager")
 
@@ -202,18 +200,10 @@ class Kernel(ConnectionFileMixin):
             "implementation": "async_kernel",
             "implementation_version": _version.__version__,
             "language_info": _version.language_info,
-            "banner": self.banner,
+            "banner": self.shell.banner,
             "help_links": self.help_links,
             "debugger": not utils.LAUNCHED_BY_DEBUGPY,
         }
-
-    @default("banner")
-    def _default_banner(self):
-        return (
-            f"Python {sys.version}\n"
-            f"Async kernel (name='{self.kernel_name}')\n"
-            f"IPython shell {IPython.core.release.version}"
-        )
 
     @default("help_links")
     def _default_help_links(self):

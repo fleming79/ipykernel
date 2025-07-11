@@ -5,14 +5,15 @@ from __future__ import annotations
 
 import json
 import pathlib
+import sys
 from typing import TYPE_CHECKING, Any
 
+import IPython.core.release
 from IPython.core.displayhook import DisplayHook
 from IPython.core.displaypub import DisplayPublisher
 from IPython.core.error import StdinNotImplementedError
 from IPython.core.interactiveshell import ExecutionResult, InteractiveShell, InteractiveShellABC
 from IPython.core.magic import Magics, line_magic, magics_class
-from IPython.core.usage import default_banner
 from jupyter_client.jsonutil import json_default
 from jupyter_core.paths import jupyter_runtime_dir
 from traitlets import CBool, CBytes, Dict, Instance, Type, default, observe
@@ -127,7 +128,11 @@ class AsyncInteractiveShell(InteractiveShell):
 
     @default("banner1")
     def _default_banner1(self):
-        return default_banner
+        return (
+            f"Python {sys.version}\n"
+            f"Async kernel ({self.kernel.kernel_name})\n"
+            f"IPython shell {IPython.core.release.version}\n"
+        )
 
     # Override the traitlet in the parent class, because there's no point using
     # readline for the kernel. Can be removed when the readline code is moved
