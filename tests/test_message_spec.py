@@ -16,6 +16,10 @@ async def test_execute(client, kernel):
     utils.validate_message(reply, "execute_reply", msg_id)
     assert kernel.shell.user_ns["x"] == 1
 
+async def test_execute_control(client, kernel):
+    await utils.send_control_message(client, "execute_request", {"code": "y=10"})
+    assert kernel.shell.user_ns["y"] == 10
+
 
 async def test_execute_silent(client):
     await utils.clear_pub_message(client)
