@@ -17,6 +17,11 @@ from async_kernel.kernel import SocketID
 from tests import utils
 
 
+@pytest.fixture(scope="module", params=["tcp", "ipc"])
+def transport(request):
+    return request.param
+
+
 @pytest.mark.parametrize("mode", ["direct", "proxy"])
 async def test_iopub(kernel, mode: Literal["direct", "proxy"]):
     n = 10
@@ -49,6 +54,7 @@ async def test_iopub(kernel, mode: Literal["direct", "proxy"]):
     for i in range(n):
         socket.send_multipart([b"0", f"{i}".encode()])
     thread.join()
+
 
 @pytest.mark.parametrize("quiet", [True, False])
 async def test_simple_print(kernel, client, quiet: bool):
@@ -220,7 +226,9 @@ async def test_is_complete_request(client):
     assert reply["header"]["msg_type"] == "is_complete_reply"
 
 
-@pytest.mark.parametrize("command", ["debugInfo", "inspectVariables", "richInspectVariables", "modules", "dumpCell", "source"])
+@pytest.mark.parametrize(
+    "command", ["debugInfo", "inspectVariables", "richInspectVariables", "modules", "dumpCell", "source"]
+)
 async def test_debug_static(kernel, client, command: str):
     # These are tests on the debugger that don't required the debugger to be connected.
     reply = await utils.send_control_message(
@@ -238,6 +246,7 @@ async def test_debug_static(kernel, client, command: str):
         )
         assert reply["content"]["status"] == "ok"
         assert reply["content"]["body"] == {"content": 'print("hello")'}
+
 
 async def test_properties(kernel) -> None:
     class user_mod:

@@ -38,7 +38,7 @@ def main():
         help=f"remove an existing kernel. Installed kernels: {[item.name for item in kernel_dir.iterdir() if item.is_dir()]}",
     )
     parser.add_argument(
-        "--async-mode",
+        "--kernel_name",
         dest="kernel_name",
         default=KernelName.asyncio,
         help=f"options: {list(map(str, KernelName))}",

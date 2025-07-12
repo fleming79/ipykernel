@@ -63,7 +63,7 @@ def test_remove_nonexistent_kernel(monkeypatch, fake_kernel_dir, capsys):
 
 
 def test_start_kernel_success(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["prog", "-f", ".", "--async-mode", "async"])
+    monkeypatch.setattr(sys, "argv", ["prog", "-f", ".", "--kernel_name", "async"])
     start_mock = mock.Mock()
     monkeypatch.setattr(main.Kernel, "start", start_mock)
     with pytest.raises(SystemExit) as e:
@@ -75,7 +75,7 @@ def test_start_kernel_success(monkeypatch, capsys):
 
 
 def test_start_kernel_failure(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["prog", "-f", ".", "--async-mode", "async"])
+    monkeypatch.setattr(sys, "argv", ["prog", "-f", ".", "--kernel_name", "async"])
 
     def fail_start(*a, **kw):
         msg = "fail!"
@@ -110,3 +110,8 @@ def test_kernel_start(kernel_name: KernelName):
     finally:
         anyio.run = anyio_run
         anyio.sleep_forever = anyio_sleep_forever
+
+
+async def test_subprocess_kernels_client(subprocess_kernels_client):
+    # Start & Stop a kernel
+    return

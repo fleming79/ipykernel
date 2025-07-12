@@ -11,7 +11,8 @@
       "program": "${file}",
       "purpose": ["debug-test"],
       "console": "integratedTerminal",
-      "justMyCode": false // Change as required. Note only one test config will work Ref: https://code.visualstudio.com/docs/python/testing#_debug-tests
+      "justMyCode": false, // Change as required. Note only one test config will work Ref: https://code.visualstudio.com/docs/python/testing#_debug-tests
+      "subProcess": false
     },
     {
       "name": "Python: Current File",

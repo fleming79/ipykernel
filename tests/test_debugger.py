@@ -5,56 +5,24 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import debugpy
 import pytest
 
-import async_kernel.utils
 from tests import utils
 
 if TYPE_CHECKING:
     from jupyter_client.asynchronous.client import AsyncKernelClient
 
-    from async_kernel import Kernel
 
+@pytest.fixture(scope="module")
+async def client(subprocess_kernels_client):
+    """This client is connected to a kernel in a subprocess.
 
-if async_kernel.utils.LAUNCHED_BY_DEBUGPY:
-    msg = "This test module tests debugy. Debugging tests in this module WILL NOT WORK."
-    raise RuntimeError(msg)
-
-
-@pytest.fixture(scope="module", params=["tcp", "ipc"])
-def transport(request):
-    return request.param
-
-
-async def wait_for_debug_request(
-    kernel: Kernel, client: AsyncKernelClient, command, arguments: dict | None = None, full_reply=False
-):
-    """Carry out a debug request and return the reply content.
-
-    It does not check if the request was successful.
+    Notes:
+    - Debugging this module is fine provided the subprocess is not (subProcess=false).
+    - Trying debug the subprocess will fail because only one debug client is allowed and ipykernel is running its own client.
     """
-
-    msg = kernel.session.msg(
-        "debug_request",
-        {
-            "type": "request",
-            "seq": 1,
-            "command": command,
-            "arguments": arguments or {},
-        },
-    )
-    assert client.control_channel
-    client.control_channel.send(msg)
-    reply = await utils.get_reply(client, msg["header"]["msg_id"], channel="control")
-    return reply if full_reply else reply["content"]
-
-
-@pytest.fixture
-async def debug_kernel(kernel, client):
-    # Initialize
-    await wait_for_debug_request(
-        kernel=kernel,
+    client = subprocess_kernels_client
+    await send_debug_request(
         client=client,
         command="initialize",
         arguments={
@@ -71,22 +39,32 @@ async def debug_kernel(kernel, client):
         },
     )
     # Attach
-    await wait_for_debug_request(kernel, client, "attach")
-    try:
-        yield kernel
-    finally:
-        # Detach
-        await wait_for_debug_request(
-            kernel=kernel,
-            client=client,
-            command="disconnect",
-            arguments={"restart": False, "terminateDebuggee": False},
-        )
+    await send_debug_request(client, "attach")
+    return client
 
 
-async def test_debug_initialize(debug_kernel, client):
-    reply = await wait_for_debug_request(
-        kernel=debug_kernel,
+async def send_debug_request(client: AsyncKernelClient, command: str, arguments: dict | None = None):
+    """Carry out a debug request and return the reply content.
+
+    It does not check if the request was successful.
+    """
+    reply = await utils.send_control_message(
+        client,
+        "debug_request",
+        {
+            "type": "request",
+            "seq": 1,
+            "command": command,
+            "arguments": arguments or {},
+        },
+    )
+    return reply["content"]
+
+
+async def test_debug_disconnect_initialize(client):
+    reply = await send_debug_request(client, "disconnect")
+    assert reply["success"]
+    await send_debug_request(
         client=client,
         command="initialize",
         arguments={
@@ -102,42 +80,20 @@ async def test_debug_initialize(debug_kernel, client):
             "locale": "en",
         },
     )
-    if debugpy:
-        assert reply["success"]
-    else:
-        assert reply == {}
+    # Attach
+    await send_debug_request(client, "attach")
 
 
-async def test_attach_debug(debug_kernel, client):
-    reply = await wait_for_debug_request(
-        kernel=debug_kernel,
-        client=client,
-        command="evaluate",
-        arguments={"expression": "'a' + 'b'", "context": "repl"},
-    )
-    if debugpy:
-        assert reply["success"]
-        assert reply["body"]["result"] == ""
-    else:
-        assert reply == {}
-
-
-async def test_set_breakpoints(debug_kernel, client):
+async def test_set_breakpoints(client):
     code = """def f(a, b):
     c = a + b
     return c
 
 f(2, 3)"""
 
-    r = await wait_for_debug_request(debug_kernel, client, "dumpCell", {"code": code})
-    if debugpy:
-        source = r["body"]["sourcePath"]
-    else:
-        assert r == {}
-        source = "non-existent path"
-
-    reply = await wait_for_debug_request(
-        kernel=debug_kernel,
+    reply = await send_debug_request(client, "dumpCell", {"code": code})
+    source = reply["body"]["sourcePath"]
+    reply = await send_debug_request(
         client=client,
         command="setBreakpoints",
         arguments={
@@ -146,24 +102,47 @@ f(2, 3)"""
             "sourceModified": False,
         },
     )
-    if debugpy:
-        assert reply["success"]
-        assert len(reply["body"]["breakpoints"]) == 1
-        assert reply["body"]["breakpoints"][0]["verified"]
-        assert reply["body"]["breakpoints"][0]["source"]["path"] == source
-    else:
-        assert reply == {}
+    assert reply["success"]
+    assert len(reply["body"]["breakpoints"]) == 1
+    assert reply["body"]["breakpoints"][0]["verified"]
+    assert reply["body"]["breakpoints"][0]["source"]["path"] == source
+    reply = await send_debug_request(client, "debugInfo")
+    assert source in reply["body"]["breakpoints"][0]["source"]
+    return code
 
-    r = await wait_for_debug_request(
-        kernel=debug_kernel,
+
+async def test_stop_on_breakpoint(client):
+    code = await test_set_breakpoints(client)
+    msg_id = client.execute(code)
+    # Wait for stop on breakpoint
+    msg: dict = {"msg_type": "", "content": {}}
+    while msg.get("msg_id") != msg_id and msg["content"].get("event") != "stopped":
+        msg = await client.get_iopub_msg(timeout=5)
+    assert msg["content"]["body"]["reason"] == "breakpoint"
+    assert msg["content"]["body"]["allThreadsStopped"]
+
+    reply = await send_debug_request(client, "stackTrace", {"threadId": 1})
+    stacks = reply["body"]["stackFrames"]
+
+    reply = await send_debug_request(client, "scopes", {"frameId": stacks[0]["id"]})
+    scopes = reply["body"]["scopes"]
+
+    reply = await send_debug_request(
         client=client,
-        command="debugInfo",
+        command="variables",
+        arguments={"variablesReference": next(filter(lambda s: s["name"] == "Locals", scopes))["variablesReference"]},
     )
-
-    def func(b):
-        return b["source"]
-
-    if debugpy:
-        assert source in map(func, r["body"]["breakpoints"])
-    else:
-        assert r == {}
+    reply = await send_debug_request(
+        client=client,
+        command="evaluate",
+        arguments={"expression": "'a' + 'b'", "context": "repl"},
+    )
+    assert reply["success"]
+    assert reply["body"]["result"] == ""
+    print("THE REPLY", reply)
+    reply = await send_debug_request(
+        client=client,
+        command="copyToGlobals",
+        arguments={"dstVariableName": "a_copy", "srcVariableName": "a", "srcFrameId": stacks[0]["id"]},
+    )
+    assert reply["success"]

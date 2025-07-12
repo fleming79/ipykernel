@@ -494,26 +494,30 @@ class Debugger(traitlets.HasTraits):
         src_var_name = message["arguments"]["srcVariableName"]
         src_frame_id = message["arguments"]["srcFrameId"]
         # Copy the variable to the user_ns
-        await self._forward_message({
-            "type": "request",
-            "command": "evaluate",
-            "seq": self.next_seq(),
-            "arguments": {
-                "expression": f"import async_kernel;async_kernel.Kernel().shell.user_ns['{dst_var_name}'] = {src_var_name}",
-                "frameId": src_frame_id,
-                "context": "repl",
-            },
-        })
-        return await self._forward_message({
-            "type": "request",
-            "command": "evaluate",
-            "seq": message["seq"],
-            "arguments": {
-                "expression": f"globals()['{dst_var_name}'] = {src_var_name}",
-                "frameId": src_frame_id,
-                "context": "repl",
-            },
-        })
+        await self._forward_message(
+            {
+                "type": "request",
+                "command": "evaluate",
+                "seq": self.next_seq(),
+                "arguments": {
+                    "expression": f"import async_kernel;async_kernel.Kernel().shell.user_ns['{dst_var_name}'] = {src_var_name}",
+                    "frameId": src_frame_id,
+                    "context": "repl",
+                },
+            }
+        )
+        return await self._forward_message(
+            {
+                "type": "request",
+                "command": "evaluate",
+                "seq": message["seq"],
+                "arguments": {
+                    "expression": f"globals()['{dst_var_name}'] = {src_var_name}",
+                    "frameId": src_frame_id,
+                    "context": "repl",
+                },
+            }
+        )
 
     async def do_set_breakpoints(self, message):
         """Handle a set breakpoints message."""
@@ -617,3 +621,16 @@ class Debugger(traitlets.HasTraits):
         self.init_event = anyio.Event()
         self.breakpoint_list = {}
         return response
+
+    async def disconnect(self):
+        if self.debugpy_client.connected:
+            await self._forward_message(
+                {
+                    "type": "request",
+                    "command": "disconnect",
+                    "seq": self.next_seq(),
+                    "restart": False,
+                    "terminateDebuggee": False,
+                    "suspendDebuggee": False,
+                }
+            )

@@ -10,7 +10,7 @@ import pytest
 from async_kernel.utils import PendingResult, ThreadSafeCaller
 
 
-@pytest.mark.anyio()
+@pytest.mark.anyio
 class TestThreadSafeCaller:
     async def test_sync(self):
         async with ThreadSafeCaller() as ts_caller:

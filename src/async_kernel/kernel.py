@@ -168,7 +168,7 @@ class Kernel(ConnectionFileMixin):
             return  # Only initialize once
         if kernel_name:
             self.kernel_name = kernel_name
-        self.connection_file = connection_file
+        self.connection_file = str(connection_file)
         super().__init__(**kwargs)
         self._shell_handlers = {
             "kernel_info_request": self.kernel_info_request,
@@ -203,6 +203,7 @@ class Kernel(ConnectionFileMixin):
             "banner": self.shell.banner,
             "help_links": self.help_links,
             "debugger": not utils.LAUNCHED_BY_DEBUGPY,
+            "kernel_name": self.kernel_name,
         }
 
     @default("help_links")
@@ -422,6 +423,7 @@ class Kernel(ConnectionFileMixin):
                     if not self.quiet and (echo := (sys.__stdout__ if name == "stdout" else sys.__stderr__)):
                         echo.write(string)
                         echo.flush()
+
                 wrapper = cls(name=name, flusher=flusher)  # type: ignore[call-arg]
                 setattr(sys, name, wrapper)
         task_status.started()
@@ -856,7 +858,7 @@ class Kernel(ConnectionFileMixin):
 
     async def control_shutdown_request(self, job: MsgRequest):
         """Handle a shutdown request."""
-        reply_content = await self.do_shutdown(job["parent"]["content"]["restart"])
+        reply_content = await self.do_shutdown(job["parent"]["content"].get("restart", False))
         self.send_reply(job, reply_content)
 
     async def debug_request(self, job: MsgRequest):
@@ -1011,8 +1013,9 @@ class Kernel(ConnectionFileMixin):
             "history": list(hist),
         }
 
-    async def do_shutdown(self, restart):
+    async def do_shutdown(self, restart: bool):
         """Handle kernel shutdown."""
+        await self.debugger.disconnect()
         self.stop()
         return {"status": "ok", "restart": restart}
 

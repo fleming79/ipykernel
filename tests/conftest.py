@@ -10,7 +10,8 @@ import pytest
 from jupyter_client.asynchronous.client import AsyncKernelClient
 
 from async_kernel.kernel import Kernel
-from async_kernel.kernelspec import KernelName
+from async_kernel.kernelspec import KernelName, make_argv
+from tests import utils
 
 if TYPE_CHECKING:
     pytest_plugins = ["anyio.pytest_plugin"]
@@ -68,3 +69,35 @@ async def client(kernel: Kernel):
     finally:
         client.stop_channels()
         await anyio.sleep(0)
+
+
+@pytest.fixture(scope="module", params=KernelName)
+def kernel_name(request):
+    return request.param
+
+
+@pytest.fixture(scope="module")
+async def subprocess_kernels_client(anyio_backend, tmp_path_factory, kernel_name: KernelName):
+    """Starts a kernel in a subprocess and returns a AsyncKernelCient connected to it.
+
+    This is primarily provided for testing the debugger making it more convenient
+    connect a debugger to the test.
+    """
+    connection_file = tmp_path_factory.mktemp("async_kernel") / "temp_connection.json"
+
+    async with anyio.create_task_group() as tg:
+        command = make_argv(connection_file=connection_file, kernel_name=kernel_name)
+        tg.start_soon(anyio.run_process, command)
+        client = AsyncKernelClient()
+        while not connection_file.exists():
+            await anyio.sleep(0.1)
+        client.load_connection_file(connection_file)
+        client.start_channels()
+        msg_id = client.kernel_info()
+        await utils.get_reply(client, msg_id)
+        try:
+            yield client
+        finally:
+            client.shutdown()
+            client.stop_channels()
+            await anyio.sleep(0)
