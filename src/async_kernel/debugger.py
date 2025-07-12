@@ -338,15 +338,6 @@ class Debugger(traitlets.HasTraits):
             and not variable_name.startswith("_i")
         )
 
-    def _to_response(self, msg: dict, *, success=True):
-        return {
-            "seq": self.next_seq(),
-            "type": "response",
-            "request_seq": msg["seq"],
-            "success": success,
-            "command": msg["command"],
-        }
-
     async def process_request(self, message: dict[str, t.Any]):
         """Process a request."""
         command = message["command"]
@@ -356,9 +347,8 @@ class Debugger(traitlets.HasTraits):
             self.log.debug("Not ready - ignoring command: '%s'", command)
             return {}
         if handler := self.started_debug_handlers.get(command):
-            with anyio.move_on_after(4):
-                return await handler(message)
-            return self._to_response(message, success=False)
+            return await handler(message)
+
         return await self._forward_message(message)
 
     ## Static handlers
