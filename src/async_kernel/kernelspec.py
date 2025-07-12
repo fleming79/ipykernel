@@ -8,7 +8,6 @@ from __future__ import annotations
 import enum
 import json
 import shutil
-import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -41,14 +40,8 @@ def write_kernel_spec(
     """
     assert _is_valid_kernel_name(kernel_name)
     path = Path(path) if path else Path(tempfile.mkdtemp(suffix="_kernels")) / kernel_name
-
     # stage resources
     shutil.copytree(RESOURCES, path, dirs_exist_ok=True)
-
-    # ensure path is writable
-    mask = path.stat().st_mode
-    if not mask & stat.S_IWUSR:
-        path.chmod(mask | stat.S_IWUSR)
 
     spec = KernelSpec()
     spec.argv = make_argv(module_name=module_name, kernel_name=kernel_name)
