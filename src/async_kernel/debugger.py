@@ -135,15 +135,13 @@ class DebugpyClient(traitlets.HasTraits):
         return bool(self._socketstream)
 
     async def _send_request(self, request: dict):
-        if not (socketstream := self._socketstream):
-            msg = "socketstream not connected"
-            raise RuntimeError(msg)
-        content = self._pack(request)
-        content_length = str(len(content)).encode()
-        buf = self.HEADER + content_length + self.SEPARATOR
-        buf += content
-        self.log.debug("DEBUGPYCLIENT: request %s", buf)
-        await socketstream.send(buf)
+        if socketstream := self._socketstream:
+            content = self._pack(request)
+            content_length = str(len(content)).encode()
+            buf = self.HEADER + content_length + self.SEPARATOR
+            buf += content
+            self.log.debug("DEBUGPYCLIENT: request %s", buf)
+            await socketstream.send(buf)
 
     async def _wait_for_response(self, request: dict):
         self._pending_responses[request["seq"]] = pending = PendingResult()
@@ -157,16 +155,12 @@ class DebugpyClient(traitlets.HasTraits):
             for buf in data[1:]:
                 size, raw_msg = buf.split(self.SEPARATOR, maxsplit=1)
                 size = int(size)
-                if len(raw_msg) >= size:
-                    msg: dict[str, t.Any] = self._unpack(raw_msg[:size])
-                    self.log.debug("_put_message :%s %s", msg["type"], msg)
-                    if msg["type"] == "event":
-                        self.event_callback(msg)
-                    elif pending_result := self._pending_responses.pop(msg["request_seq"], None):
-                        pending_result.set_result(msg)
-                else:
-                    self.tcp_buffer = self.HEADER + buf
-                    return
+                msg: dict[str, t.Any] = self._unpack(raw_msg[:size])
+                self.log.debug("_put_message :%s %s", msg["type"], msg)
+                if msg["type"] == "event":
+                    self.event_callback(msg)
+                elif pending_result := self._pending_responses.pop(msg["request_seq"], None):
+                    pending_result.set_result(msg)
             self.tcp_buffer = b""
 
     def get_host_port(self):
@@ -219,31 +213,9 @@ class Debugger(traitlets.HasTraits):
     variable_explorer = traitlets.Instance(VariableExplorer, ())
     debugpy_client = traitlets.Instance(DebugpyClient)
     log = traitlets.Instance(logging.LoggerAdapter)
-    kernel: Kernel
+    kernel: traitlets.Instance[Kernel] = traitlets.Instance("async_kernel.Kernel", ())
     taskgroup: TaskGroup
     init_event = traitlets.Instance(anyio.Event, ())
-    _forbidden_names = (
-        "__name__",
-        "__doc__",
-        "__package__",
-        "__loader__",
-        "__spec__",
-        "__annotations__",
-        "__builtins__",
-        "__builtin__",
-        "__display__",
-        "get_ipython",
-        "debugpy",
-        "exit",
-        "quit",
-        "In",
-        "Out",
-        "_oh",
-        "_dh",
-        "_",
-        "__",
-        "___",
-    )
 
     @traitlets.default("log")
     def _default_log(self):
@@ -270,6 +242,7 @@ class Debugger(traitlets.HasTraits):
             "richInspectVariables": self.do_rich_inspect_variables,
             "modules": self.do_modules,
         }
+        self._forbidden_names = tuple(self.kernel.shell.user_ns)
 
     async def start(self, kernel: Kernel, *, task_status: TaskStatus):
         # To be called by `kernel.start_in_context`.
