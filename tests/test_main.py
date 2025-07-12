@@ -13,6 +13,7 @@ import pytest
 import async_kernel.__main__ as main
 from async_kernel import Kernel
 from async_kernel.kernelspec import KernelName
+from tests import utils
 
 
 @pytest.fixture
@@ -115,3 +116,19 @@ def test_kernel_start(kernel_name: KernelName):
 async def test_subprocess_kernels_client(subprocess_kernels_client):
     # Start & Stop a kernel
     return
+
+
+async def test_start_kernel_in_context(anyio_backend):
+    utils.clear_kernel()
+    try:
+        async with Kernel().start_in_context() as kernel:
+            connection_file = kernel.connection_file
+            with pytest.raises(RuntimeError, match="Already started"):
+                async with kernel.start_in_context():
+                    pass
+        utils.clear_kernel()
+        async with Kernel(connection_file=connection_file).start_in_context():
+            # Test we can re-enter the kernel.
+            pass
+    finally:
+        utils.clear_kernel()

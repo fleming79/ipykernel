@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 import anyio
 from jupyter_client.asynchronous.client import AsyncKernelClient
 
+import async_kernel.asyncshell
 import async_kernel.utils
 from tests.references import RMessage, references
 
@@ -27,6 +28,13 @@ class ExecuteContentType(TypedDict):
     user_expressions: NotRequired[dict[str, str]]
     allow_stdin: NotRequired[bool]
     stop_on_error: NotRequired[bool]
+
+def clear_kernel():
+    "Clear the kernel so it can be started fresh."
+    if kernel:= async_kernel.Kernel._instance:
+        kernel.stop()
+    async_kernel.Kernel._instance = None
+    async_kernel.asyncshell.AsyncInteractiveShell.clear_instance()
 
 
 async def get_reply(

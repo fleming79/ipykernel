@@ -44,6 +44,7 @@ def transport():
 @pytest.fixture(scope="module")
 async def kernel(anyio_backend, transport: str, tmp_path_factory):
     # Set a blank connection_file
+    utils.clear_kernel()
     connection_file = tmp_path_factory.mktemp("async_kernel") / "temp_connection.json"
     os.environ["IPYTHONDIR"] = str(tmp_path_factory.mktemp("ipython_config"))
     kernel = Kernel()
@@ -53,8 +54,7 @@ async def kernel(anyio_backend, transport: str, tmp_path_factory):
         async with kernel.start_in_context():
             yield kernel
     finally:
-        kernel.shell.clear_instance()
-        Kernel._instance = None
+        utils.clear_kernel()
 
 
 @pytest.fixture(scope="module")
