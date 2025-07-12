@@ -120,18 +120,20 @@ async def test_stop_on_breakpoint(client):
         msg = await client.get_iopub_msg(timeout=5)
     assert msg["content"]["body"]["reason"] == "breakpoint"
     assert msg["content"]["body"]["allThreadsStopped"]
-
+    # stackTrace
     reply = await send_debug_request(client, "stackTrace", {"threadId": 1})
     stacks = reply["body"]["stackFrames"]
-
+    # scopes
     reply = await send_debug_request(client, "scopes", {"frameId": stacks[0]["id"]})
     scopes = reply["body"]["scopes"]
-
+    # variables
     reply = await send_debug_request(
         client=client,
         command="variables",
         arguments={"variablesReference": next(filter(lambda s: s["name"] == "Locals", scopes))["variablesReference"]},
     )
+    locals_ = reply["body"]["variables"]
+    # evaluate
     reply = await send_debug_request(
         client=client,
         command="evaluate",
@@ -139,10 +141,18 @@ async def test_stop_on_breakpoint(client):
     )
     assert reply["success"]
     assert reply["body"]["result"] == ""
-    print("THE REPLY", reply)
+    # copyToGlobals
     reply = await send_debug_request(
         client=client,
         command="copyToGlobals",
         arguments={"dstVariableName": "a_copy", "srcVariableName": "a", "srcFrameId": stacks[0]["id"]},
     )
     assert reply["success"]
+    # richInspectVariables
+    reply = await send_debug_request(
+        client=client,
+        command="richInspectVariables",
+        arguments={"variableName": locals_[0]["name"], "frameId": stacks[0]["id"]},
+    )
+    assert reply["success"]
+    assert set(reply["body"]) == {"metadata", "data"}

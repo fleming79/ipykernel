@@ -20,6 +20,8 @@ async def test_comm(kernel) -> None:
         msgs.append(msg)
 
     c.publish_msg("foo")
+    kernel.comm_manager.kernel = None
+    c.publish_msg("foo")
     c.open({})
     c.on_msg(on_message)
     c.on_close(on_close)
@@ -33,6 +35,8 @@ async def test_comm(kernel) -> None:
 async def test_comm_manager(kernel) -> None:
     manager = kernel.comm_manager
     msgs = []
+
+    assert CommManager() is manager
 
     def foo(comm, msg):
         msgs.append(msg)

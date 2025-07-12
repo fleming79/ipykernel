@@ -205,12 +205,13 @@ async def test_interrupt_request(client, kernel):
     assert event.is_set()
 
 
-async def test_user_exit(client, kernel, mocker):
+@pytest.mark.parametrize("response", ["y", ""])
+async def test_user_exit(client, kernel, mocker, response: Literal["y", ""]):
     stop = mocker.patch.object(kernel, "stop")
-    raw_input = mocker.patch.object(kernel, "raw_input", return_value="y")
+    raw_input = mocker.patch.object(kernel, "raw_input", return_value=response)
     await utils.execute(client, "quit()")
     assert raw_input.call_count == 1
-    assert stop.call_count == 1
+    assert stop.call_count == (1 if response == "y" else 0)
     kernel.exit_now = False
 
 
