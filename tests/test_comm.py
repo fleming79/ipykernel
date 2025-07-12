@@ -3,14 +3,7 @@
 
 import unittest.mock
 
-import pytest
-
 from async_kernel.comm import Comm, CommManager
-
-
-@pytest.fixture(scope="module", params=["asyncio", "trio"])
-def anyio_backend(request):
-    return request.param
 
 
 async def test_comm(kernel) -> None:
@@ -91,6 +84,11 @@ async def test_comm_manager(kernel) -> None:
     manager.register_comm(comm)
     assert manager.get_comm(comm.comm_id) == comm
     msg = {"content": {"comm_id": comm.comm_id}}
+    manager.kernel = None
+    assert comm.kernel is None
+    manager.kernel = kernel
+    assert comm.kernel is kernel
+
     manager.comm_close(None, None, msg)
     assert len(msgs) == 3
 

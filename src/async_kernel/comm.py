@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import Self
+
 import comm
 import traitlets
 from comm.base_comm import BaseComm, BuffersType, MaybeDict
@@ -69,7 +71,7 @@ class Comm(BaseComm):
 
 
 class CommManager(comm.base_comm.CommManager, traitlets.HasTraits):
-    """A comm manager for Kernel.
+    """A comm manager for Kernel (singleton).
 
     When `kernel` is set the `kernel` on all existing `Comm` instances is also set.
     Notes:
@@ -77,9 +79,16 @@ class CommManager(comm.base_comm.CommManager, traitlets.HasTraits):
     - `kernel` is set by the kerenel once the sockets are opened.
     """
 
+    _instance = None
     kernel: traitlets.Instance[Kernel | None] = traitlets.Instance(Kernel, allow_none=True)  # type: ignore[assignment]
     comms: traitlets.Dict[str, BaseComm] = traitlets.Dict()  # type: ignore[assignment]
     targets: traitlets.Dict[str, comm.base_comm.CommTargetCallback] = traitlets.Dict()  # type: ignore[assignment]
+
+    def __new__(cls) -> Self:
+        if cls._instance:
+            return cls._instance
+        cls._instance = super().__new__(cls)
+        return cls._instance
 
     @traitlets.observe("kernel")
     def _observe_kernel(self, change: dict):
