@@ -43,8 +43,7 @@ from async_kernel.debugger import Debugger
 from async_kernel.kernelspec import KernelName
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from types import CoroutineType, FrameType
+    from types import FrameType
 
     from anyio.abc import TaskGroup, TaskStatus
     from IPython.core.interactiveshell import ExecutionResult
@@ -670,25 +669,15 @@ class Kernel(ConnectionFileMixin):
                         traceback=traceback.format_stack(),
                     )
 
-
     def _topic(self, topic):
         """prefixed topic for IOPub messages"""
         return (f"kernel.{topic}").encode()
 
     def _input_request(self, prompt, *, password=False):
-        # Flush output before making the request.
-        if threading.current_thread() is not threading.main_thread():
-            msg = "Input request is only allowed from the main thread (eg: not from the control thread)."
-            raise RuntimeError(msg)
-        # flush the stdin socket, to purge stale replies
+        # Clear messages on the stdin socket
         socket = self._sockets[SocketID.stdin]
-        while True:
-            try:
-                socket.recv_multipart(zmq.NOBLOCK)
-            except zmq.ZMQError as e:
-                if e.errno == zmq.EAGAIN:
-                    break
-                raise
+        while socket.get(SocketOption.EVENTS) & PollEvent.POLLIN:  # type: ignore[call-arg]
+            socket.recv_multipart(flags=Flag.DONTWAIT, copy=False)
         # Send the input request.
         assert self is not None
         self.session.send(
@@ -699,35 +688,17 @@ class Kernel(ConnectionFileMixin):
             ident=self._job["ident"],
         )
         # Await a response.
-        while True:
+        while not (socket.poll(100) & PollEvent.POLLIN):
             if self._last_interrupt_frame:
                 # Input request
                 raise KernelInterruptError
-            try:
-                # Use polling with select() so KeyboardInterrupts can get
-                # through; doing a blocking recv() means stdin reads are
-                # uninterruptible on Windows. We need a timeout because
-                # zmq.select() is also uninterruptible, but at least this
-                # way reads get noticed immediately and KeyboardInterrupts
-                # get noticed fairly quickly by human response time standards.
-                rlist, _, xlist = zmq.select([socket], [], [socket], 0.01)
-                if rlist or xlist:
-                    ident, reply = self.session.recv(socket)
-                    if (ident, reply) != (None, None):
-                        break
-            except KernelInterruptError:
-                raise
-            except Exception:
-                self.log.warning("Invalid Message:", exc_info=True)
-        try:
-            value = reply["content"]["value"]  # type:ignore[index]
-        except Exception:
-            self.log.exception("Bad input_reply: %s", self._job["parent"])
-            value = ""
-        if value == "\x04":
-            # EOF
-            raise EOFError
-        return value
+        _, reply = self.session.recv(socket)
+        if reply:
+            value = reply["content"]["value"]
+            if value == "\x04":
+                raise EOFError
+            return value
+        raise ValueError
 
     async def kernel_info_request(self, job: MsgRequest):
         """Handle a kernel info request."""

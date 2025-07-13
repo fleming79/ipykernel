@@ -69,8 +69,11 @@ async def test_simple_print(kernel, client, quiet: bool):
         kernel.quiet = True
 
 
+@pytest.mark.parametrize("test_mode", ["interrupt", "reply"])
 @pytest.mark.parametrize("mode", ["input", "password"])
-async def test_input(subprocess_kernels_client, mode: Literal["input", "password"]):
+async def test_input(
+    subprocess_kernels_client, mode: Literal["input", "password"], test_mode: Literal["interrupt", "reply"]
+):
     client = subprocess_kernels_client
     theprompt = "Enter a value >"
     match mode:
@@ -83,11 +86,16 @@ async def test_input(subprocess_kernels_client, mode: Literal["input", "password
     assert msg["header"]["msg_type"] == "input_request"
     content = msg["content"]
     assert content["prompt"] == theprompt
-    text = "some text"
-    client.input(text)
-    reply = await utils.get_reply(client, msg_id)
-    assert reply["content"]["status"] == "ok"
-    assert text in reply["content"]["user_expressions"]["response"]["data"]["text/plain"]
+    if test_mode == "interrupt":
+        await utils.send_control_message(client, "interrupt_request")
+        reply = await utils.get_reply(client, msg_id)
+        assert reply["content"]["status"] == "error"
+    else:
+        text = "some text"
+        client.input(text)
+        reply = await utils.get_reply(client, msg_id)
+        assert reply["content"]["status"] == "ok"
+        assert text in reply["content"]["user_expressions"]["response"]["data"]["text/plain"]
 
 
 async def test_save_history(client, tmp_path):
