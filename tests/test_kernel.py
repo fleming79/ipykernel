@@ -9,7 +9,6 @@ import threading
 import time
 from typing import Literal
 
-import anyio
 import pytest
 import zmq
 
@@ -70,26 +69,25 @@ async def test_simple_print(kernel, client, quiet: bool):
         kernel.quiet = True
 
 
-async def test_raw_input(client):
-    """test input"""
-
-    pytest.skip("Blocks forever")
-
-    input_f = "input"
-    theprompt = "prompt> "
-    code = f'print({input_f}("{theprompt}"))'
-    client.execute(code, allow_stdin=True)
-    await anyio.sleep(0.1)
+@pytest.mark.parametrize("mode", ["input", "password"])
+async def test_input(subprocess_kernels_client, mode: Literal["input", "password"]):
+    client = subprocess_kernels_client
+    theprompt = "Enter a value >"
+    match mode:
+        case "input":
+            code = f"response = input('{theprompt}')"
+        case "password":
+            code = f"import getpass;response = getpass.getpass('{theprompt}')"
+    msg_id = client.execute(code, allow_stdin=True, user_expressions={"response": "response"})
     msg = await client.get_stdin_msg()
     assert msg["header"]["msg_type"] == "input_request"
     content = msg["content"]
     assert content["prompt"] == theprompt
     text = "some text"
     client.input(text)
-    reply = await client.get_shell_msg()
+    reply = await utils.get_reply(client, msg_id)
     assert reply["content"]["status"] == "ok"
-    stdout, stderr = await utils.assemble_output(client)
-    assert stdout == text + "\n"
+    assert text in reply["content"]["user_expressions"]["response"]["data"]["text/plain"]
 
 
 async def test_save_history(client, tmp_path):
