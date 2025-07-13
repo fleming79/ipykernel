@@ -12,9 +12,10 @@ from async_kernel.iostream import OutStream
 
 def test_io_api():
     """Test that wrapped stdout has the same API as a normal TextIO object"""
-
+    output = ""
     def flusher(string: str):
-        "" + string  # type: ignore[operator]
+        nonlocal output
+        output += string  # type: ignore[operator]
 
     stream = OutStream("stdout", flusher)
 
@@ -34,6 +35,9 @@ def test_io_api():
         stream.tell()
     with pytest.raises(TypeError):
         stream.write(b" ")  # type: ignore[arg-type]
+    stream.writelines(("a", "b"))
+    assert output == "ab"
+    assert stream.writable() is True
 
 
 def test_io_isatty():

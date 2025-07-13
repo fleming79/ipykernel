@@ -58,7 +58,7 @@ class OutStream(TextIOBase):
         return len(string)
 
     def writelines(self, sequence):
-        """Write lines to the stream."""
+        """Write lines to the stream (separators are not added)."""
         self.write("".join(sequence))
 
     def writable(self):
