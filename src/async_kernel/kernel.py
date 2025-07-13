@@ -288,7 +288,7 @@ class Kernel(ConnectionFileMixin):
         if self._sockets:
             msg = "Already started"
             raise RuntimeError(msg)
-        if self.kernel_name is KernelName.asyncio_eager and sys.version_info >= (3, 12):
+        if sys.version_info >= (3, 12) and self.kernel_name is KernelName.asyncio_eager:
             loop = asyncio.get_running_loop()
             loop.set_task_factory(asyncio.eager_task_factory)
         if self.connection_file and Path(self.connection_file).exists():

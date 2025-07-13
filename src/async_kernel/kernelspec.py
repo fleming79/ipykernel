@@ -21,7 +21,8 @@ RESOURCES = Path(__file__).parent.joinpath("resources")
 class KernelName(enum.StrEnum):
     asyncio = "async"
     trio = "async-trio"
-    asyncio_eager = "async-eager"
+    if sys.version_info >= (3, 12):
+        asyncio_eager = "async-eager"
 
 
 def write_kernel_spec(
@@ -72,7 +73,7 @@ def make_argv(module_name="async_kernel", connection_file="{connection_file}", k
     return ["python", "-m", module_name, "-f", connection_file, "--kernel_name", str(KernelName(kernel_name))]
 
 
-def write_all_kernelspec(base: Path, *, module_name="async_kernel", kernel_names: tuple[KernelName, ...] = ()):
+def write_all_kernelspec(base: Path, *, module_name="async_kernel", kernel_names=tuple(KernelName)):
     """
     Writes Jupyter kernel specifications for the specified kernel names to the given base directory.
 
@@ -87,10 +88,6 @@ def write_all_kernelspec(base: Path, *, module_name="async_kernel", kernel_names
         - For each kernel name, removes any existing kernel spec directory at the destination.
         - Writes a new kernel spec using `write_kernel_spec`.
     """
-    if not kernel_names:
-        kernel_names = (KernelName.asyncio, KernelName.trio)
-        if sys.version_info >= (3, 12):
-            kernel_names = (*kernel_names, KernelName.asyncio_eager)
     for kernel_name in kernel_names:
         dest = base / kernel_name
         if dest.exists():
