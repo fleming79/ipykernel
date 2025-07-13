@@ -670,11 +670,6 @@ class Kernel(ConnectionFileMixin):
                         traceback=traceback.format_stack(),
                     )
 
-    async def _wrap_start_soon(self, func: Callable[..., CoroutineType], args: tuple):
-        try:
-            await func(*args)
-        except Exception as e:
-            self.log.exception("Coroutine execution failed", exc_info=e)
 
     def _topic(self, topic):
         """prefixed topic for IOPub messages"""
