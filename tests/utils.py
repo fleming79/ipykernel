@@ -29,9 +29,10 @@ class ExecuteContentType(TypedDict):
     allow_stdin: NotRequired[bool]
     stop_on_error: NotRequired[bool]
 
+
 def clear_kernel():
     "Clear the kernel so it can be started fresh."
-    if kernel:= async_kernel.Kernel._instance:
+    if kernel := async_kernel.Kernel._instance:
         kernel.stop()
     async_kernel.Kernel._instance = None
     async_kernel.asyncshell.AsyncInteractiveShell.clear_instance()
