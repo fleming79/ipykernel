@@ -48,12 +48,15 @@ async def send_debug_request(client: AsyncKernelClient, command: str, arguments:
 
     It does not check if the request was successful.
     """
+
+    send_debug_request._seq = seq = getattr(send_debug_request, "_seq", 0) + 1  # type: ignore[assignment]
+    # DAP Ref: https://microsoft.github.io/debug-adapter-protocol/specification
     reply = await utils.send_control_message(
         client,
         "debug_request",
         {
             "type": "request",
-            "seq": 1,
+            "seq": seq,
             "command": command,
             "arguments": arguments or {},
         },
@@ -85,7 +88,10 @@ async def test_debug_disconnect_initialize(client):
 
 
 async def test_set_breakpoints(client):
-    code = """def f(a, b):
+    code = """
+my_variable = 'has a value'
+
+def f(a, b):
     c = a + b
     return c
 
@@ -93,11 +99,12 @@ f(2, 3)"""
 
     reply = await send_debug_request(client, "dumpCell", {"code": code})
     source = reply["body"]["sourcePath"]
+    line = 4
     reply = await send_debug_request(
         client=client,
         command="setBreakpoints",
         arguments={
-            "breakpoints": [{"line": 2}],
+            "breakpoints": [{"line": line}],
             "source": {"path": source},
             "sourceModified": False,
         },
@@ -108,6 +115,7 @@ f(2, 3)"""
     assert reply["body"]["breakpoints"][0]["source"]["path"] == source
     reply = await send_debug_request(client, "debugInfo")
     assert source in reply["body"]["breakpoints"][0]["source"]
+    assert reply["body"]["breakpoints"][0]["breakpoints"][0]["line"] == line
     return code
 
 
@@ -120,8 +128,9 @@ async def test_stop_on_breakpoint(client):
         msg = await client.get_iopub_msg(timeout=5)
     assert msg["content"]["body"]["reason"] == "breakpoint"
     assert msg["content"]["body"]["allThreadsStopped"]
+    thread_id = msg["content"]["body"]["threadId"]
     # stackTrace
-    reply = await send_debug_request(client, "stackTrace", {"threadId": 1})
+    reply = await send_debug_request(client, "stackTrace", {"threadId": thread_id})
     stacks = reply["body"]["stackFrames"]
     # scopes
     reply = await send_debug_request(client, "scopes", {"frameId": stacks[0]["id"]})
@@ -132,20 +141,25 @@ async def test_stop_on_breakpoint(client):
         command="variables",
         arguments={"variablesReference": next(filter(lambda s: s["name"] == "Locals", scopes))["variablesReference"]},
     )
-    locals_ = reply["body"]["variables"]
     # evaluate
     reply = await send_debug_request(
         client=client,
         command="evaluate",
-        arguments={"expression": "'a' + 'b'", "context": "repl"},
+        arguments={"expression": "print(my_variable)", "context": "repl", "frameId": stacks[0]["id"]},
     )
     assert reply["success"]
-    assert reply["body"]["result"] == ""
+    # variables
+    reply = await send_debug_request(
+        client=client,
+        command="variables",
+        arguments={"variablesReference": next(filter(lambda s: s["name"] == "Locals", scopes))["variablesReference"]},
+    )
+    locals_ = reply["body"]["variables"]
     # copyToGlobals
     reply = await send_debug_request(
         client=client,
         command="copyToGlobals",
-        arguments={"dstVariableName": "a_copy", "srcVariableName": "a", "srcFrameId": stacks[0]["id"]},
+        arguments={"dstVariableName": "my_copy", "srcVariableName": "my_variable", "srcFrameId": stacks[0]["id"]},
     )
     assert reply["success"]
     # richInspectVariables
@@ -156,3 +170,5 @@ async def test_stop_on_breakpoint(client):
     )
     assert reply["success"]
     assert set(reply["body"]) == {"metadata", "data"}
+
+    await send_debug_request(client, "continue", {"threadId": thread_id})

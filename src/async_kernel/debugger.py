@@ -400,7 +400,7 @@ class Debugger(traitlets.HasTraits):
                 repr_data = result.get("data", {})
                 repr_metadata = result.get("metadata", {})
         else:
-            # The code has stopped on a breakpoint, we use the setExpression
+            # The code has stopped on a breakpoint, we use the evaluate
             # request to get the rich representation of the variable
             code = f"get_ipython().display_formatter.format({var_name})"
             frame_id = message["arguments"]["frameId"]
