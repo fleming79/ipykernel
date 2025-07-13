@@ -9,6 +9,7 @@ import threading
 import time
 from typing import Literal
 
+import anyio
 import pytest
 import zmq
 
@@ -209,6 +210,15 @@ async def test_interrupt_request(client, kernel):
     assert reply["header"]["msg_type"] == "interrupt_reply"
     assert reply["content"] == {"status": "ok"}
     assert event.is_set()
+
+async def test_interrupt_request_blocking(subprocess_kernels_client):
+    client = subprocess_kernels_client
+    msg_id = client.execute("import time;time.sleep(1000)")
+    await anyio.sleep(0.01)
+    reply = await utils.send_control_message(client, "interrupt_request")
+    reply = await utils.get_reply(client, msg_id)
+    assert reply["content"]["status"] == "error"
+    assert reply["content"]["ename"] == "KernelInterruptError"
 
 
 @pytest.mark.parametrize("response", ["y", ""])
