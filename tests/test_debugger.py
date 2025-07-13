@@ -154,7 +154,6 @@ async def test_stop_on_breakpoint(client):
         command="variables",
         arguments={"variablesReference": next(filter(lambda s: s["name"] == "Locals", scopes))["variablesReference"]},
     )
-    locals_ = reply["body"]["variables"]
     # copyToGlobals
     reply = await send_debug_request(
         client=client,
@@ -166,7 +165,7 @@ async def test_stop_on_breakpoint(client):
     reply = await send_debug_request(
         client=client,
         command="richInspectVariables",
-        arguments={"variableName": locals_[0]["name"], "frameId": stacks[0]["id"]},
+        arguments={"variableName": "my_variable", "frameId": stacks[0]["id"]},
     )
     assert reply["success"]
     assert set(reply["body"]) == {"metadata", "data"}

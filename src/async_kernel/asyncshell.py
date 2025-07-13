@@ -144,11 +144,11 @@ class AsyncInteractiveShell(InteractiveShell):
 
     def call_later(self, func: Callable[P, Any | Awaitable], delay=0.0, /, *args: P.args, **kwargs: P.kwargs):
         """Schedules a function or coroutine for execution in the current thread."""
-        utils.ThreadSafeCaller.get_instance().call_later(func, delay, *args, **kwargs)
+        return utils.ThreadSafeCaller.get_instance().call_later(func, delay, *args, **kwargs)
 
     def call_soon(self, func: Callable[P, Any | Awaitable], *args: P.args, **kwargs: P.kwargs):
         """Schedules a function or coroutine for execution in the current thread."""
-        utils.ThreadSafeCaller.get_instance().call_later(func, 0, *args, **kwargs)
+        return utils.ThreadSafeCaller.get_instance().call_soon(func, *args, **kwargs)
 
     @observe("exit_now")
     def _update_exit_now(self, change):

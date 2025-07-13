@@ -147,6 +147,9 @@ class ThreadSafeCaller:
             self._jobs.append((func, delay, args, kwargs))
             self._jobs_added.set()
 
+    def call_soon(self, func: Callable[P, Any | Awaitable], *args: P.args, **kwargs: P.kwargs):
+        return self.call_later(func, 0.0, *args, **kwargs)
+
     async def wrap_call(self, func: Callable[..., Any | Awaitable], delay: float, args: tuple, kwargs: dict):
         """Asynchronously calls the given function with provided arguments, awaiting the result if it is awaitable.
 

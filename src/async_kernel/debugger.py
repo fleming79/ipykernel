@@ -260,10 +260,14 @@ class Debugger(traitlets.HasTraits):
         self._seq = self._seq - 1
         return self._seq
 
+    @property
+    def call_soon(self):
+        return utils.ThreadSafeCaller.get_instance(self.kernel._control_thread).call_soon
+
     def _handle_event(self, msg):
         if msg["event"] == "stopped":
             if msg["body"]["allThreadsStopped"]:
-                self.taskgroup.start_soon(self.handle_stopped_event, msg)
+                self.call_soon(self.handle_stopped_event, msg)
                 return
             self.stopped_threads.add(msg["body"]["threadId"])
         elif msg["event"] == "continued":
@@ -566,6 +570,7 @@ class Debugger(traitlets.HasTraits):
     async def do_configuration_done(self, message):
         """Handle a configuration done message."""
         # This is only supposed to be called during initialize but can come at anytime. Ref: https://microsoft.github.io/debug-adapter-protocol/specification#Events_Initialized
+        # see : https://github.com/jupyterlab/jupyterlab/issues/17673
         return {
             "seq": message["seq"],
             "type": "response",
