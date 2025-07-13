@@ -171,3 +171,13 @@ async def test_stop_on_breakpoint(client):
     assert set(reply["body"]) == {"metadata", "data"}
 
     await send_debug_request(client, "continue", {"threadId": thread_id})
+
+    reply = await utils.get_reply(client, msg_id)
+    assert reply["content"]["status"] == "ok"
+    # variables
+    reply = await send_debug_request(
+        client=client,
+        command="richInspectVariables",
+        arguments={"variableName": "my_variable", "frameId": stacks[0]["id"]},
+    )
+    assert reply["success"]
