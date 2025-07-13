@@ -489,10 +489,10 @@ class Kernel(ConnectionFileMixin):
     def _bind_socket(self, socket_id: SocketID, socket: zmq.Socket):
         """Bind a zmq.Socket storing a reference to the socket and the port
         details and closing the socket on leaving the context."""
-        socket.linger = 500
         if socket_id in self._sockets:
             msg = f"{socket_id=} is already loaded"
             raise RuntimeError(msg)
+        socket.linger = 500
         port_name = f"{socket_id}_port"
         if socket_id is not SocketID.iopub:
             # ref: https://github.com/ipython/ipykernel/issues/270

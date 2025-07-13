@@ -1,10 +1,12 @@
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
+from __future__ import annotations
 
 import inspect
 import shutil
 import sys
 import types
+from typing import TYPE_CHECKING, cast
 from unittest import mock
 
 import anyio
@@ -12,8 +14,12 @@ import pytest
 
 import async_kernel.__main__ as main
 from async_kernel import Kernel
+from async_kernel.kernel import SocketID
 from async_kernel.kernelspec import KernelName
 from tests import utils
+
+if TYPE_CHECKING:
+    import zmq
 
 
 @pytest.fixture
@@ -123,9 +129,16 @@ async def test_start_kernel_in_context(anyio_backend):
     try:
         async with Kernel().start_in_context() as kernel:
             connection_file = kernel.connection_file
+            # Test prohibit nested async context.
             with pytest.raises(RuntimeError, match="Already started"):
                 async with kernel.start_in_context():
                     pass
+            # Test prevents binding socket more than once.
+            with (
+                pytest.raises(RuntimeError, match=".*is already loaded"),
+                kernel._bind_socket(SocketID.shell, cast("zmq.Socket", None)),
+            ):
+                pass
         utils.clear_kernel()
         async with Kernel(connection_file=connection_file).start_in_context():
             # Test we can re-enter the kernel.

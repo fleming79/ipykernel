@@ -6,7 +6,7 @@ from __future__ import annotations
 import sys
 
 # Version string must appear intact for hatch versioning
-__version__ = "0.1b0"
+__version__ = "0.1b1"
 
 kernel_protocol_version_info = (5, 4)
 kernel_protocol_version = "{}.{}".format(*kernel_protocol_version_info)
