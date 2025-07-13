@@ -465,9 +465,9 @@ class Kernel(ConnectionFileMixin):
                     task_status.started()
                     while True:
                         while socket.get(SocketOption.EVENTS) & PollEvent.POLLIN:  # type: ignore[call-arg]
-                            msg = socket.recv_multipart(flags=Flag.DONTWAIT, copy=False)
-                            ident, msg_ = self.session.feed_identities(msg, copy=False)
-                            parent: MsgType = self.session.deserialize(msg_, content=True, copy=False)  # type: ignore[assignment]
+                            ident, parent = self.session.recv(socket, copy=False)
+                            if not ident or not parent:
+                                continue
                             msg_type = parent["header"]["msg_type"]
                             self.log.debug(
                                 "*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, parent["content"]
