@@ -181,3 +181,7 @@ class TestThreadSafeCaller:
             pending = tsc.call_later(anyio.sleep, 0.1, 0.1)
             with pytest.raises(RuntimeError):
                 pending.wait_sync()
+
+    async def test_not_available_for_thread(self):
+        with pytest.raises(RuntimeError):
+            ThreadSafeCaller.get_instance(threading.Thread())
