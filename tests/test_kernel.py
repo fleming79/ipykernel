@@ -273,14 +273,34 @@ async def test_interrupt_request(client, kernel):
     assert event.is_set()
 
 
-async def test_interrupt_request_blocking(subprocess_kernels_client):
+@pytest.mark.parametrize("mode", ["interrupt task", "interrupt execute_request"])
+async def test_interrupt_request_blocking(subprocess_kernels_client, mode: str):
+    if mode == "interrupt execute_request":
+        code = "import time;time.sleep(5)"
+    else:
+        code = """
+def test():
+    import time
+    try:
+        time.sleep(5)
+    except KernelInterruptError:
+        print("KernelInterruptError")
+    print("Failed")
+call_soon(test)
+"""
     client = subprocess_kernels_client
-    msg_id = client.execute("import time;time.sleep(1000)")
-    await anyio.sleep(0.01)
+    msg_id = client.execute(code)
+    await anyio.sleep(0.1)
     reply = await utils.send_control_message(client, "interrupt_request")
-    reply = await utils.get_reply(client, msg_id)
-    assert reply["content"]["status"] == "error"
-    assert reply["content"]["ename"] == "KernelInterruptError"
+    if mode == "interrupt execute_request":
+        reply = await utils.get_reply(client, msg_id)
+        assert reply["content"]["status"] == "error"
+        assert reply["content"]["ename"] == "KernelInterruptError"
+    else:
+        # Blocking calls in tasks need to be interrupted twice
+        reply = await utils.send_control_message(client, "interrupt_request")
+        stdout, _ = await utils.assemble_output(client, timeout=5)
+        assert "KernelInterruptError" in stdout
 
 
 @pytest.mark.parametrize("response", ["y", ""])

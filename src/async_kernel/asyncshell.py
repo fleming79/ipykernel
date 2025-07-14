@@ -169,7 +169,13 @@ class AsyncInteractiveShell(InteractiveShell):
     @override
     def init_user_ns(self):
         super().init_user_ns()
-        self.user_ns.update({"call_later": self.call_later, "call_soon": self.call_soon})
+        self.user_ns.update(
+            {
+                "call_later": self.call_later,
+                "call_soon": self.call_soon,
+                "KernelInterruptError": async_kernel.KernelInterruptError,
+            }
+        )
 
     @override
     async def run_cell_async(
