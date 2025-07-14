@@ -302,7 +302,7 @@ class Kernel(ConnectionFileMixin):
                     await tg.start(self._start_control_loop)
                     await tg.start(self._start_shell_loop)
                     assert len(self._sockets) == len(SocketID)
-                    time.sleep(0.5)  # sleep to give internal iopub sockets time to connect.
+                    # time.sleep(0.5)  # sleep to give internal iopub sockets time to connect.
                     if not self.connection_file:
                         self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{uuid.uuid4()}.json"))
                     self.write_connection_file()
@@ -397,7 +397,6 @@ class Kernel(ConnectionFileMixin):
         ready_event.wait(10)
         control_thread.name = "Control"
         self._control_thread = control_thread
-        await anyio.to_thread.run_sync(ready_event.wait, 10)
         task_status.started()
 
     async def _start_shell_loop(self, task_status: TaskStatus):
