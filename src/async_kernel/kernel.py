@@ -133,6 +133,7 @@ class Kernel(ConnectionFileMixin):
     _iopub_sockets: traitlets.Dict[threading.Thread, zmq.Socket] = traitlets.Dict()
     _interrupting = traitlets.Instance(threading.Event, ())
     debugger = Instance(Debugger, ())
+    anyio_backend = traitlets.Enum(anyio.get_all_backends())
 
     quiet = traitlets.Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
     outstream_class = traitlets.DottedObjectName(
@@ -288,6 +289,7 @@ class Kernel(ConnectionFileMixin):
         if self._sockets:
             msg = "Already started"
             raise RuntimeError(msg)
+        self.anyio_backend = sniffio.current_async_library()
         if sys.version_info >= (3, 12) and self.kernel_name is KernelName.asyncio_eager:
             loop = asyncio.get_running_loop()
             loop.set_task_factory(asyncio.eager_task_factory)
@@ -389,7 +391,7 @@ class Kernel(ConnectionFileMixin):
                     await tg.start(self._receive_msg_loop, SocketID.control)
                     ready_event.set()
 
-            anyio.run(run_control_loop)
+            anyio.run(run_control_loop, backend=self.anyio_backend)
 
         ready_event = threading.Event()
         control_thread = threading.Thread(target=control, daemon=True)
