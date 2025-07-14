@@ -271,7 +271,7 @@ class Debugger(traitlets.HasTraits):
                         for thread in rep["body"]["threads"]:
                             if thread["name"] not in ["IPythonHistorySavingThread"]:
                                 self.stopped_threads.add(thread["id"])
-                            self._publish_event(event)
+                        self._publish_event(event)
                     except Exception:
                         pass
 
@@ -360,7 +360,7 @@ class Debugger(traitlets.HasTraits):
                 "tmpFilePrefix": compiler.tmp_file_prefix,
                 "tmpFileSuffix": compiler.tmp_file_suffix,
                 "breakpoints": breakpoint_list,
-                "stoppedThreads": list(self.stopped_threads),
+                "stoppedThreads": sorted(self.stopped_threads),
                 "richRendering": True,
                 "exceptionPaths": ["Python Exceptions"],
                 "copyToGlobals": True,

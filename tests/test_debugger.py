@@ -85,6 +85,7 @@ async def test_debug_disconnect_initialize(client):
     )
     # Attach
     await send_debug_request(client, "attach")
+    await send_debug_request(client, "configurationDone")  # An invalid call to absorb.
 
 
 async def test_set_breakpoints(client):

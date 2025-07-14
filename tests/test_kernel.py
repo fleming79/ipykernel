@@ -14,6 +14,7 @@ import anyio
 import pytest
 import zmq
 
+import async_kernel.utils
 from async_kernel.comm import Comm
 from async_kernel.kernel import SocketID
 from tests import utils
@@ -326,9 +327,12 @@ async def test_is_complete_request(client):
 
 
 @pytest.mark.parametrize("command", ["debugInfo", "inspectVariables", "modules", "dumpCell", "source"])
-async def test_debug_static(kernel, client, command: str):
+async def test_debug_static(kernel, client, command: str, mocker):
     # These are tests on the debugger that don't required the debugger to be connected.
     code = "my_variable=123"
+    if command == "debugInfo":
+        mocker.patch.object(async_kernel.utils, "LAUNCHED_BY_DEBUGPY", new=True)
+        assert async_kernel.utils.LAUNCHED_BY_DEBUGPY
     reply = await utils.send_control_message(
         client, "debug_request", {"type": "request", "seq": 1, "command": command, "arguments": {"code": code}}
     )
@@ -343,11 +347,13 @@ async def test_debug_static(kernel, client, command: str):
         assert reply["content"]["status"] == "ok"
         assert reply["content"]["body"] == {"content": code}
 
-async def test_debug_not_connected(client):
+async def test_debug_not_connected(kernel, client):
     reply = await utils.send_control_message(
         client, "debug_request", {"type": "request", "seq": 1, "command": "disconnect", "arguments": {}}
     )
     assert reply["content"]["status"] == "ok"
+    with pytest.raises(RuntimeError, match=".*not available until debugpy is listening"):
+        kernel.debugger.debugpy_client.get_host_port()
 
 @pytest.mark.parametrize("variable_name", ["my_variable", "invalid variable name", "special variables"])
 async def test_debug_static_richInspectVariables(kernel, client, variable_name):
