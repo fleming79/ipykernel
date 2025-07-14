@@ -10,6 +10,11 @@ import pytest
 from async_kernel.utils import PendingResult, ThreadSafeCaller
 
 
+@pytest.fixture(scope="module", params=["asyncio", "trio"])
+def anyio_backend(request):
+    return request.param
+
+
 @pytest.mark.anyio
 class TestThreadSafeCaller:
     async def test_sync(self):
