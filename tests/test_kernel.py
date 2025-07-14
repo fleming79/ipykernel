@@ -343,6 +343,11 @@ async def test_debug_static(kernel, client, command: str):
         assert reply["content"]["status"] == "ok"
         assert reply["content"]["body"] == {"content": code}
 
+async def test_debug_not_connected(client):
+    reply = await utils.send_control_message(
+        client, "debug_request", {"type": "request", "seq": 1, "command": "disconnect", "arguments": {}}
+    )
+    assert reply["content"]["status"] == "ok"
 
 @pytest.mark.parametrize("variable_name", ["my_variable", "invalid variable name", "special variables"])
 async def test_debug_static_richInspectVariables(kernel, client, variable_name):
