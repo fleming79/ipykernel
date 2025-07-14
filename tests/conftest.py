@@ -23,7 +23,7 @@ if sys.platform.startswith("win"):
 
     # needed for `jupyter_client.AsyncKernelClient` messaging only
     # ref: https://github.com/zeromq/pyzmq/issues/1423
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
 
 
 @pytest.hookimpl
