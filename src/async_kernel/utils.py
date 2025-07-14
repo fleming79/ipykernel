@@ -115,15 +115,15 @@ class ThreadSafeCaller:
         self._jobs = deque()
         self._jobs_added = threading.Event()
         async with contextlib.AsyncExitStack() as stack:
-            self.tg = await stack.enter_async_context(anyio.create_task_group())
-            await self.tg.start(self._server_loop)
+            self.taskgroup = await stack.enter_async_context(anyio.create_task_group())
+            await self.taskgroup.start(self._server_loop)
             self.__stack = stack.pop_all()
         return self
 
     async def __aexit__(self, exc_type, exc_value, exc_tb):
         self._instances.discard(self)
         if self.__stack is not None:
-            self.tg.cancel_scope.cancel()
+            self.taskgroup.cancel_scope.cancel()
             self._jobs_added.set()
             await self.__stack.__aexit__(exc_type, exc_value, exc_tb)
 
@@ -136,7 +136,7 @@ class ThreadSafeCaller:
         task_status.started()
         while True:
             while len(self._jobs):
-                self.tg.start_soon(self._wrap_call, *self._jobs.popleft())
+                self.taskgroup.start_soon(self._wrap_call, *self._jobs.popleft())
                 self._jobs_added.clear()
 
             await anyio.to_thread.run_sync(wait_threading_event)
@@ -147,7 +147,7 @@ class ThreadSafeCaller:
         """Schedules a function or coroutine for execution."""
         pending = PendingResult(setting_thread=self.thread)
         if threading.current_thread() is self.thread:
-            self.tg.start_soon(self._wrap_call, pending, func, delay, args, kwargs)
+            self.taskgroup.start_soon(self._wrap_call, pending, func, delay, args, kwargs)
         else:
             self._jobs.append((pending, func, delay, args, kwargs))
             self._jobs_added.set()
