@@ -28,6 +28,7 @@ __all__ = ["PendingResult", "ThreadSafeCaller", "bind_socket", "do_not_debug_thi
 
 LAUNCHED_BY_DEBUGPY = "debugpy" in sys.modules
 
+
 P = ParamSpec("P")
 T = TypeVar("T")
 
@@ -120,6 +121,7 @@ class ThreadSafeCaller:
         return self
 
     async def __aexit__(self, exc_type, exc_value, exc_tb):
+        self._instances.discard(self)
         if self.__stack is not None:
             self.tg.cancel_scope.cancel()
             self._jobs_added.set()
@@ -134,37 +136,40 @@ class ThreadSafeCaller:
         task_status.started()
         while True:
             while len(self._jobs):
-                self.tg.start_soon(self.wrap_call, *self._jobs.popleft())
+                self.tg.start_soon(self._wrap_call, *self._jobs.popleft())
                 self._jobs_added.clear()
 
             await anyio.to_thread.run_sync(wait_threading_event)
 
-    def call_later(self, func: Callable[P, Any | Awaitable], delay=0.0, /, *args: P.args, **kwargs: P.kwargs):
-        """Schedules a function or coroutine for execution in the thread that owns it."""
+    def call_later(
+        self, func: Callable[P, T | Awaitable[T]], delay=0.0, /, *args: P.args, **kwargs: P.kwargs
+    ) -> PendingResult[T]:
+        """Schedules a function or coroutine for execution."""
+        pending = PendingResult(setting_thread=self.thread)
         if threading.current_thread() is self.thread:
-            self.tg.start_soon(self.wrap_call, func, delay, args, kwargs)
+            self.tg.start_soon(self._wrap_call, pending, func, delay, args, kwargs)
         else:
-            self._jobs.append((func, delay, args, kwargs))
+            self._jobs.append((pending, func, delay, args, kwargs))
             self._jobs_added.set()
+        return pending
 
-    def call_soon(self, func: Callable[P, Any | Awaitable], *args: P.args, **kwargs: P.kwargs):
+    def call_soon(self, func: Callable[P, T | Awaitable[T]], *args: P.args, **kwargs: P.kwargs) -> PendingResult[T]:
+        "Calls call_later with delay=0.0."
         return self.call_later(func, 0.0, *args, **kwargs)
 
-    async def wrap_call(self, func: Callable[..., Any | Awaitable], delay: float, args: tuple, kwargs: dict):
-        """Asynchronously calls the given function with provided arguments, awaiting the result if it is awaitable.
-
-        **Not intended to be called directly.**
-
-        Overwrite this method as required.
-        """
+    async def _wrap_call(
+        self, pending: PendingResult, func: Callable[..., Any | Awaitable], delay: float, args: tuple, kwargs: dict
+    ):
         try:
             if delay:
                 await anyio.sleep(float(delay))
             result = func(*args, **kwargs) if callable(func) else func
             while inspect.isawaitable(result):
                 result = await result
+            pending.set_result(result)
         except Exception as e:
             self.log.exception("Exception occurred while running %s", func, exc_info=e)
+            pending.set_exception(e)
 
     @classmethod
     def get_instance(cls, thread: None | threading.Thread = None) -> Self:
@@ -177,28 +182,62 @@ class ThreadSafeCaller:
 
 
 class PendingResult(Generic[T]):
-    """An anyio compatible synchronization primitive for awaiting a result."""
+    """An anyio compatible synchronization primitive for awaiting a result.
 
-    __slots__ = ["_event_done", "_exception", "result"]
+    setting_thread: The thread where the result must be set. Defaults to the current thread.
+    """
 
-    def __init__(self) -> None:
+    __slots__ = ["_anyio_event_done", "_event_done", "_exception", "_setting_thread", "result"]
+
+    def __init__(self, setting_thread: threading.Thread | None = None) -> None:
+        self._event_done = threading.Event()
         self._exception = None
-        self._event_done = anyio.Event()
+        self._anyio_event_done = None
+        self._setting_thread = setting_thread or threading.current_thread()
 
     async def wait(self) -> T:
-        await self._event_done.wait()
+        "Wait for the result (thread-safe)."
+        if not self._event_done.is_set():
+            if threading.current_thread() is self._setting_thread:
+                if not self._anyio_event_done:
+                    self._anyio_event_done = anyio.Event()
+                await self._anyio_event_done.wait()
+            else:
+
+                def wait_event_done():
+                    with do_not_debug_this_thread():
+                        self._event_done.wait()
+
+                await anyio.to_thread.run_sync(wait_event_done)
+
+        if self._exception:
+            raise self._exception
+        return self.result
+
+    def wait_sync(self) -> T:
+        "Synchronously wait for the result."
+        if self._setting_thread is threading.current_thread():
+            raise RuntimeError
+        self._event_done.wait()
         if self._exception:
             raise self._exception
         return self.result
 
     def set_result(self, value):
-        if self._event_done.is_set():
+        if self._event_done.is_set() or self._setting_thread is not threading.current_thread():
             raise RuntimeError
         self.result = value
         self._event_done.set()
+        if self._anyio_event_done:
+            self._anyio_event_done.set()
 
     def set_exception(self, exception: Exception):
-        if self._event_done.is_set():
+        if self._event_done.is_set() or self._setting_thread is not threading.current_thread():
             raise RuntimeError
         self._exception = exception
         self._event_done.set()
+        if self._anyio_event_done:
+            self._anyio_event_done.set()
+
+    def done(self):
+        return self._event_done.is_set()
