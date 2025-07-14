@@ -260,25 +260,33 @@ class Debugger(traitlets.HasTraits):
         self._seq = self._seq - 1
         return self._seq
 
-    @property
-    def call_soon(self):
-        return utils.ThreadSafeCaller.get_instance(self.kernel._control_thread).call_soon
+    def _handle_event(self, event):
+        if event["event"] == "stopped":
+            if event["body"]["allThreadsStopped"]:
 
-    def _handle_event(self, msg):
-        if msg["event"] == "stopped":
-            if msg["body"]["allThreadsStopped"]:
-                self.call_soon(self.handle_stopped_event, msg)
+                async def _handle_stopped_event():
+                    try:
+                        req = {"seq": self.next_seq(), "type": "request", "command": "threads"}
+                        rep = await self._forward_message(req)
+                        for thread in rep["body"]["threads"]:
+                            if thread["name"] not in ["IPythonHistorySavingThread"]:
+                                self.stopped_threads.add(thread["id"])
+                            self._publish_event(event)
+                    except Exception:
+                        pass
+
+                self.taskgroup.start_soon(_handle_stopped_event)
                 return
-            self.stopped_threads.add(msg["body"]["threadId"])
-        elif msg["event"] == "continued":
-            if msg["body"]["allThreadsContinued"]:
+            self.stopped_threads.add(event["body"]["threadId"])
+        elif event["event"] == "continued":
+            if event["body"]["allThreadsContinued"]:
                 self.stopped_threads = set()
             else:
-                self.stopped_threads.remove(msg["body"]["threadId"])
-        elif msg["event"] == "initialized":
+                self.stopped_threads.remove(event["body"]["threadId"])
+        elif event["event"] == "initialized":
             self.init_event.set()
 
-        self._publish_event(msg)
+        self._publish_event(event)
 
     def _publish_event(self, event: dict):
         self.kernel.iopub_send(
@@ -297,15 +305,6 @@ class Debugger(traitlets.HasTraits):
             "command": request["command"],
             "body": {"variables": var_list},
         }
-
-    async def handle_stopped_event(self, event):
-        """Handle a stopped event."""
-        req = {"seq": self.next_seq(), "type": "request", "command": "threads"}
-        rep = await self._forward_message(req)
-        for thread in rep["body"]["threads"]:
-            if thread["name"] not in ["IPythonHistorySavingThread"]:
-                self.stopped_threads.add(thread["id"])
-            self._publish_event(event)
 
     def _accept_variable(self, variable_name):
         """Accept a variable by name."""
