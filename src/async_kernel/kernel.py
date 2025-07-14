@@ -674,7 +674,7 @@ class Kernel(ConnectionFileMixin):
         """prefixed topic for IOPub messages"""
         return (f"kernel.{topic}").encode()
 
-    def _input_request(self, prompt, *, password=False):
+    def _input_request(self, prompt: str, *, password=False):
         # Clear messages on the stdin socket
         socket = self._sockets[SocketID.stdin]
         while socket.get(SocketOption.EVENTS) & PollEvent.POLLIN:  # type: ignore[call-arg]
@@ -688,17 +688,13 @@ class Kernel(ConnectionFileMixin):
             parent=self._job["parent"],  # type: ignore[call-arg]
             ident=self._job["ident"],
         )
-        # Await a response.
+        # Poll for a reply.
         while not (socket.poll(100) & PollEvent.POLLIN):
             if self._last_interrupt_frame:
-                # Input request
                 raise KernelInterruptError
         _, reply = self.session.recv(socket)
         if reply:
-            value = reply["content"]["value"]
-            if value == "\x04":
-                raise EOFError
-            return value
+            return reply["content"]["value"]
         raise ValueError
 
     async def kernel_info_request(self, job: MsgRequest):
