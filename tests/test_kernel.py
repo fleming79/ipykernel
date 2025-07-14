@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Literal
+from typing import Literal, cast
 
 import anyio
 import pytest
 import zmq
 
+from async_kernel.comm import Comm
 from async_kernel.kernel import SocketID
 from tests import utils
 
@@ -202,6 +203,37 @@ async def test_comm_info_request(client):
     assert reply["header"]["msg_type"] == "comm_info_reply"
 
 
+async def test_comm_open_msg_close(client, kernel, mocker):
+    comm = None
+
+    def cb(comm_, msg):
+        nonlocal comm
+        comm = comm_
+
+    kernel.comm_manager.register_target("my target", cb)
+    # open a comm
+    with anyio.move_on_after(0.1):
+        await utils.send_shell_message(
+            client, "comm_open", {"content": {}, "comm_id": "comm id", "target_name": "my target"}
+        )
+    assert isinstance(comm, Comm)
+    comm = cast("Comm", comm)
+    reply = await utils.send_shell_message(client, "comm_info_request")
+    assert reply["header"]["msg_type"] == "comm_info_reply"
+    assert reply["content"]["comms"].get("comm id") == {"target_name": "my target"}
+
+    msg_received = mocker.patch.object(comm, "handle_msg")
+    with anyio.move_on_after(0.1):
+        await utils.send_shell_message(client, "comm_msg", {"comm_id": comm.comm_id})
+    assert msg_received.call_count == 1
+    # close comm
+    closed = mocker.patch.object(comm, "handle_close")
+    with anyio.move_on_after(0.1):
+        await utils.send_shell_message(client, "comm_close", {"comm_id": comm.comm_id})
+    assert closed.call_count == 1
+    kernel.comm_manager.unregister_target("my target", cb)
+
+
 async def test_interrupt_request(client, kernel):
     await utils.clear_pub_message(client)
     event = threading.Event()
@@ -210,6 +242,7 @@ async def test_interrupt_request(client, kernel):
     assert reply["header"]["msg_type"] == "interrupt_reply"
     assert reply["content"] == {"status": "ok"}
     assert event.is_set()
+
 
 async def test_interrupt_request_blocking(subprocess_kernels_client):
     client = subprocess_kernels_client
