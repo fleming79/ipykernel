@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Literal, cast
@@ -71,10 +72,12 @@ async def test_simple_print(kernel, client, quiet: bool):
         kernel.quiet = True
 
 
-@pytest.mark.parametrize("test_mode", ["interrupt", "reply"])
+@pytest.mark.parametrize("test_mode", ["interrupt", "reply", "allow_stdin=False"])
 @pytest.mark.parametrize("mode", ["input", "password"])
 async def test_input(
-    subprocess_kernels_client, mode: Literal["input", "password"], test_mode: Literal["interrupt", "reply"]
+    subprocess_kernels_client,
+    mode: Literal["input", "password"],
+    test_mode: Literal["interrupt", "reply", "allow_stdin=False"],
 ):
     client = subprocess_kernels_client
     theprompt = "Enter a value >"
@@ -83,21 +86,47 @@ async def test_input(
             code = f"response = input('{theprompt}')"
         case "password":
             code = f"import getpass;response = getpass.getpass('{theprompt}')"
+    # allow_stdin=False
+    if test_mode == "allow_stdin=False":
+        _, reply = await utils.execute(client, code, allow_stdin=False)
+        assert reply["status"] == "error"
+        assert reply["ename"] == "StdinNotImplementedError"
+        return
     msg_id = client.execute(code, allow_stdin=True, user_expressions={"response": "response"})
     msg = await client.get_stdin_msg()
     assert msg["header"]["msg_type"] == "input_request"
     content = msg["content"]
     assert content["prompt"] == theprompt
+    # interrupt
     if test_mode == "interrupt":
         await utils.send_control_message(client, "interrupt_request")
         reply = await utils.get_reply(client, msg_id)
         assert reply["content"]["status"] == "error"
-    else:
-        text = "some text"
-        client.input(text)
-        reply = await utils.get_reply(client, msg_id)
-        assert reply["content"]["status"] == "ok"
-        assert text in reply["content"]["user_expressions"]["response"]["data"]["text/plain"]
+        return
+    # reply
+    text = "some text"
+    client.input(text)
+    reply = await utils.get_reply(client, msg_id)
+    assert reply["content"]["status"] == "ok"
+    assert text in reply["content"]["user_expressions"]["response"]["data"]["text/plain"]
+
+
+async def test_unraisablehook(kernel, mocker):
+    handler = logging.Handler()
+    kernel.log.logger.addHandler(handler)
+
+    class Unraiseable:
+        def __init__(self) -> None:
+            self.exc_type = BaseException
+            self.exc_value = BaseException()
+            self.exc_traceback = None
+            self.err_msg = "my error message"
+            self.object = ""
+
+    emit = mocker.patch.object(handler, "emit")
+    kernel.unraisablehook(Unraiseable())
+    assert emit.call_count == 1
+    kernel.log.logger.removeHandler(handler)
 
 
 async def test_save_history(client, tmp_path):

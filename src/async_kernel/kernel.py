@@ -188,6 +188,7 @@ class Kernel(ConnectionFileMixin):
             "debug_request": self.debug_request,
         }
         sys.excepthook = self.excepthook
+        sys.unraisablehook = self.unraisablehook
         signal.signal(signal.SIGINT, self._signal_handler)
         if not os.environ.get("MPLBACKEND"):
             os.environ["MPLBACKEND"] = "module://matplotlib_inline.backend_inline"
@@ -989,6 +990,15 @@ class Kernel(ConnectionFileMixin):
         """Handle an exception."""
         # write uncaught traceback to 'real' stderr, not zmq-forwarder
         traceback.print_exception(etype, evalue, tb, file=sys.__stderr__)
+
+    def unraisablehook(self, unraisable: sys.UnraisableHookArgs, /):
+        "Handle unraisable exceptions (during gc for instance)."
+        exc_info = (
+            unraisable.exc_type,
+            unraisable.exc_value or unraisable.exc_type(unraisable.err_msg),
+            unraisable.exc_traceback,
+        )
+        self.log.exception(unraisable.err_msg, exc_info=exc_info, extra={"object": unraisable.object})
 
     def raw_input(self, prompt=""):
         """Forward raw_input to frontends.
