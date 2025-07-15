@@ -23,12 +23,29 @@ def anyio_backend(request):
 class TestPendingResult:
     async def test_set_and_wait_result(self):
         pr = PendingResult()
+        done_called = False
+
+        def callback(obj):
+            nonlocal done_called
+            assert obj is pr
+            done_called = True
+
+        pr._done_callbacks.add(callback)
         pr.set_result(42)
         result = await pr.wait()
         assert result == 42
+        assert done_called
 
     async def test_set_and_wait_exception(self):
         pr = PendingResult()
+        done_called = False
+
+        def callback(obj):
+            nonlocal done_called
+            assert obj is pr
+            done_called = True
+
+        pr._done_callbacks.add(callback)
         assert not pr.done()
         exc = ValueError("fail")
         pr.set_exception(exc)
@@ -36,6 +53,7 @@ class TestPendingResult:
             await pr.wait()
         assert e.value is exc
         assert pr.done()
+        assert done_called
 
     async def test_set_result_twice_raises(self):
         pr = PendingResult()
@@ -65,9 +83,9 @@ class TestPendingResult:
 @pytest.mark.anyio
 class TestThreadSafeCaller:
     async def test_sync(self):
-        async with ThreadSafeCaller() as ts_caller:
+        async with ThreadSafeCaller() as tsc:
             is_called = anyio.Event()
-            ts_caller.call_later(is_called.set)
+            tsc.call_later(is_called.set)
             await is_called.wait()
 
     @pytest.mark.parametrize("args_kwargs", [((), {}), ((1, 2, 3), {"a": 10})])
@@ -80,23 +98,23 @@ class TestThreadSafeCaller:
             is_called.set()
             return args, kwargs
 
-        async with ThreadSafeCaller() as ts_caller:
+        async with ThreadSafeCaller() as tsc:
             is_called = anyio.Event()
-            pr = ts_caller.call_later(my_func, 0, is_called, *args_kwargs[0], **args_kwargs[1])
+            pr = tsc.call_later(my_func, 0, is_called, *args_kwargs[0], **args_kwargs[1])
             await is_called.wait()
             assert val == args_kwargs
             assert (await pr.wait()) == args_kwargs
 
     async def test_to_thread(self):
         # Test the call works from another thread
-        async with ThreadSafeCaller() as ts_caller:
+        async with ThreadSafeCaller() as tsc:
 
             def _in_thread():
                 def my_func(*args, **kwargs):
                     return args, kwargs
 
                 async def runner():
-                    pr = ts_caller.call_soon(my_func, 1, 2, 3, a=10)
+                    pr = tsc.call_soon(my_func, 1, 2, 3, a=10)
                     result = await pr.wait()
                     assert result == ((1, 2, 3), {"a": 10})
 
@@ -106,18 +124,19 @@ class TestThreadSafeCaller:
 
     async def test_cancels_on_exit(self):
         is_cancelled = False
-        async with ThreadSafeCaller() as ts_caller:
+        async with ThreadSafeCaller() as tsc:
 
             async def my_test():
                 nonlocal is_cancelled
                 started.set()
+                exception_ = anyio.get_cancelled_exc_class()
                 try:
                     await anyio.sleep_forever()
-                except anyio.get_cancelled_exc_class():
+                except exception_:
                     is_cancelled = True
 
             started = anyio.Event()
-            ts_caller.call_later(my_test)
+            tsc.call_later(my_test)
             await started.wait()
         assert is_cancelled
 

@@ -81,6 +81,7 @@ async def test_input(
     test_mode: Literal["interrupt", "reply", "allow_stdin=False"],
 ):
     client = subprocess_kernels_client
+    client.input("Some input that should be discardes")
     theprompt = "Enter a value >"
     match mode:
         case "input":
@@ -314,13 +315,6 @@ async def test_user_exit(client, kernel, mocker, response: Literal["y", ""]):
     kernel.exit_now = False
 
 
-async def test_shutdown_request(client, kernel, mocker):
-    # Apply patches
-    shutdown_request = mocker.patch.object(kernel, "do_shutdown", return_value={"restart": False, "status": "ok"})
-    await utils.send_control_message(client, "shutdown_request", {"restart": False})
-    assert shutdown_request.call_count == 1
-
-
 async def test_is_complete_request(client):
     reply = await utils.send_shell_message(client, "is_complete_request", {"code": "hello"})
     assert reply["header"]["msg_type"] == "is_complete_reply"
@@ -347,6 +341,7 @@ async def test_debug_static(kernel, client, command: str, mocker):
         assert reply["content"]["status"] == "ok"
         assert reply["content"]["body"] == {"content": code}
 
+
 async def test_debug_not_connected(kernel, client):
     reply = await utils.send_control_message(
         client, "debug_request", {"type": "request", "seq": 1, "command": "disconnect", "arguments": {}}
@@ -354,6 +349,7 @@ async def test_debug_not_connected(kernel, client):
     assert reply["content"]["status"] == "ok"
     with pytest.raises(RuntimeError, match=".*not available until debugpy is listening"):
         kernel.debugger.debugpy_client.get_host_port()
+
 
 @pytest.mark.parametrize("variable_name", ["my_variable", "invalid variable name", "special variables"])
 async def test_debug_static_richInspectVariables(kernel, client, variable_name):

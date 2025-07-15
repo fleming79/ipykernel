@@ -272,6 +272,11 @@ class Kernel(ConnectionFileMixin):
             anyio.run(_start, backend="trio" if kernel.kernel_name is KernelName.trio else "asyncio")
         except KeyboardInterrupt:
             print("\nKernel stopped")
+        except kernel.cancelled_error_class as e:
+            if not kernel._stop_event.is_set():
+                e.add_note("Unexpected cancellation caused shutdown")
+                raise
+            return 0
         finally:
             pass
         return 0
@@ -289,6 +294,7 @@ class Kernel(ConnectionFileMixin):
         if self._sockets:
             msg = "Already started"
             raise RuntimeError(msg)
+        self.cancelled_error_class = anyio.get_cancelled_exc_class()
         self.anyio_backend = sniffio.current_async_library()
         if sys.version_info >= (3, 12) and self.kernel_name is KernelName.asyncio_eager:
             loop = asyncio.get_running_loop()
@@ -296,13 +302,15 @@ class Kernel(ConnectionFileMixin):
         if self.connection_file and Path(self.connection_file).exists():
             self.load_connection_file()
         try:
-            async with anyio.create_task_group() as tg:
+            async with utils.ThreadSafeCaller(log=self.log) as tsc:
+                self.main_thread_safe_caller, tg = tsc, tsc.taskgroup
                 try:
                     await tg.start(self._start_heartbeat)
                     await tg.start(self._start_stdin)
                     await tg.start(self._start_iopub_proxy)
                     await tg.start(self._start_control_loop)
-                    await tg.start(self._start_shell_loop)
+                    await tg.start(self._shell_execute_request_loop)
+                    await tg.start(self._receive_msg_loop, SocketID.shell)
                     assert len(self._sockets) == len(SocketID)
                     # time.sleep(0.5)  # sleep to give internal iopub sockets time to connect.
                     if not self.connection_file:
@@ -383,29 +391,15 @@ class Kernel(ConnectionFileMixin):
         task_status.started()
 
     async def _start_control_loop(self, task_status: TaskStatus):
-        def control():
-            async def run_control_loop():
-                # This code runs in a different thread having its own async event loop
-                async with anyio.create_task_group() as tg:
-                    await tg.start(self.debugger.start, self)
-                    await tg.start(self._receive_msg_loop, SocketID.control)
-                    ready_event.set()
+        async def run_in_control_event_loop():
+            await tsc.taskgroup.start(self._receive_msg_loop, SocketID.control)
+            ready_event.set()
 
-            anyio.run(run_control_loop, backend=self.anyio_backend)
-
+        self.control_threadsafe_caller = tsc = utils.new_event_loop(backend=self.anyio_backend, name="Control")
         ready_event = threading.Event()
-        control_thread = threading.Thread(target=control, daemon=True)
-        control_thread.start()
+        tsc.call_soon(run_in_control_event_loop)
         ready_event.wait(10)
-        control_thread.name = "Control"
-        self._control_thread = control_thread
         task_status.started()
-
-    async def _start_shell_loop(self, task_status: TaskStatus):
-        async with anyio.create_task_group() as tg:
-            await tg.start(self._shell_execute_request_loop)
-            await tg.start(self._receive_msg_loop, SocketID.shell)
-            task_status.started()
 
     async def _start_iopub(self, task_status: TaskStatus):
         # Save IO
@@ -462,29 +456,26 @@ class Kernel(ConnectionFileMixin):
         process_message = self._process_control if socket_id is SocketID.control else self._process_shell
         socket = zmq.Socket(self._zmq_context, zmq.SocketType.ROUTER)
         with self.iopub_enabled_this_thread(slow_subscriber_sleep=0.0), self._bind_socket(socket_id, socket):
-            async with utils.ThreadSafeCaller(log=self.log):
-                try:
-                    task_status.started()
-                    while True:
-                        while socket.get(SocketOption.EVENTS) & PollEvent.POLLIN:  # type: ignore[call-arg]
-                            ident, parent = self.session.recv(socket, copy=False)
-                            if not ident or not parent:
-                                continue
-                            msg_type = parent["header"]["msg_type"]
-                            self.log.debug(
-                                "*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, parent["content"]
-                            )
-                            job = MsgRequest(
-                                socket_id=socket_id,
-                                socket=socket,
-                                ident=ident,
-                                parent=parent,  # type: ignore[call-arg]
-                                msg_type=msg_type,
-                            )
-                            await process_message(job)
-                        await anyio.wait_readable(socket)
-                except zmq.ContextTerminated:
-                    return
+            try:
+                task_status.started()
+                while True:
+                    while socket.get(SocketOption.EVENTS) & PollEvent.POLLIN:  # type: ignore[call-arg]
+                        ident, parent = self.session.recv(socket, copy=False)
+                        if not ident or not parent:
+                            continue
+                        msg_type = parent["header"]["msg_type"]
+                        self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, parent["content"])
+                        job = MsgRequest(
+                            socket_id=socket_id,
+                            socket=socket,
+                            ident=ident,
+                            parent=parent,  # type: ignore[call-arg]
+                            msg_type=msg_type,
+                        )
+                        await process_message(job)
+                    await anyio.wait_readable(socket)
+            except zmq.ContextTerminated:
+                return
 
     @contextlib.contextmanager
     def _bind_socket(self, socket_id: SocketID, socket: zmq.Socket):
@@ -554,7 +545,7 @@ class Kernel(ConnectionFileMixin):
                     "iopub_send: (thread=%s) msg_type:'%s', content: %s", thread.name, msg["msg_type"], msg["content"]
                 )
         else:
-            utils.ThreadSafeCaller.get_instance(self._control_thread).call_later(
+            self.control_threadsafe_caller.call_later(
                 self.iopub_send,
                 msg_or_type=msg_or_type,
                 content=content,
@@ -732,7 +723,7 @@ class Kernel(ConnectionFileMixin):
         if not silent:
             await self._exec_send_stream.send((time.monotonic(), job))
         else:
-            utils.ThreadSafeCaller.get_instance().call_later(self._execute_request, 0, job)
+            self.main_thread_safe_caller.call_later(self._execute_request, 0, job)
 
     async def _execute_request(self, job: MsgRequest):
         """Perform the actual execute_request."""
@@ -818,12 +809,13 @@ class Kernel(ConnectionFileMixin):
         # Override setting
         content["silent"] = True
         content["allow_stdin"] = False
-        utils.ThreadSafeCaller.get_instance().call_later(self._execute_request, 0, job)
+        self.control_threadsafe_caller.call_later(self._execute_request, 0, job)
 
     async def control_shutdown_request(self, job: MsgRequest):
         """Handle a shutdown request."""
-        reply_content = await self.do_shutdown(job["parent"]["content"].get("restart", False))
-        self.send_reply(job, reply_content)
+        await self.debugger.disconnect()
+        self.send_reply(job, {"status": "ok", "restart": job["parent"]["content"].get("restart", False)})
+        self.stop()
 
     async def debug_request(self, job: MsgRequest):
         """Handle a debug request."""
@@ -976,12 +968,6 @@ class Kernel(ConnectionFileMixin):
             "status": "ok",
             "history": list(hist),
         }
-
-    async def do_shutdown(self, restart: bool):
-        """Handle kernel shutdown."""
-        await self.debugger.disconnect()
-        self.stop()
-        return {"status": "ok", "restart": restart}
 
     def excepthook(self, etype, evalue, tb):
         """Handle an exception."""

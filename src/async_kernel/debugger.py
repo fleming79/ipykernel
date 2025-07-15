@@ -20,7 +20,7 @@ from async_kernel import utils
 from async_kernel.utils import PendingResult
 
 if TYPE_CHECKING:
-    from anyio.abc import TaskGroup, TaskStatus
+    from anyio.abc import TaskGroup
 
     from async_kernel import Kernel
 
@@ -171,7 +171,7 @@ class DebugpyClient(traitlets.HasTraits):
         host, port = _HOST_PORT
         return {"host": host, "port": port}
 
-    async def connect_tcp_socket(self, *, task_status: TaskStatus):
+    async def connect_tcp_socket(self, ready: anyio.Event):
         """Connect to the tcp socket."""
         global _HOST_PORT  # noqa: PLW0603
         if not _HOST_PORT:
@@ -180,13 +180,12 @@ class DebugpyClient(traitlets.HasTraits):
             _HOST_PORT = debugpy.listen(0)
             utils.mark_thread_debugpy_ignore(threading.current_thread())
             # This thread can't be stopped by the debugger when debugging
-
         try:
             self.log.debug("++ debugpy socketstream connecting ++")
             async with await anyio.connect_tcp(*_HOST_PORT) as socketstream:
                 self._socketstream = socketstream
                 self.log.debug("++ debugpy socketstream connected ++")
-                task_status.started()
+                ready.set()
                 while True:
                     data = await socketstream.receive()
                     self.put_tcp_frame(data)
@@ -244,14 +243,6 @@ class Debugger(traitlets.HasTraits):
         }
         self._forbidden_names = tuple(self.kernel.shell.user_ns)
 
-    async def start(self, kernel: Kernel, *, task_status: TaskStatus):
-        # To be called by `kernel.start_in_context`.
-        self.kernel = kernel
-        async with anyio.create_task_group() as tg:
-            self.taskgroup = tg
-            task_status.started()
-            await anyio.sleep_forever()
-
     async def _forward_message(self, msg):
         return await self.debugpy_client.send_dap_request(msg)
 
@@ -265,17 +256,14 @@ class Debugger(traitlets.HasTraits):
             if event["body"]["allThreadsStopped"]:
 
                 async def _handle_stopped_event():
-                    try:
-                        req = {"seq": self.next_seq(), "type": "request", "command": "threads"}
-                        rep = await self._forward_message(req)
-                        for thread in rep["body"]["threads"]:
-                            if thread["name"] not in ["IPythonHistorySavingThread"]:
-                                self.stopped_threads.add(thread["id"])
-                        self._publish_event(event)
-                    except Exception:
-                        pass
+                    req = {"seq": self.next_seq(), "type": "request", "command": "threads"}
+                    rep = await self._forward_message(req)
+                    for thread in rep["body"]["threads"]:
+                        if thread["name"] not in ["IPythonHistorySavingThread"]:
+                            self.stopped_threads.add(thread["id"])
+                    self._publish_event(event)
 
-                self.taskgroup.start_soon(_handle_stopped_event)
+                self.kernel.control_threadsafe_caller.call_soon(_handle_stopped_event)
                 return
             self.stopped_threads.add(event["body"]["threadId"])
         elif event["event"] == "continued":
@@ -332,7 +320,9 @@ class Debugger(traitlets.HasTraits):
     async def do_initialize(self, message):
         "Initialize debugpy server starting as required."
         if not self.debugpy_client.connected:
-            await self.taskgroup.start(self.debugpy_client.connect_tcp_socket)
+            ready = anyio.Event()
+            self.kernel.control_threadsafe_caller.call_soon(self.debugpy_client.connect_tcp_socket, ready)
+            await ready.wait()
             # Don't remove leading empty lines when debugging so the breakpoints are correctly positioned
             cleanup_transforms = self.kernel.shell.input_transformer_manager.cleanup_transforms
             if leading_empty_lines in cleanup_transforms:
