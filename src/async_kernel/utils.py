@@ -90,29 +90,6 @@ def do_not_debug_this_thread(name=""):
         mark_thread_debugpy_ignore(threading.current_thread(), unhide=True)
 
 
-def new_event_loop(*, backend="", log: logging.LoggerAdapter | None = None, name: str | None = None):
-    "Start a new event loop with a thread safe caller"
-
-    def run_event_loop():
-        async def run_event_loop_():
-            nonlocal threadsafe_caller
-            async with ThreadSafeCaller(log=log) as threadsafe_caller:
-                ready_event.set()
-                with contextlib.suppress(anyio.get_cancelled_exc_class()):
-                    await anyio.sleep_forever()
-
-        anyio.run(run_event_loop_, backend=backend)
-
-    backend = backend or sniffio.current_async_library()
-    threadsafe_caller = cast("ThreadSafeCaller", None)
-    ready_event = threading.Event()
-    thread = threading.Thread(target=run_event_loop, name=name, daemon=True)
-    thread.start()
-    ready_event.wait(10)
-    return threadsafe_caller
-
-
-
 class ThreadSafeCaller:
     """
     ThreadSafeCaller provides a mechanism to safely schedule and execute functions
@@ -237,10 +214,32 @@ class ThreadSafeCaller:
         try:
             tsc = cls._tsc_pool.popleft()
         except IndexError:
-            tsc = new_event_loop()
+            tsc = cls.new_event_loop()
         pending = tsc.call_soon(func, *args, **kwargs)
         pending._done_callbacks.add(tsc._to_thread_on_done)
         return pending
+
+    @classmethod
+    def new_event_loop(cls, *, backend="", log: logging.LoggerAdapter | None = None, name: str | None = None):
+        "Start a new event loop with a thread safe caller"
+
+        def run_event_loop():
+            async def run_event_loop_():
+                nonlocal threadsafe_caller
+                async with ThreadSafeCaller(log=log) as threadsafe_caller:
+                    ready_event.set()
+                    with contextlib.suppress(anyio.get_cancelled_exc_class()):
+                        await anyio.sleep_forever()
+
+            anyio.run(run_event_loop_, backend=backend)
+
+        backend = backend or sniffio.current_async_library()
+        threadsafe_caller = cast("ThreadSafeCaller", None)
+        ready_event = threading.Event()
+        thread = threading.Thread(target=run_event_loop, name=name, daemon=True)
+        thread.start()
+        ready_event.wait(10)
+        return threadsafe_caller
 
 
 class PendingResult(Generic[T]):

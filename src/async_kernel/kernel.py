@@ -41,6 +41,7 @@ from async_kernel import _version, utils
 from async_kernel.asyncshell import AsyncInteractiveShell
 from async_kernel.debugger import Debugger
 from async_kernel.kernelspec import KernelName
+from async_kernel.utils import ThreadSafeCaller
 
 if TYPE_CHECKING:
     from types import FrameType
@@ -278,7 +279,7 @@ class Kernel(ConnectionFileMixin):
                 raise
             return 0
         finally:
-            utils.ThreadSafeCaller._shutdown_all_instances()
+            ThreadSafeCaller._shutdown_all_instances()
         return 0
 
     @classmethod
@@ -302,7 +303,7 @@ class Kernel(ConnectionFileMixin):
         if self.connection_file and Path(self.connection_file).exists():
             self.load_connection_file()
         try:
-            async with utils.ThreadSafeCaller(log=self.log) as tsc:
+            async with ThreadSafeCaller(log=self.log) as tsc:
                 self.main_thread_safe_caller, tg = tsc, tsc.taskgroup
                 try:
                     await tg.start(self._start_heartbeat)
@@ -395,7 +396,9 @@ class Kernel(ConnectionFileMixin):
             await tsc.taskgroup.start(self._receive_msg_loop, SocketID.control)
             ready_event.set()
 
-        self.control_threadsafe_caller = tsc = utils.new_event_loop(backend=self.anyio_backend, name="Control")
+        self.control_threadsafe_caller = tsc = ThreadSafeCaller.new_event_loop(
+            backend=self.anyio_backend, name="Control"
+        )
         ready_event = threading.Event()
         tsc.call_soon(run_in_control_event_loop)
         ready_event.wait(10)
