@@ -5,18 +5,31 @@
 
 import contextlib
 import threading
-from typing import cast
+import time
+from random import random
+from typing import Literal, cast
 
 import anyio
 import anyio.to_thread
 import pytest
+import sniffio
+import zmq
 
-from async_kernel.utils import PendingResult, ThreadSafeCaller
+from async_kernel.utils import PendingResult, ThreadSafeCaller, as_pending_completed, bind_socket
 
 
 @pytest.fixture(scope="module", params=["asyncio", "trio"])
 def anyio_backend(request):
     return request.param
+
+
+def test_bind_socket(transport: Literal["tcp", "ipc"]):
+    ctx = zmq.Context()
+    socket = ctx.socket(zmq.ROUTER)
+    port = bind_socket(socket, transport, "0.0.0.0")
+    socket.close()
+    socket = ctx.socket(zmq.ROUTER)
+    assert bind_socket(socket, transport, "0.0.0.0", port) == port
 
 
 @pytest.mark.anyio
@@ -105,7 +118,7 @@ class TestThreadSafeCaller:
             assert val == args_kwargs
             assert (await pr.wait()) == args_kwargs
 
-    async def test_to_thread(self):
+    async def test_anyio_to_thread(self):
         # Test the call works from another thread
         async with ThreadSafeCaller() as tsc:
 
@@ -204,3 +217,33 @@ class TestThreadSafeCaller:
     async def test_not_available_for_thread(self):
         with pytest.raises(RuntimeError):
             ThreadSafeCaller.get_instance(threading.Thread())
+
+    async def test_to_thread(self, anyio_backend, mocker):
+        assert not ThreadSafeCaller._tsc_pool
+        mocker.patch.object(ThreadSafeCaller, "MAX_IDLE_EVENT_THREADS", new=2)
+
+        async def func():
+            assert sniffio.current_async_library() == anyio_backend
+            n = random()
+            if n < 0.2:
+                time.sleep(0.01)
+            elif n < 0.6:
+                await anyio.sleep(0.01)
+            return threading.current_thread()
+
+        threads = set()
+        n = 40
+
+        pending = ThreadSafeCaller.to_thread(time.sleep, 0)
+        await pending.wait()
+        # check can handle completed pending okay first
+        async for pending_ in as_pending_completed([pending]):
+            assert pending_.done()
+        # work directly with iterator
+        async for pending in as_pending_completed(ThreadSafeCaller.to_thread(func) for _ in range(n)):
+            assert pending.done()
+            thread = await pending.wait()
+            threads.add(thread)
+        assert len(threads) > ThreadSafeCaller.MAX_IDLE_EVENT_THREADS
+        assert len(ThreadSafeCaller._tsc_pool) <= ThreadSafeCaller.MAX_IDLE_EVENT_THREADS
+        ThreadSafeCaller._shutdown_all_instances()

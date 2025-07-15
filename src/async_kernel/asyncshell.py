@@ -174,6 +174,7 @@ class AsyncInteractiveShell(InteractiveShell):
                 "call_later": self.call_later,
                 "call_soon": self.call_soon,
                 "KernelInterruptError": async_kernel.KernelInterruptError,
+                "ThreadSafeCaller": utils.ThreadSafeCaller,
             }
         )
 

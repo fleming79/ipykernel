@@ -278,7 +278,7 @@ class Kernel(ConnectionFileMixin):
                 raise
             return 0
         finally:
-            pass
+            utils.ThreadSafeCaller._shutdown_all_instances()
         return 0
 
     @classmethod

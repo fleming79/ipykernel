@@ -9,6 +9,7 @@ import inspect
 import logging
 import sys
 import threading
+import time
 from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, ParamSpec, Self, TypeVar, cast
@@ -19,7 +20,7 @@ import sniffio
 from zmq import Socket, ZMQError
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterable
 
     from anyio.abc import TaskStatus
 
@@ -94,19 +95,51 @@ def new_event_loop(*, backend="", log: logging.LoggerAdapter | None = None, name
 
     def run_event_loop():
         async def run_event_loop_():
-            nonlocal tsc
-            async with ThreadSafeCaller(log=log) as tsc:
+            nonlocal threadsafe_caller
+            async with ThreadSafeCaller(log=log) as threadsafe_caller:
                 ready_event.set()
-                await anyio.sleep_forever()
+                with contextlib.suppress(anyio.get_cancelled_exc_class()):
+                    await anyio.sleep_forever()
 
-        anyio.run(run_event_loop_, backend=backend or sniffio.current_async_library())
+        anyio.run(run_event_loop_, backend=backend)
 
-    tsc = cast("ThreadSafeCaller", None)
+    backend = backend or sniffio.current_async_library()
+    threadsafe_caller = cast("ThreadSafeCaller", None)
     ready_event = threading.Event()
     thread = threading.Thread(target=run_event_loop, name=name, daemon=True)
     thread.start()
     ready_event.wait(10)
-    return tsc
+    return threadsafe_caller
+
+
+async def as_pending_completed(items: Iterable[PendingResult[T]]):
+    "An iterator to wait for pending results to complete."
+    event_pending_done = threading.Event()
+    has_result: deque[PendingResult[T]] = deque()
+    n = 0
+
+    def _on_done(pending_):
+        has_result.append(pending_)
+        event_pending_done.set()
+
+    for pending in items:
+        n += 1
+        if pending.done():
+            has_result.append(pending)
+        else:
+            pending._done_callbacks.add(_on_done)
+
+    def wait_threading_event():
+        mark_thread_debugpy_ignore(threading.current_thread())
+        event_pending_done.wait()
+        mark_thread_debugpy_ignore(threading.current_thread(), unhide=True)
+
+    for _ in range(n):
+        if has_result:
+            event_pending_done.clear()
+            yield has_result.popleft()
+            continue
+        await anyio.to_thread.run_sync(wait_threading_event)
 
 
 class ThreadSafeCaller:
@@ -126,6 +159,9 @@ class ThreadSafeCaller:
     backend = ""
     log: logging.LoggerAdapter
     __stack = None
+    _outstanding = 0
+    _tsc_pool: ClassVar[deque[Self]] = deque()
+    MAX_IDLE_EVENT_THREADS = 10
 
     def __new__(cls, thread: threading.Thread | None = None, *, log: logging.LoggerAdapter | None = None) -> Self:
         thread = thread or threading.current_thread()
@@ -147,11 +183,11 @@ class ThreadSafeCaller:
 
     async def __aexit__(self, exc_type, exc_value, exc_tb):
         if self.__stack is not None:
-            if tg := self.taskgroup:
-                setattr(self, "taskgroup", None)  # noqa: B010
-                tg.cancel_scope.cancel()
+            self.taskgroup.cancel_scope.cancel()
             self._jobs_added.set()
             self._instances.pop(self.thread, self)
+            if self in self._tsc_pool:
+                self._tsc_pool.remove(self)
             await self.__stack.__aexit__(exc_type, exc_value, exc_tb)
 
     async def _server_loop(self, task_status: TaskStatus):
@@ -161,12 +197,21 @@ class ThreadSafeCaller:
             mark_thread_debugpy_ignore(threading.current_thread(), unhide=True)
 
         task_status.started()
-        while True:
-            while len(self._jobs):
-                self.taskgroup.start_soon(self._wrap_call, *self._jobs.popleft())
-                self._jobs_added.clear()
+        with contextlib.suppress(anyio.get_cancelled_exc_class()):
+            while True:
+                while len(self._jobs):
+                    self.taskgroup.start_soon(self._wrap_call, *self._jobs.popleft())
+                    self._jobs_added.clear()
+                await anyio.to_thread.run_sync(wait_threading_event, abandon_on_cancel=True)
 
-            await anyio.to_thread.run_sync(wait_threading_event, abandon_on_cancel=True)
+    def shutdown(self):
+        self.call_soon(self.taskgroup.cancel_scope.cancel)
+
+    def _to_thread_on_done(self, _):
+        if len(self._tsc_pool) < self.MAX_IDLE_EVENT_THREADS or self._outstanding:
+            self._tsc_pool.append(self)
+        else:
+            self.shutdown()
 
     def call_later(
         self, func: Callable[P, T | Awaitable[T]], delay=0.0, /, *args: P.args, **kwargs: P.kwargs
@@ -178,6 +223,7 @@ class ThreadSafeCaller:
         else:
             self._jobs.append((pending, func, delay, args, kwargs))
             self._jobs_added.set()
+        self._outstanding += 1
         return pending
 
     def call_soon(self, func: Callable[P, T | Awaitable[T]], *args: P.args, **kwargs: P.kwargs) -> PendingResult[T]:
@@ -193,10 +239,18 @@ class ThreadSafeCaller:
             result = func(*args, **kwargs) if callable(func) else func
             while inspect.isawaitable(result):
                 result = await result
+            self._outstanding -= 1
             pending.set_result(result)
         except Exception as e:
             self.log.exception("Exception occurred while running %s", func, exc_info=e)
             pending.set_exception(e)
+
+    @classmethod
+    def _shutdown_all_instances(cls):
+        for tsc in cls._instances.values():
+            tsc.shutdown()
+        while cls._instances:
+            time.sleep(0.01)
 
     @classmethod
     def get_instance(cls, thread: threading.Thread | None = None) -> Self:
@@ -205,6 +259,17 @@ class ThreadSafeCaller:
             return instance
         msg = "A threadsafe caller was not found for this thread"
         raise RuntimeError(msg)
+
+    @classmethod
+    def to_thread(cls, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs) -> PendingResult[T]:
+        "Call func in a separate thread."
+        try:
+            tsc = cls._tsc_pool.popleft()
+        except IndexError:
+            tsc = new_event_loop()
+        pending = tsc.call_soon(func, *args, **kwargs)
+        pending._done_callbacks.add(tsc._to_thread_on_done)
+        return pending
 
 
 class PendingResult(Generic[T]):
