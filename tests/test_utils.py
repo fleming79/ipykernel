@@ -15,7 +15,7 @@ import pytest
 import sniffio
 import zmq
 
-from async_kernel.utils import PendingResult, ThreadSafeCaller, as_pending_completed, bind_socket
+from async_kernel.utils import PendingResult, ThreadSafeCaller, bind_socket
 
 
 @pytest.fixture(scope="module", params=["asyncio", "trio"])
@@ -237,10 +237,10 @@ class TestThreadSafeCaller:
         pending = ThreadSafeCaller.to_thread(time.sleep, 0)
         await pending.wait()
         # check can handle completed pending okay first
-        async for pending_ in as_pending_completed([pending]):
+        async for pending_ in PendingResult.as_completed([pending]):
             assert pending_.done()
         # work directly with iterator
-        async for pending in as_pending_completed(ThreadSafeCaller.to_thread(func) for _ in range(n)):
+        async for pending in PendingResult.as_completed(ThreadSafeCaller.to_thread(func) for _ in range(n)):
             assert pending.done()
             thread = await pending.wait()
             threads.add(thread)

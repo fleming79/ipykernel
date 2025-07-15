@@ -112,35 +112,6 @@ def new_event_loop(*, backend="", log: logging.LoggerAdapter | None = None, name
     return threadsafe_caller
 
 
-async def as_pending_completed(items: Iterable[PendingResult[T]]):
-    "An iterator to wait for pending results to complete."
-    event_pending_done = threading.Event()
-    has_result: deque[PendingResult[T]] = deque()
-    n = 0
-
-    def _on_done(pending_):
-        has_result.append(pending_)
-        event_pending_done.set()
-
-    for pending in items:
-        n += 1
-        if pending.done():
-            has_result.append(pending)
-        else:
-            pending._done_callbacks.add(_on_done)
-
-    def wait_threading_event():
-        mark_thread_debugpy_ignore(threading.current_thread())
-        event_pending_done.wait()
-        mark_thread_debugpy_ignore(threading.current_thread(), unhide=True)
-
-    for _ in range(n):
-        if has_result:
-            event_pending_done.clear()
-            yield has_result.popleft()
-            continue
-        await anyio.to_thread.run_sync(wait_threading_event)
-
 
 class ThreadSafeCaller:
     """
@@ -337,3 +308,33 @@ class PendingResult(Generic[T]):
 
     def done(self):
         return self._event_done.is_set()
+
+    @classmethod
+    async def as_completed(cls, items: Iterable[PendingResult[T]]):
+        "An iterator to wait for pending results to complete."
+        event_pending_done = threading.Event()
+        has_result: deque[PendingResult[T]] = deque()
+        n = 0
+
+        def _on_done(pending_):
+            has_result.append(pending_)
+            event_pending_done.set()
+
+        for pending in items:
+            n += 1
+            if pending.done():
+                has_result.append(pending)
+            else:
+                pending._done_callbacks.add(_on_done)
+
+        def wait_threading_event():
+            mark_thread_debugpy_ignore(threading.current_thread())
+            event_pending_done.wait()
+            mark_thread_debugpy_ignore(threading.current_thread(), unhide=True)
+
+        for _ in range(n):
+            if has_result:
+                event_pending_done.clear()
+                yield has_result.popleft()
+                continue
+            await anyio.to_thread.run_sync(wait_threading_event)
