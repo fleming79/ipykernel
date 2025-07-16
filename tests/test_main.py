@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import shutil
+import signal
 import sys
 import types
 from unittest import mock
@@ -13,7 +14,7 @@ import pytest
 
 import async_kernel.__main__ as main
 from async_kernel import Kernel
-from async_kernel.kernelspec import KernelName
+from async_kernel.kernelspec import KernelName, make_argv
 
 
 @pytest.fixture
@@ -116,3 +117,16 @@ def test_kernel_start(kernel_name: KernelName):
 async def test_subprocess_kernels_client(subprocess_kernels_client):
     # Start & Stop a kernel
     return
+
+
+async def test_subprocess_kernel_keyboard_interrupt(tmp_path, anyio_backend):
+    connection_file = tmp_path / "connection_file.json"
+    command = make_argv(connection_file=connection_file)
+    process = await anyio.open_process(command)
+    while not connection_file.exists():
+        await anyio.sleep(0.1)
+    # Simulate a keyboard interrupt from the console.
+    process.send_signal(signal.SIGINT)
+    while process.returncode is None:
+        await anyio.sleep(0.1)
+    assert process.returncode == 0
