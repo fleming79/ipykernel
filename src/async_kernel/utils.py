@@ -31,6 +31,7 @@ __all__ = [
     "bind_socket",
     "do_not_debug_this_thread",
     "mark_thread_pydev_do_not_trace",
+    "wait_thread_event",
 ]
 
 LAUNCHED_BY_DEBUGPY = "debugpy" in sys.modules
@@ -99,6 +100,22 @@ def do_not_debug_this_thread(name=""):
             mark_thread_pydev_do_not_trace(threading.current_thread(), remove=True)
 
 
+async def wait_thread_event(event: threading.Event):
+    """Wait for the threading event in a separate thread.
+
+    The event will be set event if the coroutine is cancelled to ensure the thread is cleared.
+    """
+
+    def _in_thread_call():
+        with do_not_debug_this_thread():
+            event.wait()
+
+    try:
+        await anyio.to_thread.run_sync(_in_thread_call, abandon_on_cancel=True)
+    finally:
+        event.set()
+
+
 class ThreadSafeCaller:
     """
     ThreadSafeCaller provides a mechanism to safely schedule and execute functions
@@ -153,18 +170,13 @@ class ThreadSafeCaller:
             await self.__stack.__aexit__(exc_type, exc_value, exc_tb)
 
     async def _server_loop(self, tg: TaskGroup, task_status: TaskStatus):
-        def wait_threading_event():
-            mark_thread_pydev_do_not_trace(threading.current_thread())
-            self._jobs_added.wait()
-            mark_thread_pydev_do_not_trace(threading.current_thread(), remove=True)
-
         task_status.started()
         with contextlib.suppress(anyio.get_cancelled_exc_class()):
             while True:
                 while len(self._jobs):
                     tg.start_soon(self._wrap_call, *self._jobs.popleft())
                     self._jobs_added.clear()
-                await anyio.to_thread.run_sync(wait_threading_event, abandon_on_cancel=True)
+                await wait_thread_event(self._jobs_added)
 
     def __repr__(self) -> str:
         return f"ThreadsafeCaller<{self.thread}>"
@@ -322,12 +334,7 @@ class PendingResult(Generic[T]):
                     self._anyio_event_done = anyio.Event()
                 await self._anyio_event_done.wait()
             else:
-
-                def wait_event_done():
-                    with do_not_debug_this_thread():
-                        self._event_done.wait()
-
-                await anyio.to_thread.run_sync(wait_event_done)
+                await wait_thread_event(self._event_done)
 
         if self._exception:
             raise self._exception
@@ -383,14 +390,9 @@ class PendingResult(Generic[T]):
             else:
                 pending._done_callbacks.add(_on_done)
 
-        def wait_threading_event():
-            mark_thread_pydev_do_not_trace(threading.current_thread())
-            event_pending_done.wait()
-            mark_thread_pydev_do_not_trace(threading.current_thread(), remove=True)
-
         for _ in range(n):
             if has_result:
                 event_pending_done.clear()
                 yield has_result.popleft()
                 continue
-            await anyio.to_thread.run_sync(wait_threading_event)
+            await wait_thread_event(event_pending_done)
