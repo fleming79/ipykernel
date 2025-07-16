@@ -41,12 +41,12 @@ from async_kernel import _version, utils
 from async_kernel.asyncshell import AsyncInteractiveShell
 from async_kernel.debugger import Debugger
 from async_kernel.kernelspec import KernelName
-from async_kernel.utils import ThreadSafeCaller
+from async_kernel.utils import ThreadCaller
 
 if TYPE_CHECKING:
     from types import FrameType
 
-    from anyio.abc import TaskGroup, TaskStatus
+    from anyio.abc import TaskStatus
     from IPython.core.interactiveshell import ExecutionResult
 
     from async_kernel.comm import CommManager
@@ -156,6 +156,7 @@ class Kernel(ConnectionFileMixin):
     shell_class = traitlets.Type(AsyncInteractiveShell)
     help_links = traitlets.Tuple()
     comm_manager: Instance[CommManager] = Instance("async_kernel.comm.CommManager")
+    namespace_defaults = Dict()
 
     def __new__(cls, *, connection_file="", kernel_name: KernelName | None = None, **kwargs) -> Self:  # noqa: ARG004
         #  There is only one instance.
@@ -260,6 +261,14 @@ class Kernel(ConnectionFileMixin):
     def _default_shell(self):
         return self.shell_class.instance(parent=self, kernel=self)
 
+    @default("namespace_defaults")
+    def _default_namespace_defaults(self):
+        return {
+            "caller": self.main_thread_caller,
+            "KernelInterruptError": KernelInterruptError,
+            "CancelledError": self.CancelledError,
+        }
+
     @classmethod
     def start(cls, connection_file="", kernel_name=KernelName.asyncio) -> int:
         """Start the kernel."""
@@ -273,7 +282,7 @@ class Kernel(ConnectionFileMixin):
             anyio.run(_start, backend="trio" if kernel.kernel_name is KernelName.trio else "asyncio")
         except KeyboardInterrupt:
             print("\nKernel stopped")
-        except kernel.cancelled_error_class as e:
+        except kernel.CancelledError as e:
             if not kernel._stop_event.is_set():
                 e.add_note("Unexpected cancellation caused shutdown")
                 raise
@@ -293,7 +302,7 @@ class Kernel(ConnectionFileMixin):
         if self._sockets:
             msg = "Already started"
             raise RuntimeError(msg)
-        self.cancelled_error_class = anyio.get_cancelled_exc_class()
+        self.CancelledError = anyio.get_cancelled_exc_class()
         self.anyio_backend = sniffio.current_async_library()
         if sys.version_info >= (3, 12) and self.kernel_name is KernelName.asyncio_eager:
             loop = asyncio.get_running_loop()
@@ -301,8 +310,8 @@ class Kernel(ConnectionFileMixin):
         if self.connection_file and Path(self.connection_file).exists():
             self.load_connection_file()
         try:
-            async with ThreadSafeCaller(log=self.log) as tsc:
-                self.main_thread_safe_caller, tg = tsc, tsc.taskgroup
+            async with ThreadCaller(log=self.log) as tc:
+                self.main_thread_caller, tg = tc, tc.taskgroup
                 try:
                     await tg.start(self._start_heartbeat)
                     await tg.start(self._start_stdin)
@@ -394,7 +403,7 @@ class Kernel(ConnectionFileMixin):
             await tsc.taskgroup.start(self._receive_msg_loop, SocketID.control)
             ready_event.set()
 
-        self.control_threadsafe_caller = tsc = ThreadSafeCaller.start_new(backend=self.anyio_backend, name="Control")
+        self.control_thread_caller = tsc = ThreadCaller.start_new(backend=self.anyio_backend, name="Control")
         ready_event = threading.Event()
         tsc.call_soon(run_in_control_event_loop)
         ready_event.wait(10)
@@ -436,9 +445,9 @@ class Kernel(ConnectionFileMixin):
 
         task_status.started()
         await anyio.to_thread.run_sync(wait_stopped)
-        self.control_threadsafe_caller.close()
-        self.main_thread_safe_caller.close()
-        ThreadSafeCaller._shutdown_to_thread_instances()
+        self.control_thread_caller.close()
+        self.main_thread_caller.close()
+        ThreadCaller._shutdown_to_thread_instances()
 
     async def _receive_msg_loop(self, socket_id: Literal[SocketID.control, SocketID.shell], *, task_status: TaskStatus):
         """Receive messages from the socket, unpack them and pass them to be processed with process_message."""
@@ -546,7 +555,7 @@ class Kernel(ConnectionFileMixin):
                     "iopub_send: (thread=%s) msg_type:'%s', content: %s", thread.name, msg["msg_type"], msg["content"]
                 )
         else:
-            self.control_threadsafe_caller.call_later(
+            self.control_thread_caller.call_later(
                 self.iopub_send,
                 msg_or_type=msg_or_type,
                 content=content,
@@ -724,7 +733,7 @@ class Kernel(ConnectionFileMixin):
         if not silent:
             await self._exec_send_stream.send((time.monotonic(), job))
         else:
-            self.main_thread_safe_caller.call_later(self._execute_request, 0, job)
+            self.main_thread_caller.call_later(self._execute_request, 0, job)
 
     async def _execute_request(self, job: MsgRequest):
         """Perform the actual execute_request."""
@@ -810,7 +819,7 @@ class Kernel(ConnectionFileMixin):
         # Override setting
         content["silent"] = True
         content["allow_stdin"] = False
-        self.control_threadsafe_caller.call_later(self._execute_request, 0, job)
+        self.control_thread_caller.call_later(self._execute_request, 0, job)
 
     async def control_shutdown_request(self, job: MsgRequest):
         """Handle a shutdown request."""

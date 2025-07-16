@@ -263,7 +263,7 @@ class Debugger(traitlets.HasTraits):
                             self.stopped_threads.add(thread["id"])
                     self._publish_event(event)
 
-                self.kernel.control_threadsafe_caller.call_soon(_handle_stopped_event)
+                self.kernel.control_thread_caller.call_soon(_handle_stopped_event)
                 return
             self.stopped_threads.add(event["body"]["threadId"])
         elif event["event"] == "continued":
@@ -321,7 +321,7 @@ class Debugger(traitlets.HasTraits):
         "Initialize debugpy server starting as required."
         if not self.debugpy_client.connected:
             ready = anyio.Event()
-            self.kernel.control_threadsafe_caller.call_soon(self.debugpy_client.connect_tcp_socket, ready)
+            self.kernel.control_thread_caller.call_soon(self.debugpy_client.connect_tcp_socket, ready)
             await ready.wait()
             # Don't remove leading empty lines when debugging so the breakpoints are correctly positioned
             cleanup_transforms = self.kernel.shell.input_transformer_manager.cleanup_transforms

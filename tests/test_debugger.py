@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from jupyter_client.asynchronous.client import AsyncKernelClient
 
 
+
 @pytest.fixture(scope="module")
 async def client(subprocess_kernels_client):
     """This client is connected to a kernel in a subprocess.

@@ -20,14 +20,10 @@ from traitlets import CBool, CBytes, Dict, Instance, Type, default, observe
 from typing_extensions import override
 
 import async_kernel
-from async_kernel import utils
 from async_kernel.compiler import XCachingCompiler
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
     from async_kernel.kernel import Kernel
-    from async_kernel.utils import P
 
 
 __all__ = ["AsyncDisplayHook", "AsyncDisplayPublisher", "AsyncInteractiveShell"]
@@ -142,14 +138,6 @@ class AsyncInteractiveShell(InteractiveShell):
     # will print a warning in the absence of readline.
     autoindent = CBool(False)
 
-    def call_later(self, func: Callable[P, Any | Awaitable], delay=0.0, /, *args: P.args, **kwargs: P.kwargs):
-        """Schedules a function or coroutine for execution in the current thread."""
-        return utils.ThreadSafeCaller.get_instance().call_later(func, delay, *args, **kwargs)
-
-    def call_soon(self, func: Callable[P, Any | Awaitable], *args: P.args, **kwargs: P.kwargs):
-        """Schedules a function or coroutine for execution in the current thread."""
-        return utils.ThreadSafeCaller.get_instance().call_soon(func, *args, **kwargs)
-
     @observe("exit_now")
     def _update_exit_now(self, change):
         """stop eventloop when exit_now fires"""
@@ -169,14 +157,7 @@ class AsyncInteractiveShell(InteractiveShell):
     @override
     def init_user_ns(self):
         super().init_user_ns()
-        self.user_ns.update(
-            {
-                "call_later": self.call_later,
-                "call_soon": self.call_soon,
-                "KernelInterruptError": async_kernel.KernelInterruptError,
-                "ThreadSafeCaller": utils.ThreadSafeCaller,
-            }
-        )
+        self.user_ns.update(self.kernel.namespace_defaults)
 
     @override
     async def run_cell_async(

@@ -36,7 +36,7 @@ def clear_kernel():
         kernel.stop()
     async_kernel.Kernel._instance = None
     async_kernel.asyncshell.AsyncInteractiveShell.clear_instance()
-    async_kernel.utils.ThreadSafeCaller._shutdown_to_thread_instances()
+    async_kernel.utils.ThreadCaller._shutdown_to_thread_instances()
 
 
 async def get_reply(

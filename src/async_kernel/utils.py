@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "PendingResult",
-    "ThreadSafeCaller",
+    "ThreadCaller",
     "bind_socket",
     "do_not_debug_this_thread",
     "mark_thread_pydev_do_not_trace",
@@ -116,9 +116,9 @@ async def wait_thread_event(event: threading.Event):
         event.set()
 
 
-class ThreadSafeCaller:
+class ThreadCaller:
     """
-    ThreadSafeCaller provides a mechanism to safely schedule and execute functions
+    ThreadCaller provides a mechanism to safely schedule and execute functions
     or coroutines from multiple threads within an async context.
 
     This class manages a queue of jobs that can be submitted from any thread,
@@ -179,7 +179,7 @@ class ThreadSafeCaller:
                 await wait_thread_event(self._jobs_added)
 
     def __repr__(self) -> str:
-        return f"ThreadsafeCaller<{self.thread}>"
+        return f"ThreadCaller<{self.thread}>"
 
     @property
     def taskgroup(self) -> TaskGroup:
@@ -272,7 +272,7 @@ class ThreadSafeCaller:
         thread = thread or threading.current_thread()
         if instance := cls._instances.get(thread):
             return instance
-        msg = f"A ThreadSafeCaller was not found for {thread=}."
+        msg = f"A ThreadCaller was not found for {thread=}."
         raise RuntimeError(msg)
 
     @classmethod
@@ -289,7 +289,7 @@ class ThreadSafeCaller:
 
     @classmethod
     def start_new(cls, *, backend="", log: logging.LoggerAdapter | None = None, name: str | None = None):
-        "Start a new thread, open a ThreadSafeCaller in a new event loop  returning the ThreadSafeCaller instance."
+        "Start a new thread, open a ThreadCaller in a new event loop  returning the ThreadCaller instance."
 
         def run_event_loop():
             async def run_event_loop_():
@@ -335,7 +335,6 @@ class PendingResult(Generic[T]):
                 await self._anyio_event_done.wait()
             else:
                 await wait_thread_event(self._event_done)
-
         if self._exception:
             raise self._exception
         return self.result
