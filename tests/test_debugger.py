@@ -19,8 +19,8 @@ async def client(subprocess_kernels_client):
     """This client is connected to a kernel in a subprocess.
 
     Notes:
-    - Debugging this module is fine provided the subprocess is not (subProcess=false).
     - Trying debug the subprocess will fail because only one debug client is allowed and ipykernel is running its own client.
+    - To Debug this module in vscode: set `"subProcess"=false` in '.vscode.launch.json'.
     """
     client = subprocess_kernels_client
     await send_debug_request(

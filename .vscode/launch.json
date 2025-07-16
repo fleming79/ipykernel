@@ -12,7 +12,7 @@
       "purpose": ["debug-test"],
       "console": "integratedTerminal",
       "justMyCode": false, // Change as required. Note only one test config will work Ref: https://code.visualstudio.com/docs/python/testing#_debug-tests
-      "subProcess": false
+      "subProcess": true // Set this to false when debugging inside test_debugger.py
     },
     {
       "name": "Python: Current File",
