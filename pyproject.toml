@@ -138,7 +138,8 @@ exclude_lines = [
   "class .*\bProtocol\\):",
   "@(abc\\.)?abstractmethod",
   "except .*",
-  "def excepthook.*" # Pytest overrides excepthook
+  "def excepthook.*", # Pytest overrides excepthook so it's not possible to test it.
+  ".*sys.platform == \"win32\".*"
 ]
 
 [tool.coverage.run]
