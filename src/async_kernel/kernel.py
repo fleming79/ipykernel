@@ -275,7 +275,8 @@ class Kernel(ConnectionFileMixin):
 
         async def _start() -> None:
             async with kernel.start_in_context():
-                await anyio.sleep_forever()
+                with contextlib.suppress(kernel.CancelledError):
+                    await anyio.sleep_forever()
 
         kernel = cls(kernel_name=kernel_name, connection_file=connection_file)
         try:
@@ -369,7 +370,7 @@ class Kernel(ConnectionFileMixin):
     async def _start_stdin(self, task_status: TaskStatus):
         socket = self._zmq_context.socket(zmq.SocketType.ROUTER)
         socket.linger = 0
-        with self._bind_socket(SocketID.stdin, socket):
+        with self._bind_socket(SocketID.stdin, socket), contextlib.suppress(self.CancelledError):
             task_status.started()
             await anyio.sleep_forever()
 
@@ -433,6 +434,8 @@ class Kernel(ConnectionFileMixin):
         self.comm_manager.kernel = self
         try:
             await anyio.sleep_forever()
+        except self.CancelledError:
+            return
         finally:
             self.comm_manager.kernel = None
             # Reset IO
@@ -484,7 +487,7 @@ class Kernel(ConnectionFileMixin):
                         )
                         await process_message(job)
                     await anyio.wait_readable(socket)
-            except zmq.ContextTerminated:
+            except (zmq.ContextTerminated, self.CancelledError):
                 return
 
     @contextlib.contextmanager
@@ -652,25 +655,26 @@ class Kernel(ConnectionFileMixin):
         self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[tuple[float, MsgRequest]](
             max_buffer_size=1000
         )
-        async with self._exec_receive_stream as receive_stream:
-            task_status.started()
-            async for received_time, job in receive_stream:
-                try:
-                    if received_time < self._stop_on_error_time:
-                        self.log.info("Aborting execute_request: %s", job)
-                        self._publish_status("busy", job)
-                        self._send_error_reply(job, evalue="Aborting due to prior exception")
-                        self._publish_status("idle", job)
-                        continue
-                    await self._execute_request(job)
-                except BaseException as e:
-                    self.log.exception("Execute request", exc_info=e)
-                    self._send_error_reply(
-                        job,
-                        ename=str(type(e).__name__),
-                        evalue=str(e),
-                        traceback=traceback.format_stack(),
-                    )
+        with contextlib.suppress(self.CancelledError):
+            async with self._exec_receive_stream as receive_stream:
+                task_status.started()
+                async for received_time, job in receive_stream:
+                    try:
+                        if received_time < self._stop_on_error_time:
+                            self.log.info("Aborting execute_request: %s", job)
+                            self._publish_status("busy", job)
+                            self._send_error_reply(job, evalue="Aborting due to prior exception")
+                            self._publish_status("idle", job)
+                            continue
+                        await self._execute_request(job)
+                    except BaseException as e:
+                        self.log.exception("Execute request", exc_info=e)
+                        self._send_error_reply(
+                            job,
+                            ename=str(type(e).__name__),
+                            evalue=str(e),
+                            traceback=traceback.format_stack(),
+                        )
 
     def _topic(self, topic):
         """prefixed topic for IOPub messages"""
