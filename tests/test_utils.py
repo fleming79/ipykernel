@@ -92,9 +92,14 @@ class TestPendingResult:
         with pytest.raises(RuntimeError):
             pr.set_exception(ValueError())
 
-
 @pytest.mark.anyio
 class TestThreadSafeCaller:
+    def setup_method(self, test_method):
+        ThreadSafeCaller._shutdown_to_thread_instances()
+
+    def teardown_method(self, test_method):
+        ThreadSafeCaller._shutdown_to_thread_instances()
+
     async def test_sync(self):
         async with ThreadSafeCaller() as tsc:
             is_called = anyio.Event()
@@ -113,7 +118,7 @@ class TestThreadSafeCaller:
 
         async with ThreadSafeCaller() as tsc:
             is_called = anyio.Event()
-            pr = tsc.call_later(my_func, 0, is_called, *args_kwargs[0], **args_kwargs[1])
+            pr = tsc.call_later(my_func, 0.2, is_called, *args_kwargs[0], **args_kwargs[1])
             await is_called.wait()
             assert val == args_kwargs
             assert (await pr.wait()) == args_kwargs
@@ -219,7 +224,6 @@ class TestThreadSafeCaller:
             ThreadSafeCaller.get_instance(threading.Thread())
 
     async def test_to_thread(self, anyio_backend, mocker):
-        assert not ThreadSafeCaller._tsc_pool
         mocker.patch.object(ThreadSafeCaller, "MAX_IDLE_EVENT_THREADS", new=2)
 
         async def func():
@@ -245,5 +249,33 @@ class TestThreadSafeCaller:
             thread = await pending.wait()
             threads.add(thread)
         assert len(threads) > ThreadSafeCaller.MAX_IDLE_EVENT_THREADS
-        assert len(ThreadSafeCaller._tsc_pool) <= ThreadSafeCaller.MAX_IDLE_EVENT_THREADS
-        ThreadSafeCaller._shutdown_all_instances()
+        assert len(ThreadSafeCaller._to_thread_pool) <= ThreadSafeCaller.MAX_IDLE_EVENT_THREADS
+        ThreadSafeCaller._shutdown_to_thread_instances()
+
+    async def test_call_early(self, anyio_backend):
+        tsc = ThreadSafeCaller()
+        with pytest.raises(RuntimeError, match=".*not currently open in an asnyc context"):
+            tsc.taskgroup  # noqa: B018
+        pr = tsc.call_soon(time.sleep, 0.1)
+        with anyio.move_on_after(0.1):
+            await pr.wait()
+        assert not pr.done()
+        async with tsc:
+            await pr.wait()
+
+    async def test_closed_in_call_soon(self, anyio_backend):
+        # Check t
+        async def close_tsc():
+            tsc = ThreadSafeCaller.get_instance()
+            tsc.close()
+            await anyio.sleep_forever()
+
+        pr = ThreadSafeCaller.to_thread(close_tsc)
+        tsc = ThreadSafeCaller.get_instance(pr.thread)
+        cancelled_ = anyio.get_cancelled_exc_class()
+        with pytest.raises(cancelled_):
+            await pr.wait()
+        assert pr.done()
+        assert tsc._closed
+        with pytest.raises(RuntimeError):
+            tsc.call_soon(time.sleep, 0)

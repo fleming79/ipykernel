@@ -178,7 +178,7 @@ class DebugpyClient(traitlets.HasTraits):
             import debugpy  # noqa: PLC0415
 
             _HOST_PORT = debugpy.listen(0)
-            utils.mark_thread_debugpy_ignore(threading.current_thread())
+            utils.mark_thread_pydev_do_not_trace(threading.current_thread())
             # This thread can't be stopped by the debugger when debugging
         try:
             self.log.debug("++ debugpy socketstream connecting ++")

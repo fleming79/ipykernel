@@ -10,6 +10,7 @@ import logging
 import sys
 import threading
 import time
+import weakref
 from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, ParamSpec, Self, TypeVar, cast
@@ -22,9 +23,15 @@ from zmq import Socket, ZMQError
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
 
-    from anyio.abc import TaskStatus
+    from anyio.abc import TaskGroup, TaskStatus
 
-__all__ = ["PendingResult", "ThreadSafeCaller", "bind_socket", "do_not_debug_this_thread", "mark_thread_debugpy_ignore"]
+__all__ = [
+    "PendingResult",
+    "ThreadSafeCaller",
+    "bind_socket",
+    "do_not_debug_this_thread",
+    "mark_thread_pydev_do_not_trace",
+]
 
 LAUNCHED_BY_DEBUGPY = "debugpy" in sys.modules
 
@@ -73,9 +80,9 @@ def bind_socket(socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port:
     raise RuntimeError(msg)
 
 
-def mark_thread_debugpy_ignore(thread: threading.Thread, name="", *, unhide=False):
+def mark_thread_pydev_do_not_trace(thread: threading.Thread, name="", *, remove=False):
     """Modifies the given thread's attributes to hide or unhide it from the debugger (e.g., debugpy)."""
-    thread.pydev_do_not_trace = not unhide  # type: ignore[attr-defined]
+    thread.pydev_do_not_trace = not remove  # type: ignore[attr-defined]
     if name:
         thread.name = name
 
@@ -83,11 +90,13 @@ def mark_thread_debugpy_ignore(thread: threading.Thread, name="", *, unhide=Fals
 @contextlib.contextmanager
 def do_not_debug_this_thread(name=""):
     "A context to mark the thread for debugpy to not debug."
-    mark_thread_debugpy_ignore(threading.current_thread(), name)
+    if not LAUNCHED_BY_DEBUGPY:
+        mark_thread_pydev_do_not_trace(threading.current_thread(), name)
     try:
         yield
     finally:
-        mark_thread_debugpy_ignore(threading.current_thread(), unhide=True)
+        if not LAUNCHED_BY_DEBUGPY:
+            mark_thread_pydev_do_not_trace(threading.current_thread(), remove=True)
 
 
 class ThreadSafeCaller:
@@ -100,6 +109,9 @@ class ThreadSafeCaller:
     thread and async task group. It is particularly useful for integrating
     synchronous and asynchronous code, or for safely invoking async operations
     from non-async threads.
+
+    Only one instance per thread will be created and the instance must be open
+    within an async context for call_soon and call_later to be processed.
     """
 
     _instances: ClassVar[dict[threading.Thread, Self]] = {}
@@ -108,8 +120,13 @@ class ThreadSafeCaller:
     log: logging.LoggerAdapter
     __stack = None
     _outstanding = 0
-    _tsc_pool: ClassVar[deque[Self]] = deque()
+    _to_thread_pool: ClassVar[deque[Self]] = deque()
+    _to_thread_instances: ClassVar[weakref.WeakSet[Self]] = weakref.WeakSet()
     MAX_IDLE_EVENT_THREADS = 10
+    _taskgroup: TaskGroup | None = None
+    _jobs: deque
+    _jobs_added: threading.Event
+    _closed = False
 
     def __new__(cls, thread: threading.Thread | None = None, *, log: logging.LoggerAdapter | None = None) -> Self:
         thread = thread or threading.current_thread()
@@ -117,59 +134,88 @@ class ThreadSafeCaller:
             inst = super().__new__(cls)
             inst.thread = thread
             inst.log = log or logging.LoggerAdapter(logging.getLogger())
+            inst._jobs = deque()
+            inst._jobs_added = threading.Event()
             cls._instances[thread] = inst
         return inst
 
     async def __aenter__(self) -> Self:
-        self._jobs = deque()
-        self._jobs_added = threading.Event()
+        self._cancelled_exception_class = anyio.get_cancelled_exc_class()
         async with contextlib.AsyncExitStack() as stack:
-            self.taskgroup = await stack.enter_async_context(anyio.create_task_group())
-            await self.taskgroup.start(self._server_loop)
+            self._taskgroup = tg = await stack.enter_async_context(anyio.create_task_group())
+            await tg.start(self._server_loop, tg)
             self.__stack = stack.pop_all()
         return self
 
     async def __aexit__(self, exc_type, exc_value, exc_tb):
         if self.__stack is not None:
-            self.taskgroup.cancel_scope.cancel()
-            self._jobs_added.set()
-            self._instances.pop(self.thread, self)
-            if self in self._tsc_pool:
-                self._tsc_pool.remove(self)
+            self.close()
             await self.__stack.__aexit__(exc_type, exc_value, exc_tb)
 
-    async def _server_loop(self, task_status: TaskStatus):
+    async def _server_loop(self, tg: TaskGroup, task_status: TaskStatus):
         def wait_threading_event():
-            mark_thread_debugpy_ignore(threading.current_thread())
+            mark_thread_pydev_do_not_trace(threading.current_thread())
             self._jobs_added.wait()
-            mark_thread_debugpy_ignore(threading.current_thread(), unhide=True)
+            mark_thread_pydev_do_not_trace(threading.current_thread(), remove=True)
 
         task_status.started()
         with contextlib.suppress(anyio.get_cancelled_exc_class()):
             while True:
                 while len(self._jobs):
-                    self.taskgroup.start_soon(self._wrap_call, *self._jobs.popleft())
+                    tg.start_soon(self._wrap_call, *self._jobs.popleft())
                     self._jobs_added.clear()
                 await anyio.to_thread.run_sync(wait_threading_event, abandon_on_cancel=True)
 
-    def shutdown(self):
-        self.call_soon(self.taskgroup.cancel_scope.cancel)
+    def __repr__(self) -> str:
+        return f"ThreadsafeCaller<{self.thread}>"
+
+    @property
+    def taskgroup(self) -> TaskGroup:
+        if tg := self._taskgroup:
+            return tg
+        msg = f"{self}  is not currently open in an asnyc context."
+        raise RuntimeError(msg)
+
+    def close(self):
+        "Once closed it can not be reopened."
+        if not self._closed:
+            if tg := self._taskgroup:
+                self._taskgroup = None
+                if threading.current_thread() is self.thread:
+                    tg.cancel_scope.cancel()
+                else:
+                    self.call_soon(tg.cancel_scope.cancel)
+            self._closed = True
+            self._jobs_added.set()
+            self._instances.pop(self.thread, None)
+            if self in self._to_thread_pool:
+                self._to_thread_pool.remove(self)
 
     def _to_thread_on_done(self, _):
-        if len(self._tsc_pool) < self.MAX_IDLE_EVENT_THREADS or self._outstanding:
-            self._tsc_pool.append(self)
-        else:
-            self.shutdown()
+        if not self._closed:
+            if len(self._to_thread_pool) < self.MAX_IDLE_EVENT_THREADS or self._outstanding:
+                self._to_thread_pool.append(self)
+            else:
+                self.close()
 
     def call_later(
         self, func: Callable[P, T | Awaitable[T]], delay=0.0, /, *args: P.args, **kwargs: P.kwargs
     ) -> PendingResult[T]:
-        """Schedules a function or coroutine for execution."""
+        """Schedules a function or coroutine for execution.
+
+        If the instance is not open in an async context, the function will be queued and
+        executed once the async context is open.
+
+        The delay is calculated from the submission time.
+        """
+        if self._closed:
+            msg = f"{self} is closed!"
+            raise RuntimeError(msg)
         pending = PendingResult(thread=self.thread)
-        if threading.current_thread() is self.thread:
-            self.taskgroup.start_soon(self._wrap_call, pending, func, delay, args, kwargs)
+        if threading.current_thread() is self.thread and (tg := self._taskgroup):
+            tg.start_soon(self._wrap_call, pending, time.monotonic(), delay, func, args, kwargs)
         else:
-            self._jobs.append((pending, func, delay, args, kwargs))
+            self._jobs.append((pending, time.monotonic(), delay, func, args, kwargs))
             self._jobs_added.set()
         self._outstanding += 1
         return pending
@@ -179,24 +225,33 @@ class ThreadSafeCaller:
         return self.call_later(func, 0.0, *args, **kwargs)
 
     async def _wrap_call(
-        self, pending: PendingResult, func: Callable[..., Any | Awaitable], delay: float, args: tuple, kwargs: dict
+        self,
+        pending: PendingResult,
+        starttime: float,
+        delay: float,
+        func: Callable[..., Any | Awaitable],
+        args: tuple,
+        kwargs: dict,
     ):
         try:
-            if delay:
-                await anyio.sleep(float(delay))
+            if (delay_ := delay - time.monotonic() + starttime) > 0:
+                await anyio.sleep(float(delay_))
             result = func(*args, **kwargs) if callable(func) else func
             while inspect.isawaitable(result):
                 result = await result
             self._outstanding -= 1
             pending.set_result(result)
-        except Exception as e:
+        except (self._cancelled_exception_class, Exception) as e:
+            e.add_note(f"{self} {func=}")
             self.log.exception("Exception occurred while running %s", func, exc_info=e)
+            self._outstanding -= 1
             pending.set_exception(e)
 
     @classmethod
-    def _shutdown_all_instances(cls):
-        for tsc in cls._instances.values():
-            tsc.shutdown()
+    def _shutdown_to_thread_instances(cls):
+        "Shutdown currently open instance created via 'to_thread'."
+        for tsc in set(cls._to_thread_instances):
+            tsc.close()
         while cls._instances:
             time.sleep(0.01)
 
@@ -205,28 +260,29 @@ class ThreadSafeCaller:
         thread = thread or threading.current_thread()
         if instance := cls._instances.get(thread):
             return instance
-        msg = "A threadsafe caller was not found for this thread"
+        msg = f"A ThreadSafeCaller was not found for {thread=}."
         raise RuntimeError(msg)
 
     @classmethod
     def to_thread(cls, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs) -> PendingResult[T]:
         "Call func in a separate thread."
         try:
-            tsc = cls._tsc_pool.popleft()
+            tsc = cls._to_thread_pool.popleft()
         except IndexError:
-            tsc = cls.new_event_loop()
+            tsc = cls.start_new()
+            cls._to_thread_instances.add(tsc)
         pending = tsc.call_soon(func, *args, **kwargs)
         pending._done_callbacks.add(tsc._to_thread_on_done)
         return pending
 
     @classmethod
-    def new_event_loop(cls, *, backend="", log: logging.LoggerAdapter | None = None, name: str | None = None):
-        "Start a new event loop with a thread safe caller"
+    def start_new(cls, *, backend="", log: logging.LoggerAdapter | None = None, name: str | None = None):
+        "Start a new thread, open a ThreadSafeCaller in a new event loop  returning the ThreadSafeCaller instance."
 
         def run_event_loop():
             async def run_event_loop_():
-                nonlocal threadsafe_caller
-                async with ThreadSafeCaller(log=log) as threadsafe_caller:
+                nonlocal tsc
+                async with cls(log=log) as tsc:
                     ready_event.set()
                     with contextlib.suppress(anyio.get_cancelled_exc_class()):
                         await anyio.sleep_forever()
@@ -234,12 +290,13 @@ class ThreadSafeCaller:
             anyio.run(run_event_loop_, backend=backend)
 
         backend = backend or sniffio.current_async_library()
-        threadsafe_caller = cast("ThreadSafeCaller", None)
+        tsc = cast("Self", None)
         ready_event = threading.Event()
         thread = threading.Thread(target=run_event_loop, name=name, daemon=True)
         thread.start()
         ready_event.wait(10)
-        return threadsafe_caller
+        assert isinstance(tsc, cls)
+        return tsc
 
 
 class PendingResult(Generic[T]):
@@ -295,7 +352,7 @@ class PendingResult(Generic[T]):
         while self._done_callbacks:
             self._done_callbacks.pop()(self)
 
-    def set_exception(self, exception: Exception):
+    def set_exception(self, exception: BaseException):
         if self._event_done.is_set() or threading.current_thread() is not self.thread:
             raise RuntimeError
         self._exception = exception
@@ -327,9 +384,9 @@ class PendingResult(Generic[T]):
                 pending._done_callbacks.add(_on_done)
 
         def wait_threading_event():
-            mark_thread_debugpy_ignore(threading.current_thread())
+            mark_thread_pydev_do_not_trace(threading.current_thread())
             event_pending_done.wait()
-            mark_thread_debugpy_ignore(threading.current_thread(), unhide=True)
+            mark_thread_pydev_do_not_trace(threading.current_thread(), remove=True)
 
         for _ in range(n):
             if has_result:

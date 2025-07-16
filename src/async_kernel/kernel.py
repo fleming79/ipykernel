@@ -278,8 +278,6 @@ class Kernel(ConnectionFileMixin):
                 e.add_note("Unexpected cancellation caused shutdown")
                 raise
             return 0
-        finally:
-            ThreadSafeCaller._shutdown_all_instances()
         return 0
 
     @classmethod
@@ -318,7 +316,7 @@ class Kernel(ConnectionFileMixin):
                         self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{uuid.uuid4()}.json"))
                     self.write_connection_file()
                     atexit.register(self.cleanup_connection_file)
-                    await tg.start(self._wait_stopped, tg)
+                    await tg.start(self._wait_stopped)
                     print(f"""Kernel started. To connect a client use: --existing "{self.connection_file}" """)
                     await tg.start(self._start_iopub)
                     yield self
@@ -396,9 +394,7 @@ class Kernel(ConnectionFileMixin):
             await tsc.taskgroup.start(self._receive_msg_loop, SocketID.control)
             ready_event.set()
 
-        self.control_threadsafe_caller = tsc = ThreadSafeCaller.new_event_loop(
-            backend=self.anyio_backend, name="Control"
-        )
+        self.control_threadsafe_caller = tsc = ThreadSafeCaller.start_new(backend=self.anyio_backend, name="Control")
         ready_event = threading.Event()
         tsc.call_soon(run_in_control_event_loop)
         ready_event.wait(10)
@@ -433,14 +429,16 @@ class Kernel(ConnectionFileMixin):
             # Reset IO
             sys.stdout, sys.stderr, sys.displayhook = self._original_io
 
-    async def _wait_stopped(self, tg: TaskGroup, *, task_status: TaskStatus):
+    async def _wait_stopped(self, task_status: TaskStatus):
         def wait_stopped():
             with utils.do_not_debug_this_thread():
                 self._stop_event.wait()
 
         task_status.started()
         await anyio.to_thread.run_sync(wait_stopped)
-        tg.cancel_scope.cancel()
+        self.control_threadsafe_caller.close()
+        self.main_thread_safe_caller.close()
+        ThreadSafeCaller._shutdown_to_thread_instances()
 
     async def _receive_msg_loop(self, socket_id: Literal[SocketID.control, SocketID.shell], *, task_status: TaskStatus):
         """Receive messages from the socket, unpack them and pass them to be processed with process_message."""
@@ -454,7 +452,7 @@ class Kernel(ConnectionFileMixin):
             from anyio._core._asyncio_selector_thread import get_selector  # noqa: PLC0415
 
             selector = get_selector()
-            utils.mark_thread_debugpy_ignore(selector._thread)
+            utils.mark_thread_pydev_do_not_trace(selector._thread)
 
         process_message = self._process_control if socket_id is SocketID.control else self._process_shell
         socket = zmq.Socket(self._zmq_context, zmq.SocketType.ROUTER)
