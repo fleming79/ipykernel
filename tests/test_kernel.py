@@ -29,15 +29,15 @@ def transport(request):
 async def test_iopub(kernel, mode: Literal["direct", "proxy"]):
     n = 10
     socket = kernel._sockets[SocketID.iopub]
-    url = socket.get_string(zmq.LAST_ENDPOINT)
+    url = socket.get_string(zmq.SocketOption.LAST_ENDPOINT)
     assert url.endswith(str(kernel.iopub_port))
 
     def pubio_subscribe():
         """Consume messages"""
         ctx = zmq.Context()
-        s = ctx.socket(zmq.SUB)
+        s = ctx.socket(zmq.SocketType.SUB)
         s.connect(url)
-        s.setsockopt(zmq.SUBSCRIBE, b"")
+        s.setsockopt(zmq.SocketOption.SUBSCRIBE, b"")
         try:
             i = 0
             while i < n:
