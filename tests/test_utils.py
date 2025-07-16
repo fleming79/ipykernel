@@ -23,13 +23,21 @@ def anyio_backend(request):
     return request.param
 
 
+@pytest.fixture(scope="module", params=["tcp", "ipc"])
+def transport(request):
+    return request.param
+
+
 def test_bind_socket(transport: Literal["tcp", "ipc"]):
     ctx = zmq.Context()
-    socket = ctx.socket(zmq.ROUTER)
-    port = bind_socket(socket, transport, "0.0.0.0")
-    socket.close()
-    socket = ctx.socket(zmq.ROUTER)
-    assert bind_socket(socket, transport, "0.0.0.0", port) == port
+    with ctx:
+        with ctx.socket(zmq.SocketType.ROUTER) as socket:
+            port = bind_socket(socket, transport, "0.0.0.0")
+        with ctx.socket(zmq.SocketType.ROUTER) as socket:
+            assert bind_socket(socket, transport, "0.0.0.0", port) == port
+            if transport == "tcp":
+                with pytest.raises(RuntimeError):
+                    bind_socket(socket, transport, "0.0.0.0", "invalid port")  # type: ignore[call-arg]
 
 
 @pytest.mark.anyio

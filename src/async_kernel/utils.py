@@ -44,12 +44,12 @@ T = TypeVar("T")
 def bind_socket(socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port: int = 0, max_attempts=100) -> int:
     def _try_bind_socket(port: int):
         if transport == "tcp":
-            if port <= 0:
+            if not port:
                 port = socket.bind_to_random_port(f"tcp://{ip}")
             else:
                 socket.bind(f"tcp://{ip}:{port}")
         elif transport == "ipc":
-            if port <= 0:
+            if not port:
                 port = 1
                 while True:
                     port = port + 1
@@ -68,17 +68,17 @@ def bind_socket(socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port:
     # Try up to 100 times to bind a port when in conflict to avoid
     # infinite attempts in bad setups
     max_attempts = 1 if port else max_attempts
-    for attempt in range(max_attempts):
+    e = None
+    for _ in range(max_attempts):
         try:
             return _try_bind_socket(port)
-        except ZMQError as e:
+        except ZMQError as e_:
             # Raise if we have any error not related to socket binding
-            if e.errno not in {errno.EADDRINUSE, win_in_use}:
-                raise
-            if attempt == max_attempts - 1:
-                raise
-    msg = f"Failed to bind a {socket}:{port}"
-    raise RuntimeError(msg)
+            if e_.errno in {errno.EADDRINUSE, win_in_use}:
+                e = e_
+                break
+    msg = f"Failed to bind {socket} to {port=}"
+    raise RuntimeError(msg) from e
 
 
 def mark_thread_pydev_do_not_trace(thread: threading.Thread, name="", *, remove=False):
