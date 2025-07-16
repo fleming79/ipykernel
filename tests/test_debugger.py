@@ -12,6 +12,14 @@ from tests import utils
 if TYPE_CHECKING:
     from jupyter_client.asynchronous.client import AsyncKernelClient
 
+import async_kernel.utils
+
+if async_kernel.utils.LAUNCHED_BY_DEBUGPY:
+    import debugpy.server.api
+
+    if debugpy.server.api._config["subProcess"]:
+        msg = 'Sub-process debugging is enabled! First set `"subProcess"=false` in .vscode.launch.json and try again.'
+        raise RuntimeError(msg)
 
 
 @pytest.fixture(scope="module")
