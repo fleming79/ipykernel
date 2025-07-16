@@ -408,3 +408,12 @@ async def test_namespace_default(client, code: str):
     assert code
     _, reply = await utils.execute(client, code)
     assert reply["status"] == "ok"
+
+
+@pytest.mark.parametrize("channel", ["shell", "control"])
+async def test_invalid_message(client, channel):
+    f = utils.send_control_message if channel == "control" else utils.send_shell_message
+    response = None
+    with anyio.move_on_after(0.1):
+        response = await f(client, "invalid-message-type")
+    assert response is None
