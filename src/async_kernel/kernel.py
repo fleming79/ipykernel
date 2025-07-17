@@ -52,7 +52,12 @@ if TYPE_CHECKING:
     from async_kernel.comm import CommManager
     from async_kernel.iostream import OutStream
 
+from typing_extensions import Sentinel
+
 __all__ = ["Kernel", "MsgHeader", "MsgRequest", "MsgType", "SocketID"]
+
+
+null = Sentinel("null")
 
 
 class MsgHeader(TypedDict):
@@ -538,7 +543,7 @@ class Kernel(ConnectionFileMixin):
         msg_or_type: dict[str, Any] | str,
         content: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
-        parent: dict[str, Any] | None = None,
+        parent: dict[str, Any] | None | null = null,
         ident: bytes | list[bytes] | None = None,
         buffers: list[bytes] | None = None,
     ):
@@ -549,7 +554,7 @@ class Kernel(ConnectionFileMixin):
                 msg_or_type=msg_or_type,
                 content=content,
                 metadata=metadata,
-                parent=parent if parent is not None else self._job.get("parent"),  # type: ignore[call-arg]
+                parent=parent if parent is not null else self._job.get("parent"),  # type: ignore[call-arg]
                 ident=ident,
                 buffers=buffers,
             )

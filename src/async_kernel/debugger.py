@@ -281,6 +281,7 @@ class Debugger(traitlets.HasTraits):
             msg_or_type="debug_event",
             content=event,
             ident=self.kernel._topic("debug_event"),
+            parent=None,
         )
 
     def _build_variables_response(self, request, variables):
