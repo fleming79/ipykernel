@@ -7,6 +7,7 @@ import asyncio
 import atexit
 import builtins
 import contextlib
+import contextvars
 import enum
 import getpass
 import logging
@@ -19,7 +20,7 @@ import traceback
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, NotRequired, Self, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Self, TypedDict
 
 import anyio
 import anyio.to_thread
@@ -124,6 +125,7 @@ class Kernel(ConnectionFileMixin):
 
     """
 
+    _job_var: ClassVar[contextvars.ContextVar[MsgRequest]] = contextvars.ContextVar("job")
     _instance: Self | None = None
     _interrupt_requested = False
     _last_interrupt_frame = None
@@ -134,7 +136,6 @@ class Kernel(ConnectionFileMixin):
     _sockets: Dict[SocketID, zmq.Socket] = Dict()
     _shell_handlers = Dict()
     _control_handlers = Dict()
-    _job: traitlets.Container[MsgRequest | dict] = Dict()  # type: ignore[assignment]
     _iopub_url = traitlets.Unicode("inproc://iopub")
     _iopub_sockets: traitlets.Dict[threading.Thread, zmq.Socket] = traitlets.Dict()
     _interrupting = traitlets.Instance(threading.Event, ())
@@ -200,6 +201,10 @@ class Kernel(ConnectionFileMixin):
         signal.signal(signal.SIGINT, self._signal_handler)
         if not os.environ.get("MPLBACKEND"):
             os.environ["MPLBACKEND"] = "module://matplotlib_inline.backend_inline"
+
+    @property
+    def job(self):
+        return self._job_var.get()
 
     @property
     def kernel_info(self):
@@ -554,7 +559,7 @@ class Kernel(ConnectionFileMixin):
                 msg_or_type=msg_or_type,
                 content=content,
                 metadata=metadata,
-                parent=parent if parent is not null else self._job.get("parent"),  # type: ignore[call-arg]
+                parent=parent if parent is not null else self.job.get("parent"),  # type: ignore[call-arg]
                 ident=ident,
                 buffers=buffers,
             )
@@ -696,8 +701,8 @@ class Kernel(ConnectionFileMixin):
             stream=socket,
             msg_or_type="input_request",
             content={"prompt": prompt, "password": password},
-            parent=self._job["parent"],  # type: ignore[call-arg]
-            ident=self._job["ident"],
+            parent=self.job["parent"],  # type: ignore[call-arg]
+            ident=self.job["ident"],
         )
         # Poll for a reply.
         while not (socket.poll(100) & PollEvent.POLLIN):
@@ -746,7 +751,8 @@ class Kernel(ConnectionFileMixin):
 
     async def _execute_request(self, job: MsgRequest):
         """Perform the actual execute_request."""
-        content = job["parent"]["content"]
+        self._job_var.set(job)
+        content = job["parent"]["content"].copy()
         silent = content["silent"]
         stop_on_error = content.pop("stop_on_error", True)
         self._publish_status("busy", job)
@@ -755,7 +761,6 @@ class Kernel(ConnectionFileMixin):
             # Re-broadcast our input for the benefit of listening clients, and
             # start computing output
             if not silent:
-                self._job = job
                 self.iopub_send(
                     msg_or_type="execute_input",
                     content={"code": content["code"], "execution_count": self.shell.execution_count},
