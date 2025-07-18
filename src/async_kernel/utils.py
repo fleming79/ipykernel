@@ -201,12 +201,12 @@ class ThreadCaller:
 
     async def _server_loop(self, tg: TaskGroup, task_status: TaskStatus):
         task_status.started()
-        with contextlib.suppress(anyio.get_cancelled_exc_class()):
-            while True:
-                while len(self._jobs):
-                    tg.start_soon(self._wrap_call, *self._jobs.popleft())
-                    self._jobs_added.clear()
-                await wait_thread_event(self._jobs_added)
+        while not self._closed:
+            while len(self._jobs):
+                tg.start_soon(self._wrap_call, *self._jobs.popleft())
+                self._jobs_added.clear()
+            await wait_thread_event(self._jobs_added)
+        self.taskgroup.cancel_scope.cancel()
 
     def __repr__(self) -> str:
         return f"ThreadCaller<{self.thread}>"
@@ -220,18 +220,11 @@ class ThreadCaller:
 
     def close(self):
         "Once closed it can not be reopened."
-        if not self._closed:
-            if tg := self._taskgroup:
-                self._taskgroup = None
-                if threading.current_thread() is self.thread:
-                    tg.cancel_scope.cancel()
-                else:
-                    self.call_soon(tg.cancel_scope.cancel)
-            self._closed = True
-            self._jobs_added.set()
-            self._instances.pop(self.thread, None)
-            if self in self._to_thread_pool:
-                self._to_thread_pool.remove(self)
+        self._closed = True
+        self._jobs_added.set()
+        self._instances.pop(self.thread, None)
+        if self in self._to_thread_pool:
+            self._to_thread_pool.remove(self)
 
     def _to_thread_on_done(self, _):
         if not self._closed:
@@ -336,7 +329,7 @@ class ThreadCaller:
         ready_event = threading.Event()
         thread = threading.Thread(target=run_event_loop, name=name, daemon=True)
         thread.start()
-        ready_event.wait(10)
+        ready_event.wait()
         assert isinstance(tsc, cls)
         return tsc
 
