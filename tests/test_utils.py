@@ -29,16 +29,17 @@ def transport(request):
     return request.param
 
 
-def test_bind_socket(transport: Literal["tcp", "ipc"]):
+def test_bind_socket(transport: Literal["tcp", "ipc"], tmp_path):
     ctx = zmq.Context()
+    ip = tmp_path / "mypath" if transport == "ipc" else "0.0.0.0"
     with ctx:
         with ctx.socket(zmq.SocketType.ROUTER) as socket:
-            port = bind_socket(socket, transport, "0.0.0.0")
+            port = bind_socket(socket, transport, ip)
         with ctx.socket(zmq.SocketType.ROUTER) as socket:
-            assert bind_socket(socket, transport, "0.0.0.0", port) == port
+            assert bind_socket(socket, transport, ip, port) == port
             if transport == "tcp":
                 with pytest.raises(RuntimeError):
-                    bind_socket(socket, transport, "0.0.0.0", "invalid port")  # type: ignore[call-arg]
+                    bind_socket(socket, transport, ip, "invalid port")  # type: ignore[call-arg]
 
 
 @pytest.mark.parametrize(
