@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 
-TIMEOUT = 10 if not async_kernel.utils.LAUNCHED_BY_DEBUGPY else 1e6
+TIMEOUT = 5 if not async_kernel.utils.LAUNCHED_BY_DEBUGPY else 1e6
 
 
 class ExecuteContentType(TypedDict):
@@ -58,7 +58,7 @@ async def get_reply(
                 return reply
 
 
-def validate_message(msg: Mapping[str, Any], msg_type=None, parent=None):
+def validate_message(msg: Mapping[str, Any], msg_type="", parent=None):
     """validate a message.
 
     If msg_type and/or parent are given, the msg_type and/or parent msg_id
@@ -146,7 +146,7 @@ async def send_control_message(client: AsyncKernelClient, msg_type: str, content
     return await get_reply(client, msg["header"]["msg_id"], channel="control")
 
 
-async def check_pub_message(client: AsyncKernelClient, msg_id: str, *, msg_type="status", **content_checks):
+async def check_pub_message(client: AsyncKernelClient, msg_id: str = "", *, msg_type="status", **content_checks):
     msg = await client.get_iopub_msg()
     validate_message(msg, msg_type, msg_id)
     content = msg["content"]

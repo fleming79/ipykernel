@@ -18,8 +18,11 @@ async def test_execute(client, kernel):
 
 
 async def test_execute_control(client, kernel):
-    await utils.send_control_message(client, "execute_request", {"code": "y=10"})
+    await utils.clear_pub_message(client)
+    await utils.send_control_message(client, "execute_request", {"code": "y=10", "silent": True})
     assert kernel.shell.user_ns["y"] == 10
+    await utils.check_pub_message(client, execution_state="busy")
+    await utils.check_pub_message(client, execution_state="idle")
 
 
 async def test_execute_silent(client):

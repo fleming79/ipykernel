@@ -16,7 +16,7 @@ import zmq
 
 import async_kernel.utils
 from async_kernel.comm import Comm
-from async_kernel.kernel import SocketID
+from async_kernel.kernel import ExecuteMode, SocketID
 from tests import utils
 
 
@@ -394,6 +394,21 @@ async def test_magic(client, code: str):
     assert code
     _, reply = await utils.execute(client, code)
     assert reply["status"] == "ok"
+
+
+@pytest.mark.parametrize("mode", ExecuteMode)
+async def test_header_mode(client, mode: ExecuteMode):
+    code = f"""
+#@{mode.name}
+import time
+time.sleep(0.1)
+print("{mode.name}")
+"""
+    await utils.clear_pub_message(client)
+    _, reply = await utils.execute(client, code)
+    assert reply["status"] == "ok"
+    stdout, _ = await utils.assemble_output(client)
+    assert mode.name in stdout
 
 
 @pytest.mark.parametrize(

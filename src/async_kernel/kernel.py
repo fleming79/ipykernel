@@ -8,7 +8,6 @@ import atexit
 import builtins
 import contextlib
 import contextvars
-import enum
 import getpass
 import logging
 import os
@@ -20,7 +19,7 @@ import traceback
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Self, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self
 
 import anyio
 import anyio.to_thread
@@ -42,10 +41,12 @@ from async_kernel import _version, utils
 from async_kernel.asyncshell import AsyncInteractiveShell
 from async_kernel.debugger import Debugger
 from async_kernel.kernelspec import KernelName
+from async_kernel.typing import ExecuteJobInfo, ExecuteMode, MsgRequest, MsgType, SocketID, null
 from async_kernel.utils import ThreadCaller
 
 if TYPE_CHECKING:
-    from types import FrameType
+    from collections.abc import Callable
+    from types import CoroutineType, FrameType
 
     from anyio.abc import TaskStatus
     from IPython.core.interactiveshell import ExecutionResult
@@ -53,49 +54,8 @@ if TYPE_CHECKING:
     from async_kernel.comm import CommManager
     from async_kernel.iostream import OutStream
 
-from typing_extensions import Sentinel
 
-__all__ = ["Kernel", "MsgHeader", "MsgRequest", "MsgType", "SocketID"]
-
-
-null = Sentinel("null")
-
-
-class MsgHeader(TypedDict):
-    # https://jupyter-client.readthedocs.io/en/stable/messaging.html#message-header
-    msg_id: str
-    session: str
-    username: str
-    date: str
-    msg_type: str
-    version: str
-    subshell_id: NotRequired[str | None]
-
-
-class MsgType(TypedDict):
-    header: MsgHeader
-    parent_header: MsgHeader
-    metadata: dict[str, Any]
-    content: dict[str, Any]
-    buffers: list[bytearray | bytes]
-
-
-class MsgRequest(TypedDict):
-    "A message associated with the socket and ident"
-
-    socket_id: Literal[SocketID.control, SocketID.shell]
-    socket: zmq.Socket
-    ident: bytes | list[bytes]
-    msg_type: str
-    parent: MsgType
-
-
-class SocketID(enum.StrEnum):
-    heartbeat = "hb"
-    shell = "shell"
-    stdin = "stdin"
-    control = "control"
-    iopub = "iopub"
+__all__ = ["Kernel", "KernelInterruptError"]
 
 
 class KernelInterruptError(InterruptedError):
@@ -179,22 +139,20 @@ class Kernel(ConnectionFileMixin):
         self.connection_file = str(connection_file)
         super().__init__(**kwargs)
         self._shell_handlers = {
-            "kernel_info_request": self.kernel_info_request,
-            "comm_info_request": self.comm_info_request,
-            "execute_request": self.execute_request,
-            "interrupt_request": self.interrupt_request,
-            "complete_request": self.complete_request,
-            "is_complete_request": self.is_complete_request,
-            "inspect_request": self.inspect_request,
-            "history_request": self.history_request,
-            "comm_open": self.comm_open,
-            "comm_msg": self.comm_msg,
-            "comm_close": self.comm_close,
+            MsgType.kernel_info_request: self.kernel_info_request,
+            MsgType.comm_info_request: self.comm_info_request,
+            MsgType.interrupt_request: self.interrupt_request,
+            MsgType.complete_request: self.complete_request,
+            MsgType.is_complete_request: self.is_complete_request,
+            MsgType.inspect_request: self.inspect_request,
+            MsgType.history_request: self.history_request,
+            MsgType.comm_open: self.comm_open,
+            MsgType.comm_msg: self.comm_msg,
+            MsgType.comm_close: self.comm_close,
         }
-        self._control_handlers = {
-            "execute_request": self.control_execute_request,  # no task queue
-            "shutdown_request": self.control_shutdown_request,
-            "debug_request": self.debug_request,
+        self._control_handlers = self._shell_handlers | {
+            MsgType.shutdown_request: self.control_shutdown_request,
+            MsgType.debug_request: self.debug_request,
         }
         sys.excepthook = self.excepthook
         sys.unraisablehook = self.unraisablehook
@@ -204,6 +162,7 @@ class Kernel(ConnectionFileMixin):
 
     @property
     def job(self):
+        "The job in context of the current coroutine."
         return self._job_var.get()
 
     @property
@@ -422,9 +381,11 @@ class Kernel(ConnectionFileMixin):
 
     async def _start_iopub(self, task_status: TaskStatus):
         # Save IO
-        self._original_io = sys.stdout, sys.stderr, sys.displayhook
+        self._original_io = sys.stdout, sys.stderr, sys.displayhook, builtins.input, self.getpass
         cls: type[OutStream] = import_item(self.outstream_class)
         if self.outstream_class:
+            builtins.input = self.raw_input
+            getpass.getpass = self.getpass
             for name in ["stdout", "stderr"]:
 
                 def flusher(string: str, name=name):
@@ -449,7 +410,7 @@ class Kernel(ConnectionFileMixin):
         finally:
             self.comm_manager.kernel = None
             # Reset IO
-            sys.stdout, sys.stderr, sys.displayhook = self._original_io
+            sys.stdout, sys.stderr, sys.displayhook, builtins.input, getpass.getpass = self._original_io
 
     async def _wait_stopped(self, task_status: TaskStatus):
         def wait_stopped():
@@ -464,7 +425,6 @@ class Kernel(ConnectionFileMixin):
 
     async def _receive_msg_loop(self, socket_id: Literal[SocketID.control, SocketID.shell], *, task_status: TaskStatus):
         """Receive messages from the socket, unpack them and pass them to be processed with process_message."""
-
         if (
             sys.platform == "win32"
             and sniffio.current_async_library() == "asyncio"
@@ -475,8 +435,6 @@ class Kernel(ConnectionFileMixin):
 
             selector = get_selector()
             utils.mark_thread_pydev_do_not_trace(selector._thread)
-
-        process_message = self._process_control if socket_id is SocketID.control else self._process_shell
         socket = zmq.Socket(self._zmq_context, zmq.SocketType.ROUTER)
         with self.iopub_enabled_this_thread(slow_subscriber_sleep=0.0), self._bind_socket(socket_id, socket):
             try:
@@ -484,6 +442,9 @@ class Kernel(ConnectionFileMixin):
                 while True:
                     while socket.get(SocketOption.EVENTS) & PollEvent.POLLIN:  # type: ignore[call-arg]
                         ident, parent = self.session.recv(socket, copy=False)
+                        if socket_id == SocketID.shell:
+                            # Reset the frame to show the main thread is not blocked.
+                            self._last_interrupt_frame = None
                         if not ident or not parent:
                             continue
                         msg_type = parent["header"]["msg_type"]
@@ -495,10 +456,32 @@ class Kernel(ConnectionFileMixin):
                             parent=parent,  # type: ignore[call-arg]
                             msg_type=msg_type,
                         )
-                        await process_message(job)
+                        if msg_type == MsgType.execute_request:
+                            info = utils.get_execute_info(parent["content"])
+                            if socket_id != SocketID.shell or info["execute_mode"] != ExecuteMode.queue:
+                                ThreadCaller().call_soon(self.execute_request, time.monotonic(), job, info)
+                            else:
+                                await self._exec_send_stream.send((time.monotonic(), job, info))
+                        else:
+                            hdlrs = self._shell_handlers if socket_id == SocketID.shell else self._control_handlers
+                            await self._run_handler(hdlrs.get(msg_type), job)
                     await anyio.wait_readable(socket)
             except (zmq.ContextTerminated, self.CancelledError):
                 return
+
+    async def _run_handler(self, handler: Callable[[MsgRequest], CoroutineType] | None, job: MsgRequest):
+        self._job_var.set(job)
+        if not handler:
+            self.log.error("Unknown message type: %r", job["msg_type"])
+            return
+        try:
+            self._publish_status("busy", job)
+            await handler(job)
+        except Exception as e:
+            self._send_error_reply(job, ename=str(type(e).__name__), evalue=str(e), traceback=traceback.format_stack())
+            self.log.exception("Exception in message handler:", exc_info=e)
+        finally:
+            self._publish_status("idle", job)
 
     @contextlib.contextmanager
     def _bind_socket(self, socket_id: SocketID, socket: zmq.Socket):
@@ -621,78 +604,27 @@ class Kernel(ConnectionFileMixin):
         }
         self.send_reply(job, content)
 
-    async def _process_control(self, job: MsgRequest):
-        # Inside control thread
-
-        # Execute_requests
-        msg_type = job["msg_type"]
-        handler = self._control_handlers.get(msg_type) or self._shell_handlers.get(msg_type)
-        if not handler:
-            self.log.error("Unknown message type: %r", msg_type)
-        else:
-            if msg_type != "execute_request":
-                self._publish_status("busy", job)
-            try:
-                await handler(job)
-            except Exception as e:
-                self._send_error_reply(job, ename=str(type(e).__name__), evalue=str(e))
-                self.log.exception("Execute request exception for %s", job, exc_info=e)
-            finally:
-                if msg_type != "execute_request":
-                    self._publish_status("idle", job)
-
-    async def _process_shell(self, job: MsgRequest):
-        self._last_interrupt_frame = None
-        if job["msg_type"] == "execute_request":
-            await self.execute_request(job)
-        else:
-            handler = self._shell_handlers.get(job["msg_type"])
-            if handler is None:
-                self.log.error("Unknown message type: %r", job["msg_type"])
-            else:
-                try:
-                    self._publish_status("busy", job)
-                    await handler(job)
-                except Exception as e:
-                    self._send_error_reply(
-                        job, ename=str(type(e).__name__), evalue=str(e), traceback=traceback.format_stack()
-                    )
-                    self.log.exception("Exception in message handler:", exc_info=e)
-                finally:
-                    self._publish_status("idle", job)
-
     async def _shell_execute_request_loop(self, *, task_status: TaskStatus):
-        self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[tuple[float, MsgRequest]](
-            max_buffer_size=1000
-        )
+        self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[
+            tuple[float, MsgRequest, ExecuteJobInfo]
+        ](max_buffer_size=1000)
         with contextlib.suppress(self.CancelledError):
             async with self._exec_receive_stream as receive_stream:
                 task_status.started()
-                async for received_time, job in receive_stream:
-                    try:
-                        if received_time < self._stop_on_error_time:
-                            self.log.info("Aborting execute_request: %s", job)
-                            self._publish_status("busy", job)
-                            self._send_error_reply(job, evalue="Aborting due to prior exception")
-                            self._publish_status("idle", job)
-                            continue
-                        await self._execute_request(job)
-                    except BaseException as e:
-                        self.log.exception("Execute request", exc_info=e)
-                        self._send_error_reply(
-                            job,
-                            ename=str(type(e).__name__),
-                            evalue=str(e),
-                            traceback=traceback.format_stack(),
-                        )
+                async for job, received_time, info in receive_stream:
+                    await self.execute_request(job, received_time, info)
 
     def _topic(self, topic):
         """prefixed topic for IOPub messages"""
         return (f"kernel.{topic}").encode()
 
     def _input_request(self, prompt: str, *, password=False):
-        # Clear messages on the stdin socket
+        job = self.job
+        if not job["parent"].get("content", {}).get("allow_stdin", False):
+            msg = "Stdin is not allowed in this context!"
+            raise StdinNotImplementedError(msg)
         socket = self._sockets[SocketID.stdin]
+        # Clear messages on the stdin socket
         while socket.get(SocketOption.EVENTS) & PollEvent.POLLIN:  # type: ignore[call-arg]
             socket.recv_multipart(flags=Flag.DONTWAIT, copy=False)
         # Send the input request.
@@ -701,8 +633,8 @@ class Kernel(ConnectionFileMixin):
             stream=socket,
             msg_or_type="input_request",
             content={"prompt": prompt, "password": password},
-            parent=self.job["parent"],  # type: ignore[call-arg]
-            ident=self.job["ident"],
+            parent=job["parent"],  # type: ignore[call-arg]
+            ident=job["ident"],
         )
         # Poll for a reply.
         while not (socket.poll(100) & PollEvent.POLLIN):
@@ -729,56 +661,92 @@ class Kernel(ConnectionFileMixin):
         }
         self.send_reply(job, {"comms": comms})
 
-    async def execute_request(self, job: MsgRequest):
-        """Handle an execute_request.
-
-        * *Non-silent*:
-            - Added to a queue and executed sequntially in a separate task.
-            - Respect an `interrupt_request`.
-            - Stop on error results with all queued *non-silent* requests returning an error.
-        * *Silent*:
-            - Started in a separate task.
-            - Ignore `interrupt_request`.
-            - Stop on error is not relevant.
-        """
-        # ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute
-        content = job["parent"]["content"]
-        silent = content["silent"]
-        if not silent:
-            await self._exec_send_stream.send((time.monotonic(), job))
-        else:
-            self.main_thread_caller.call_later(self._execute_request, 0, job)
-
-    async def _execute_request(self, job: MsgRequest):
+    async def execute_request(self, received_time: float, job: MsgRequest, info: ExecuteJobInfo):
         """Perform the actual execute_request."""
-        self._job_var.set(job)
         content = job["parent"]["content"].copy()
         silent = content["silent"]
-        stop_on_error = content.pop("stop_on_error", True)
-        self._publish_status("busy", job)
-        cell_id = None if silent else job["parent"].get("metadata", {}).get("cellId")
-        try:
-            # Re-broadcast our input for the benefit of listening clients, and
-            # start computing output
+
+        if not silent and received_time < self._stop_on_error_time:
+            self.log.info("Aborting execute_request: %s", job)
+            self._publish_status("busy", job)
+            self._send_error_reply(job, evalue="Aborting due to prior exception")
+            self._publish_status("idle", job)
+            return
+
+        async def execute_request_handler(job):
+            # ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute
+
             if not silent:
                 self.iopub_send(
                     msg_or_type="execute_input",
                     content={"code": content["code"], "execution_count": self.shell.execution_count},
-                    parent=job["parent"],  # type: ignore[call-arg]
+                    parent=job["parent"],
                     ident=self._topic("execute_input"),
                 )
-            # Call do_execute with the appropriate arguments
-            reply_content = await self._do_execute(cell_id=cell_id, **content)
+
+            async def _do_execute():
+                interrupt = threading.Event()
+                result: ExecutionResult | None = None
+                if not silent:
+                    self._interrupt_events.add(interrupt)
+                try:
+
+                    async def run():
+                        nonlocal result
+                        try:
+                            result = await self.shell.run_cell_async(
+                                raw_cell=code,
+                                store_history=content.get("store_history", False),
+                                silent=silent,
+                                transformed_cell=self.shell.transform_cell(code),
+                                shell_futures=True,
+                                cell_id=cell_id,
+                            )
+                        except asyncio.CancelledError:
+                            pass
+                        finally:
+                            interrupt.set()
+
+                    async with anyio.create_task_group() as tg:
+                        tg.start_soon(run)
+                        await anyio.to_thread.run_sync(interrupt.wait)
+                        if result is None:
+                            tg.cancel_scope.cancel()
+                finally:
+                    self._interrupt_events.discard(interrupt)
+                err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError
+                if user_expressions := content.get("user_expressions", {}):
+                    user_expressions = self.shell.user_expressions(user_expressions)
+                reply_content = {
+                    "status": "ok" if not err else "error",
+                    "execution_count": self.shell.execution_count - 1,
+                    "user_expressions": user_expressions,
+                }
+                if err:
+                    reply_content.update(
+                        {
+                            "traceback": self.shell._last_traceback or [],
+                            "ename": type(err).__name__,
+                            "evalue": str(err),
+                        }
+                    )
+                return reply_content
+
+            if info["execute_mode"] == ExecuteMode.thread:
+                pr = ThreadCaller.to_thread(_do_execute)
+                reply_content = await pr.wait()
+            else:
+                reply_content = await _do_execute()
             if not silent and stop_on_error and reply_content.get("status") == "error":
                 self._stop_on_error_time = time.monotonic()
                 self.log.info("An error occurred in a non-silent execution request at %s", self._stop_on_error_time)
             # Send the reply.
             self.send_reply(job, reply_content)
-        except Exception as e:
-            self._send_error_reply(job, ename=e.__class__.__name__, evalue=str(e))
-            self.log.exception("Execute request exception for %s", job, exc_info=e)
-        finally:
-            self._publish_status("idle", job)
+
+        code = content["code"]
+        stop_on_error = content.pop("stop_on_error", True)
+        cell_id = None if silent else job["parent"].get("metadata", {}).get("cellId")
+        await self._run_handler(execute_request_handler, job)
 
     async def interrupt_request(self, job: MsgRequest):
         """Handle an interrupt request."""
@@ -828,13 +796,6 @@ class Kernel(ConnectionFileMixin):
     async def comm_close(self, job: MsgRequest):
         self.comm_manager.comm_close(job["socket"], job["ident"], job["parent"])  # type: ignore[call-arg]
 
-    async def control_execute_request(self, job: MsgRequest):
-        content = job["parent"]["content"]
-        # Override setting
-        content["silent"] = True
-        content["allow_stdin"] = False
-        self.control_thread_caller.call_later(self._execute_request, 0, job)
-
     async def control_shutdown_request(self, job: MsgRequest):
         """Handle a shutdown request."""
         await self.debugger.disconnect()
@@ -845,70 +806,6 @@ class Kernel(ConnectionFileMixin):
         """Handle a debug request."""
         content = await self.debugger.process_request(job["parent"]["content"])
         self.send_reply(job=job, content=content)
-
-    async def _do_execute(
-        self,
-        code: str,
-        silent: bool,
-        store_history=True,
-        user_expressions: dict | None = None,
-        allow_stdin=False,
-        cell_id: str | None = None,
-    ):
-        """Handle code execution."""
-        # ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute
-        interrupt = threading.Event()
-        result: ExecutionResult | None = None
-        if not silent:
-            self._interrupt_events.add(interrupt)
-            self._allow_stdin = allow_stdin
-            self._sys_raw_input = builtins.input
-            builtins.input = self.raw_input
-            self._save_getpass = getpass.getpass
-            getpass.getpass = self.getpass
-        try:
-
-            async def run():
-                nonlocal result
-                try:
-                    result = await self.shell.run_cell_async(
-                        raw_cell=code,
-                        store_history=store_history,
-                        silent=silent,
-                        transformed_cell=self.shell.transform_cell(code),
-                        shell_futures=True,
-                        cell_id=cell_id,
-                    )
-                except asyncio.CancelledError:
-                    pass
-                finally:
-                    interrupt.set()
-
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(run)
-                await anyio.to_thread.run_sync(interrupt.wait)
-                if result is None:
-                    tg.cancel_scope.cancel()
-        finally:
-            self._interrupt_events.discard(interrupt)
-            if not silent:
-                builtins.input = self._sys_raw_input
-                getpass.getpass = self._save_getpass
-        err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError
-        reply_content = {
-            "status": "ok" if not err else "error",
-            "execution_count": self.shell.execution_count - 1,
-            "user_expressions": self.shell.user_expressions(user_expressions) if not err and user_expressions else {},
-        }
-        if err:
-            reply_content.update(
-                {
-                    "traceback": self.shell._last_traceback or [],
-                    "ename": type(err).__name__,
-                    "evalue": str(err),
-                }
-            )
-        return reply_content
 
     async def do_complete(self, code, cursor_pos):
         """Completions from IPython, using Jedi."""
@@ -1014,12 +911,8 @@ class Kernel(ConnectionFileMixin):
         ------
         StdinNotImplementedError if active frontend doesn't support stdin.
         """
-        if not self._allow_stdin:
-            raise StdinNotImplementedError
         return self._input_request(str(prompt), password=False)
 
     def getpass(self, prompt=""):
         """Forward getpass to frontends."""
-        if not self._allow_stdin:
-            raise StdinNotImplementedError
         return self._input_request(prompt, password=True)

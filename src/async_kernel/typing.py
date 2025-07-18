@@ -1,0 +1,96 @@
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
+
+from __future__ import annotations
+
+import enum
+from typing import TYPE_CHECKING, Any, Generic, Literal, NotRequired, TypedDict, TypeVar
+
+from typing_extensions import Sentinel
+
+if TYPE_CHECKING:
+    import zmq
+
+__all__ = ["Message", "MsgHeader", "MsgRequest", "SocketID"]
+
+
+null = Sentinel("null")
+
+
+T = TypeVar("T")
+D = TypeVar("D", bound=dict)
+
+
+class SocketID(enum.StrEnum):
+    heartbeat = "hb"
+    shell = "shell"
+    stdin = "stdin"
+    control = "control"
+    iopub = "iopub"
+
+
+class ExecuteMode(enum.StrEnum):
+    task = "task"
+    thread = "thread"
+    queue = "queue"
+
+
+class MsgType(enum.StrEnum):
+    kernel_info_request = "kernel_info_request"
+    comm_info_request = "comm_info_request"
+    execute_request = "execute_request"
+    interrupt_request = "interrupt_request"
+    complete_request = "complete_request"
+    is_complete_request = "is_complete_request"
+    inspect_request = "inspect_request"
+    history_request = "history_request"
+    comm_open = "comm_open"
+    comm_msg = "comm_msg"
+    comm_close = "comm_close"
+    # Control
+    shutdown_request = "shutdown_request"
+    debug_request = "debug_request"
+
+
+class MsgHeader(TypedDict):
+    # https://jupyter-client.readthedocs.io/en/stable/messaging.html#message-header
+    msg_id: str
+    session: str
+    username: str
+    date: str
+    msg_type: str
+    version: str
+    subshell_id: NotRequired[str | None]
+
+
+class Message(TypedDict, Generic[T]):
+    header: MsgHeader
+    parent_header: MsgHeader
+    metadata: dict[str, Any]
+    content: T
+    buffers: list[bytearray | bytes]
+
+
+class MsgRequest(TypedDict, Generic[T]):
+    "A message bundled with its details."
+
+    parent: Message[T]
+    socket_id: Literal[SocketID.control, SocketID.shell]
+    socket: zmq.Socket
+    ident: bytes | list[bytes]
+    msg_type: MsgType
+
+
+class ExecuteJobInfo(TypedDict):
+    execute_mode: ExecuteMode
+    namespace: str
+
+
+class ExecuteContent(TypedDict):
+    # ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute
+    code: str
+    silent: bool
+    store_history: bool
+    user_expressions: dict
+    allow_stdin: bool
+    stop_on_error: bool

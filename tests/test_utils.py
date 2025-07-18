@@ -15,7 +15,8 @@ import pytest
 import sniffio
 import zmq
 
-from async_kernel.utils import PendingResult, ThreadCaller, bind_socket
+from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode
+from async_kernel.utils import PendingResult, ThreadCaller, bind_socket, get_execute_info
 
 
 @pytest.fixture(scope="module", params=["asyncio", "trio"])
@@ -38,6 +39,37 @@ def test_bind_socket(transport: Literal["tcp", "ipc"]):
             if transport == "tcp":
                 with pytest.raises(RuntimeError):
                     bind_socket(socket, transport, "0.0.0.0", "invalid port")  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize(
+    ("code", "silent", "expected"),
+    [
+        ("#@task", False, ExecuteJobInfo(execute_mode=ExecuteMode.task, namespace="")),
+        ("print(1)", False, ExecuteJobInfo(execute_mode=ExecuteMode.queue, namespace="")),
+        ("", True, ExecuteJobInfo(execute_mode=ExecuteMode.task, namespace="")),
+        (
+            "#@thread, namespace= My namespace \nprint('hello')",
+            False,
+            ExecuteJobInfo(execute_mode=ExecuteMode.thread, namespace="My namespace"),
+        ),
+        (
+            "#@namespace=1 @!%n🌋 \nprint(None)",
+            False,
+            ExecuteJobInfo(execute_mode=ExecuteMode.queue, namespace="1 @!%n🌋"),
+        ),
+    ],
+)
+def test_get_execute_info(code: str, silent: bool, expected: dict):
+    content = ExecuteContent(
+        code=code,
+        silent=silent,
+        store_history=True,
+        user_expressions={},
+        allow_stdin=False,
+        stop_on_error=True,
+    )
+    execute_info = get_execute_info(content)
+    assert execute_info == expected
 
 
 @pytest.mark.anyio
