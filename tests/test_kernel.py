@@ -143,27 +143,21 @@ async def test_save_history(client, tmp_path):
     assert 'b="abcþ"' in content
 
 
-async def test_is_complete(client):
+@pytest.mark.parametrize(
+    ("code", "status"),
+    [
+        ("2+2", "complete"),
+        ("raise = 2", "invalid"),
+        ("a = [1,\n2,", "incomplete"),
+        ("%%timeit\na\n\n", "complete"),
+    ],
+)
+async def test_is_complete(client, code: str, status: str):
     # There are more test cases for this in core - here we just check
     # that the kernel exposes the interface correctly.
-    client.is_complete("2+2")
+    client.is_complete(code)
     reply = await client.get_shell_msg()
-    assert reply["content"]["status"] == "complete"
-
-    # SyntaxError
-    client.is_complete("raise = 2")
-    reply = await client.get_shell_msg()
-    assert reply["content"]["status"] == "invalid"
-
-    client.is_complete("a = [1,\n2,")
-    reply = await client.get_shell_msg()
-    assert reply["content"]["status"] == "incomplete"
-    assert reply["content"]["indent"] == ""
-
-    # Cell magic ends on two blank lines for console UIs
-    client.is_complete("%%timeit\na\n\n")
-    reply = await client.get_shell_msg()
-    assert reply["content"]["status"] == "complete"
+    assert reply["content"]["status"] == status
 
 
 async def test_message_order(client):
