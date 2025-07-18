@@ -27,37 +27,35 @@ def transport(request):
 
 @pytest.mark.parametrize("mode", ["direct", "proxy"])
 async def test_iopub(kernel, mode: Literal["direct", "proxy"]):
+    def pubio_subscribe():
+        """Consume messages"""
+        with ctx.socket(zmq.SocketType.SUB) as socket:
+            socket.linger = 0
+            socket.connect(url)
+            socket.setsockopt(zmq.SocketOption.SUBSCRIBE, b"")
+            i = 0
+            while i < n:
+                msg = socket.recv_multipart()
+                if msg[0] == b"0":
+                    assert int(msg[1]) == i
+                    i += 1
+
     n = 10
     socket = kernel._sockets[SocketID.iopub]
     url = socket.get_string(zmq.SocketOption.LAST_ENDPOINT)
     assert url.endswith(str(kernel.iopub_port))
-
-    def pubio_subscribe():
-        """Consume messages"""
-        ctx = zmq.Context()
-        s = ctx.socket(zmq.SocketType.SUB)
-        s.connect(url)
-        s.setsockopt(zmq.SocketOption.SUBSCRIBE, b"")
-        try:
-            i = 0
-            while i < n:
-                msg = s.recv_multipart()
-                if msg[0] == b"0":
-                    assert int(msg[1]) == i
-                    i += 1
-        finally:
-            s.close()
-            ctx.term()
-
+    ctx = zmq.Context()
     thread = threading.Thread(target=pubio_subscribe)
     thread.start()
-    time.sleep(0.05)
-    if mode == "proxy":
-        socket = kernel._iopub_sockets.get(threading.current_thread())
-    for i in range(n):
-        socket.send_multipart([b"0", f"{i}".encode()])
-    thread.join()
-
+    try:
+        time.sleep(0.05)
+        if mode == "proxy":
+            socket =  kernel._iopub_sockets.get(threading.current_thread())
+        for i in range(n):
+            socket.send_multipart([b"0", f"{i}".encode()])
+        thread.join()
+    finally:
+        ctx.term()
 
 @pytest.mark.parametrize("quiet", [True, False])
 async def test_simple_print(kernel, client, quiet: bool):
