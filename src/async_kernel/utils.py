@@ -141,7 +141,7 @@ async def wait_thread_event(event: threading.Event):
             event.wait()
 
     try:
-        await anyio.to_thread.run_sync(_in_thread_call, abandon_on_cancel=True)
+        await anyio.to_thread.run_sync(_in_thread_call)
     finally:
         event.set()
 

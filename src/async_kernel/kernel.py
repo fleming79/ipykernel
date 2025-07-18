@@ -413,12 +413,8 @@ class Kernel(ConnectionFileMixin):
             sys.stdout, sys.stderr, sys.displayhook, builtins.input, getpass.getpass = self._original_io
 
     async def _wait_stopped(self, task_status: TaskStatus):
-        def wait_stopped():
-            with utils.do_not_debug_this_thread():
-                self._stop_event.wait()
-
         task_status.started()
-        await anyio.to_thread.run_sync(wait_stopped)
+        await utils.wait_thread_event(self._stop_event)
         self.control_thread_caller.close()
         self.main_thread_caller.close()
         ThreadCaller._shutdown_to_thread_instances()
