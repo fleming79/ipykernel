@@ -392,6 +392,8 @@ async def test_magic(client, code: str):
     assert code
     _, reply = await utils.execute(client, code)
     assert reply["status"] == "ok"
+    stdout, _ = await utils.assemble_output(client)
+    assert  stdout
 
 
 @pytest.mark.parametrize("mode", ExecuteMode)
