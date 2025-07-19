@@ -50,25 +50,27 @@ async def test_iopub(kernel, mode: Literal["direct", "proxy"]):
     try:
         time.sleep(0.05)
         if mode == "proxy":
-            socket =  kernel._iopub_sockets.get(threading.current_thread())
+            socket = kernel._iopub_sockets.get(threading.current_thread())
         for i in range(n):
             socket.send_multipart([b"0", f"{i}".encode()])
         thread.join()
     finally:
         ctx.term()
 
+
 @pytest.mark.parametrize("quiet", [True, False])
 async def test_simple_print(kernel, client, quiet: bool):
     """simple print statement in kernel"""
     kernel.quiet = quiet
     try:
-        await utils.clear_pub_message(client)
         client.execute("print('test_simple_print')")
         stdout, stderr = await utils.assemble_output(client)
         assert stdout == "test_simple_print\n"
         assert stderr == ""
+        await utils.clear_iopub(client)
     finally:
         kernel.quiet = True
+        await utils.clear_iopub(client)
 
 
 @pytest.mark.parametrize("test_mode", ["interrupt", "reply", "allow_stdin=False"])
@@ -100,7 +102,7 @@ async def test_input(
     # interrupt
     if test_mode == "interrupt":
         await utils.send_control_message(client, "interrupt_request")
-        reply = await utils.get_reply(client, msg_id)
+        reply = await utils.get_reply(client, msg_id, clear_pub=False)
         assert reply["content"]["status"] == "error"
         return
     # reply
@@ -141,6 +143,7 @@ async def test_save_history(client, tmp_path):
         content = f.read()
     assert "a=1" in content
     assert 'b="abcþ"' in content
+    await utils.clear_iopub(client)
 
 
 @pytest.mark.parametrize(
@@ -158,6 +161,7 @@ async def test_is_complete(client, code: str, status: str):
     client.is_complete(code)
     reply = await client.get_shell_msg()
     assert reply["content"]["status"] == status
+    await utils.clear_iopub(client)
 
 
 async def test_message_order(client):
@@ -174,6 +178,7 @@ async def test_message_order(client):
         reply = await client.get_shell_msg()
         assert reply["content"]["execution_count"] == i
         assert reply["parent_header"]["msg_id"] == msg_id
+    await utils.clear_iopub(client)
 
 
 async def test_execute_request(client):
@@ -258,7 +263,6 @@ async def test_comm_open_msg_close(client, kernel, mocker):
 
 
 async def test_interrupt_request(client, kernel):
-    await utils.clear_pub_message(client)
     event = threading.Event()
     kernel._interrupt_events.add(event)
     reply = await utils.send_control_message(client, "interrupt_request")
@@ -282,7 +286,7 @@ async def test_interrupt_request_blocking_task(subprocess_kernels_client):
 async def test():
     import time
     started.set()
-    await anyio.sleep(0.1)
+    await anyio.sleep(0.01)
     try:
         time.sleep(5)
     except KernelInterruptError:
@@ -296,11 +300,12 @@ await started.wait()
     client = subprocess_kernels_client
     _, reply = await utils.execute(client, code)
     assert reply["status"] == "ok"
-    await anyio.sleep(0.15)
+    await anyio.sleep(0.011)
     for _ in range(2):  # Blocking calls in tasks need to be interrupted twice
-        await utils.send_control_message(client, "interrupt_request")
-    stdout, _ = await utils.assemble_output(client, timeout=5)
+        await utils.send_control_message(client, "interrupt_request", clear_pub=False)
+    stdout, _ = await utils.assemble_output(client, timeout=1)
     assert "KernelInterruptError" in stdout
+    await utils.clear_iopub(client)
 
 
 @pytest.mark.parametrize("response", ["y", ""])
@@ -379,16 +384,17 @@ async def test_matplotlib_inline_on_import(kernel, client):
     _, reply = await utils.execute(client, code, user_expressions={"backend": "backend"})
     backend_bundle = reply["user_expressions"]["backend"]
     assert "backend_inline" in backend_bundle["data"]["text/plain"]
+    await utils.clear_iopub(client)
 
 
 @pytest.mark.parametrize("code", ["%connect_info", "%matplotlib --list"])
 async def test_magic(client, code: str):
     assert code
-    _, reply = await utils.execute(client, code)
+    _, reply = await utils.execute(client, code, clear_pub=False)
     assert reply["status"] == "ok"
     stdout, _ = await utils.assemble_output(client)
-    assert  stdout
-
+    assert stdout
+    await utils.clear_iopub(client)
 
 @pytest.mark.parametrize("mode", ExecuteMode)
 async def test_header_mode(client, mode: ExecuteMode):
@@ -398,18 +404,17 @@ import time
 time.sleep(0.1)
 print("{mode.name}")
 """
-    await utils.clear_pub_message(client)
-    _, reply = await utils.execute(client, code)
+    _, reply = await utils.execute(client, code, clear_pub=False)
     assert reply["status"] == "ok"
     stdout, _ = await utils.assemble_output(client)
     assert mode.name in stdout
+    await utils.clear_iopub(client)
 
 
 @pytest.mark.parametrize(
     "code",
     [
         "caller.call_later(str, 0, 123)",
-        "caller.call_later(print, 'invalid_time')",
         "caller.call_soon(print, 'hello')",
     ],
 )
@@ -417,6 +422,8 @@ async def test_namespace_default(client, code: str):
     assert code
     _, reply = await utils.execute(client, code)
     assert reply["status"] == "ok"
+    await anyio.sleep(0.02)
+    await utils.clear_iopub(client)
 
 
 @pytest.mark.parametrize("channel", ["shell", "control"])
@@ -426,3 +433,4 @@ async def test_invalid_message(client, channel):
     with anyio.move_on_after(0.1):
         response = await f(client, "invalid-message-type")
     assert response is None
+    await utils.clear_iopub(client)

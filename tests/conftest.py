@@ -78,17 +78,16 @@ def kernel_name(request):
 
 @pytest.fixture(scope="module")
 async def subprocess_kernels_client(anyio_backend, tmp_path_factory, kernel_name: KernelName):
-    """Starts a kernel in a subprocess and returns a AsyncKernelCient connected to it.
+    """Starts a kernel in a subprocess and returns an AsyncKernelCient that is connected to it.
 
     This is primarily provided for testing the debugger making it more convenient
     connect a debugger to the test.
     """
     assert anyio_backend == "asyncio", "Asyncio is required for the client"
     connection_file = tmp_path_factory.mktemp("async_kernel") / "temp_connection.json"
-
-    async with anyio.create_task_group() as tg:
-        command = make_argv(connection_file=connection_file, kernel_name=kernel_name)
-        tg.start_soon(anyio.run_process, command)
+    command = make_argv(connection_file=connection_file, kernel_name=kernel_name)
+    process = await anyio.open_process(command)
+    try:
         client = AsyncKernelClient()
         while not connection_file.exists():
             await anyio.sleep(0.1)
@@ -101,4 +100,12 @@ async def subprocess_kernels_client(anyio_backend, tmp_path_factory, kernel_name
         finally:
             client.shutdown()
             client.stop_channels()
+    finally:
+        with anyio.move_on_after(utils.TIMEOUT):
+            while process.returncode is None:
+                await anyio.sleep(0.01)
+        if process.returncode is None:
+            process.kill()
+        assert process.returncode == 0
+
     assert not connection_file.exists(), "cleanup_connection_file not called by atexit ..."

@@ -45,6 +45,7 @@ async def get_reply(
     *,
     channel: Literal["shell", "control"] = "shell",
     timeout=TIMEOUT,
+    clear_pub=True,
 ) -> Mapping[str, Mapping[str, Any]]:
     "Gets the first revieved reply correspond to the msg_id."
     with anyio.fail_after(timeout):
@@ -55,6 +56,8 @@ async def get_reply(
                 case "control":
                     reply = await client.get_control_msg(timeout=timeout)
             if reply["parent_header"]["msg_id"] == msg_id:
+                if clear_pub:
+                    await clear_iopub(client)
                 return reply
 
 
@@ -80,14 +83,14 @@ def validate_message(msg: Mapping[str, Any], msg_type="", parent=None):
         raise
 
 
-async def execute(client: AsyncKernelClient, /, code="", **kwargs):
+async def execute(client: AsyncKernelClient, /, code="", clear_pub=True, **kwargs):
     """wrapper for doing common steps for validating an execution request"""
 
     assert isinstance(client, AsyncKernelClient)
 
     with anyio.fail_after(TIMEOUT):
         msg_id = client.execute(code=code, **kwargs)
-        reply = await get_reply(client, msg_id)
+        reply = await get_reply(client, msg_id, clear_pub=clear_pub)
         validate_message(reply, "execute_reply", msg_id)
     return msg_id, reply["content"]
 
@@ -129,9 +132,9 @@ async def wait_for_idle(client: AsyncKernelClient, *, wait=1.0):
                 break
 
 
-async def clear_pub_message(client):
+async def clear_iopub(client):
     "Ensure there are no further iopub messages waiting."
-    await assemble_output(client, timeout=0.2)
+    await assemble_output(client, timeout=0.01)
 
 
 async def send_shell_message(client: AsyncKernelClient, msg_type: str, content: Mapping[str, Any] | None = None):
@@ -140,10 +143,12 @@ async def send_shell_message(client: AsyncKernelClient, msg_type: str, content: 
     return await get_reply(client, msg["header"]["msg_id"], channel="shell")
 
 
-async def send_control_message(client: AsyncKernelClient, msg_type: str, content: Mapping[str, Any] | None = None):
+async def send_control_message(
+    client: AsyncKernelClient, msg_type: str, content: Mapping[str, Any] | None = None, clear_pub=True
+):
     msg = client.session.msg(msg_type, content=dict(content) if content is not None else None)
     client.control_channel.send(msg)
-    return await get_reply(client, msg["header"]["msg_id"], channel="control")
+    return await get_reply(client, msg["header"]["msg_id"], channel="control", clear_pub=clear_pub)
 
 
 async def check_pub_message(client: AsyncKernelClient, msg_id: str = "", *, msg_type="status", **content_checks):

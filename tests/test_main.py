@@ -39,7 +39,7 @@ def test_add_kernel(monkeypatch, fake_kernel_dir, capsys):
     main.main()
     out = capsys.readouterr().out
     assert "Added kernel spec async-trio" in out
-    main.write_all_kernelspec.assert_called()
+    main.write_all_kernelspec.assert_called()  # type: ignore[attr-defined]
 
 
 def test_remove_existing_kernel(monkeypatch, fake_kernel_dir, capsys):

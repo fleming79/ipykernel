@@ -18,16 +18,14 @@ async def test_execute(client, kernel):
 
 
 async def test_execute_control(client, kernel):
-    await utils.clear_pub_message(client)
-    await utils.send_control_message(client, "execute_request", {"code": "y=10", "silent": True})
+    await utils.send_control_message(client, "execute_request", {"code": "y=10", "silent": True}, clear_pub=False)
     assert kernel.shell.user_ns["y"] == 10
     await utils.check_pub_message(client, execution_state="busy")
     await utils.check_pub_message(client, execution_state="idle")
 
 
 async def test_execute_silent(client):
-    await utils.clear_pub_message(client)
-    msg_id, reply = await utils.execute(client, code="x=1", silent=True)
+    msg_id, reply = await utils.execute(client, code="x=1", silent=True, clear_pub=False)
     count = reply["execution_count"]
     await utils.check_pub_message(client, msg_id, execution_state="busy")
     await utils.check_pub_message(client, msg_id, execution_state="idle")
@@ -35,7 +33,7 @@ async def test_execute_silent(client):
         await client.get_iopub_msg(timeout=0.1)
 
     # Do a second execution
-    msg_id, reply = await utils.execute(client, code="x=2", silent=True)
+    msg_id, reply = await utils.execute(client, code="x=2", silent=True, clear_pub=False)
     await utils.check_pub_message(client, msg_id, execution_state="busy")
     await utils.check_pub_message(client, msg_id, execution_state="idle")
     with pytest.raises(Empty):
@@ -46,8 +44,7 @@ async def test_execute_silent(client):
 
 
 async def test_execute_error(client):
-    await utils.clear_pub_message(client)
-    msg_id, reply = await utils.execute(client, code="1/0")
+    msg_id, reply = await utils.execute(client, code="1/0", clear_pub=False)
     assert reply["status"] == "error"
     assert reply["ename"] == "ZeroDivisionError"
 
@@ -232,7 +229,6 @@ async def test_history_range(client):
 
 async def test_history_tail(client):
     await utils.execute(client, code="x=1", store_history=True)
-
     msg_id = client.history(hist_access_type="tail", raw=True, output=True, n=1, session=0)
     reply = await utils.get_reply(client, msg_id)
     utils.validate_message(reply, "history_reply", msg_id)
@@ -242,7 +238,6 @@ async def test_history_tail(client):
 
 async def test_history_search(client):
     await utils.execute(client, code="x=1", store_history=True)
-
     msg_id = client.history(hist_access_type="search", raw=True, output=True, n=1, pattern="*", session=0)
     reply = await utils.get_reply(client, msg_id)
     utils.validate_message(reply, "history_reply", msg_id)
@@ -251,7 +246,6 @@ async def test_history_search(client):
 
 
 async def test_stream(client):
-    await utils.clear_pub_message(client)
     client.execute("print('hi')")
     stdout, stderr = await utils.assemble_output(client)
     assert stdout.startswith("hi")
@@ -260,8 +254,9 @@ async def test_stream(client):
 @pytest.mark.parametrize("clear", [True, False])
 async def test_display_data(client, clear: bool):
     # kernel.display_formatter
-    await utils.clear_pub_message(client)
-    msg_id, reply = await utils.execute(client, f"from IPython.display import display; display(1, clear={clear})")
+    msg_id, reply = await utils.execute(
+        client, f"from IPython.display import display; display(1, clear={clear})", clear_pub=False
+    )
     await utils.check_pub_message(client, msg_id, execution_state="busy")
     await utils.check_pub_message(client, msg_id, msg_type="execute_input")
     if clear:
