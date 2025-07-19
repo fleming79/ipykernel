@@ -58,8 +58,8 @@ class ThreadCaller:
     _jobs: deque[tuple[contextvars.Context, tuple[PendingResult, float, float, Callable, tuple, dict]]]
     _jobs_added: threading.Event
     _closed = False
-    _iopub_sockets: ClassVar[weakref.WeakKeyDictionary[threading.Thread, Socket]] = weakref.WeakKeyDictionary()
-    _iopub_url: ClassVar = "inproc://iopub"
+    iopub_sockets: ClassVar[weakref.WeakKeyDictionary[threading.Thread, Socket]] = weakref.WeakKeyDictionary()
+    iopub_url: ClassVar = "inproc://iopub"
 
     def __new__(cls, thread: threading.Thread | None = None, *, log: logging.LoggerAdapter | None = None) -> Self:
         thread = thread or threading.current_thread()
@@ -89,7 +89,12 @@ class ThreadCaller:
             await self.__stack.__aexit__(exc_type, exc_value, exc_tb)
 
     async def _server_loop(self, tg: TaskGroup, task_status: TaskStatus):
-        with self.iopub_enabled_this_thread():
+        thread = threading.current_thread()
+        socket = Context.instance().socket(SocketType.PUB)
+        socket.linger = 500
+        socket.connect(self.iopub_url)
+        try:
+            self.iopub_sockets[thread] = socket
             task_status.started()
             while not self._closed:
                 while len(self._jobs):
@@ -97,7 +102,10 @@ class ThreadCaller:
                     context.run(tg.start_soon, self._wrap_call, *args)
                     self._jobs_added.clear()
                 await wait_thread_event(self._jobs_added)
-        self.taskgroup.cancel_scope.cancel()
+        finally:
+            socket.close(linger=500)
+            self.iopub_sockets.pop(thread, None)
+            self.taskgroup.cancel_scope.cancel()
 
     async def _wrap_call(
         self,
@@ -128,23 +136,6 @@ class ThreadCaller:
                 self._to_thread_pool.append(self)
             else:
                 self.close()
-
-    @classmethod
-    @contextlib.contextmanager
-    def iopub_enabled_this_thread(cls):
-        """A contextmanager to provide a iopub socket on the current thread."""
-        thread = threading.current_thread()
-        if not (socket := cls._iopub_sockets.get(thread)):
-            socket = Context.instance().socket(SocketType.PUB)
-            socket.connect(cls._iopub_url)
-            cls._iopub_sockets[thread] = socket
-            try:
-                yield
-            finally:
-                socket.close(linger=500)
-                cls._iopub_sockets.pop(thread, None)
-        else:
-            yield
 
     @classmethod
     def _shutdown_to_thread_instances(cls):

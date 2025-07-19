@@ -346,7 +346,7 @@ class Kernel(ConnectionFileMixin):
             # which could come from any thread in this process.
             # Ref: https://zguide.zeromq.org/docs/chapter2/#Working-with-Messages (fig 14)
             frontend: zmq.Socket = Context.instance().socket(zmq.XSUB)
-            frontend.bind(ThreadCaller._iopub_url)
+            frontend.bind(ThreadCaller.iopub_url)
             iopub_socket: zmq.Socket = Context.instance().socket(zmq.XPUB)
             with utils.do_not_debug_this_thread("iopub"), self._bind_socket(SocketID.iopub, iopub_socket):
                 ready_event.set()
@@ -507,7 +507,7 @@ class Kernel(ConnectionFileMixin):
         buffers: list[bytes] | None = None,
     ):
         """Send a message on the zmq iopub socket."""
-        if socket := ThreadCaller._iopub_sockets.get(thread := threading.current_thread()):
+        if socket := ThreadCaller.iopub_sockets.get(thread := threading.current_thread()):
             msg = self.session.send(
                 stream=socket,
                 msg_or_type=msg_or_type,
@@ -530,11 +530,6 @@ class Kernel(ConnectionFileMixin):
                 parent=parent,
                 ident=ident,
                 buffers=buffers,
-            )
-            self.log.debug(
-                "Passing iopub to control thread from another thread (%s)."
-                " Use in context of `iopub_enabled_this_thread` to provide a direct socket.",
-                thread.name,
             )
 
     def _publish_status(self, status: Literal["busy", "idle"], job: MsgRequest):
