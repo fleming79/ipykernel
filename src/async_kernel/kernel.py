@@ -414,7 +414,10 @@ class Kernel(ConnectionFileMixin):
 
     async def _wait_stopped(self, task_status: TaskStatus):
         task_status.started()
-        await utils.wait_thread_event(self._stop_event)
+        try:
+            await utils.wait_thread_event(self._stop_event)
+        except BaseException:
+            pass
         self.control_thread_caller.close()
         self.main_thread_caller.close()
         ThreadCaller._shutdown_to_thread_instances()
