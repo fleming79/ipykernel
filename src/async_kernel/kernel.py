@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self
 import anyio
 import anyio.to_thread
 import sniffio
-import traitlets
 import zmq
 from IPython.core.completer import provisionalcompleter as _provisionalcompleter
 from IPython.core.completer import rectify_completions as _rectify_completions
@@ -33,16 +32,15 @@ from IPython.utils.tokenutil import token_at_cursor
 from jupyter_client.connect import ConnectionFileMixin
 from jupyter_client.session import Session
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import Dict, Instance, default
-from traitlets.utils.importstring import import_item
+from traitlets import Bool, Container, Dict, DottedObjectName, Enum, Instance, Set, Tuple, Type, default, import_item
 from zmq import Context, Flag, PollEvent, Socket, SocketOption, SocketType
 
 from async_kernel import _version, utils
 from async_kernel.asyncshell import AsyncInteractiveShell
 from async_kernel.debugger import Debugger
 from async_kernel.kernelspec import KernelName
+from async_kernel.thread_caller import ThreadCaller
 from async_kernel.typing import ExecuteJobInfo, ExecuteMode, MsgRequest, MsgType, SocketID, null
-from async_kernel.utils import ThreadCaller
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -91,23 +89,22 @@ class Kernel(ConnectionFileMixin):
     _last_interrupt_frame = None
     _stop_event = Instance(threading.Event, ())
     _stop_on_error_time: float = 0
-    _interrupt_events: traitlets.Container[set[threading.Event]] = traitlets.Set()
+    _interrupt_events: Container[set[threading.Event]] = Set()
     _sockets: Dict[SocketID, zmq.Socket] = Dict()
     _shell_handlers = Dict()
     _control_handlers = Dict()
-    _interrupting = traitlets.Instance(threading.Event, ())
     debugger = Instance(Debugger, ())
-    anyio_backend = traitlets.Enum(anyio.get_all_backends())
+    anyio_backend = Enum(anyio.get_all_backends())
 
-    quiet = traitlets.Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
-    outstream_class = traitlets.DottedObjectName(
+    quiet = Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
+    outstream_class = DottedObjectName(
         "async_kernel.iostream.OutStream",
         help="The importstring for the OutStream factory",
         allow_none=True,
     ).tag(
         config=True,
     )
-    displayhook_class = traitlets.DottedObjectName(
+    displayhook_class = DottedObjectName(
         "async_kernel.displayhook.ZMQDisplayHook", help="The importstring for the DisplayHook factory"
     ).tag(config=True)
 
@@ -116,8 +113,8 @@ class Kernel(ConnectionFileMixin):
     log = Instance(logging.LoggerAdapter)
 
     shell = Instance(AsyncInteractiveShell)
-    shell_class = traitlets.Type(AsyncInteractiveShell)
-    help_links = traitlets.Tuple()
+    shell_class = Type(AsyncInteractiveShell)
+    help_links = Tuple()
     comm_manager: Instance[CommManager] = Instance("async_kernel.comm.CommManager")
     namespace_defaults = Dict()
 

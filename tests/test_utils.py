@@ -15,8 +15,10 @@ import pytest
 import sniffio
 import zmq
 
+from async_kernel.pending_result import PendingResult
+from async_kernel.thread_caller import ThreadCaller
 from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode
-from async_kernel.utils import PendingResult, ThreadCaller, bind_socket, get_execute_info
+from async_kernel.utils import bind_socket, get_execute_info
 
 
 @pytest.fixture(scope="module", params=["asyncio", "trio"])

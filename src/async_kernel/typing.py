@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import enum
-from typing import TYPE_CHECKING, Any, Generic, Literal, NotRequired, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, NotRequired, ParamSpec, TypedDict, TypeVar
 
 from typing_extensions import Sentinel
 
@@ -19,6 +19,7 @@ null = Sentinel("null")
 
 T = TypeVar("T")
 D = TypeVar("D", bound=dict)
+P = ParamSpec("P")
 
 
 class SocketID(enum.StrEnum):

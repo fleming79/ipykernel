@@ -17,6 +17,7 @@ import zmq
 import async_kernel.utils
 from async_kernel.comm import Comm
 from async_kernel.kernel import ExecuteMode, SocketID
+from async_kernel.thread_caller import ThreadCaller
 from tests import utils
 
 
@@ -50,7 +51,7 @@ async def test_iopub(kernel, mode: Literal["direct", "proxy"]):
     try:
         time.sleep(0.05)
         if mode == "proxy":
-            socket = async_kernel.utils.ThreadCaller._iopub_sockets[threading.current_thread()]
+            socket = ThreadCaller._iopub_sockets[threading.current_thread()]
         for i in range(n):
             socket.send_multipart([b"0", f"{i}".encode()])
         thread.join()

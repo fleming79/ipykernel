@@ -10,8 +10,10 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 import anyio
 from jupyter_client.asynchronous.client import AsyncKernelClient
 
-import async_kernel.asyncshell
 import async_kernel.utils
+from async_kernel import Kernel
+from async_kernel.asyncshell import AsyncInteractiveShell
+from async_kernel.thread_caller import ThreadCaller
 from tests.references import RMessage, references
 
 if TYPE_CHECKING:
@@ -32,11 +34,11 @@ class ExecuteContentType(TypedDict):
 
 def clear_kernel():
     "Clear the kernel so it can be started fresh."
-    if kernel := async_kernel.Kernel._instance:
+    if kernel := Kernel._instance:
         kernel.stop()
-    async_kernel.Kernel._instance = None
-    async_kernel.asyncshell.AsyncInteractiveShell.clear_instance()
-    async_kernel.utils.ThreadCaller._shutdown_to_thread_instances()
+    Kernel._instance = None
+    AsyncInteractiveShell.clear_instance()
+    ThreadCaller._shutdown_to_thread_instances()
 
 
 async def get_reply(

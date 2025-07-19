@@ -17,7 +17,7 @@ import traitlets
 from IPython.core.inputtransformer2 import leading_empty_lines
 
 from async_kernel import utils
-from async_kernel.utils import PendingResult
+from async_kernel.pending_result import PendingResult
 
 if TYPE_CHECKING:
     from anyio.abc import TaskGroup
