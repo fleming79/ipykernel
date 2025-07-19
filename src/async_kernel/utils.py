@@ -21,6 +21,7 @@ import anyio.to_thread
 import sniffio
 from zmq import Socket, SocketType, ZMQError
 
+import async_kernel
 from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode, null
 
 if TYPE_CHECKING:
@@ -215,13 +216,14 @@ class ThreadCaller:
             await self.__stack.__aexit__(exc_type, exc_value, exc_tb)
 
     async def _server_loop(self, tg: TaskGroup, task_status: TaskStatus):
-        task_status.started()
-        while not self._closed:
-            while len(self._jobs):
-                context, args = self._jobs.popleft()
-                context.run(tg.start_soon, self._wrap_call, *args)
-                self._jobs_added.clear()
-            await wait_thread_event(self._jobs_added)
+        with async_kernel.Kernel().iopub_enabled_this_thread():
+            task_status.started()
+            while not self._closed:
+                while len(self._jobs):
+                    context, args = self._jobs.popleft()
+                    context.run(tg.start_soon, self._wrap_call, *args)
+                    self._jobs_added.clear()
+                await wait_thread_event(self._jobs_added)
         self.taskgroup.cancel_scope.cancel()
 
     def __repr__(self) -> str:

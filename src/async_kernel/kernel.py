@@ -290,7 +290,6 @@ class Kernel(ConnectionFileMixin):
                     await tg.start(self._shell_execute_request_loop)
                     await tg.start(self._receive_msg_loop, SocketID.shell)
                     assert len(self._sockets) == len(SocketID)
-                    # time.sleep(0.5)  # sleep to give internal iopub sockets time to connect.
                     if not self.connection_file:
                         self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{uuid.uuid4()}.json"))
                     self.write_connection_file()
@@ -435,7 +434,7 @@ class Kernel(ConnectionFileMixin):
             selector = get_selector()
             utils.mark_thread_pydev_do_not_trace(selector._thread)
         socket = zmq.Socket(self._zmq_context, zmq.SocketType.ROUTER)
-        with self.iopub_enabled_this_thread(slow_subscriber_sleep=0.0), self._bind_socket(socket_id, socket):
+        with self._bind_socket(socket_id, socket):
             try:
                 task_status.started()
                 while True:
@@ -505,7 +504,7 @@ class Kernel(ConnectionFileMixin):
             self._sockets.pop(socket_id)
 
     @contextlib.contextmanager
-    def iopub_enabled_this_thread(self, *, slow_subscriber_sleep=0.4):
+    def iopub_enabled_this_thread(self):
         """A contextmanager to provide a iopub socket on the current thread."""
         thread = threading.current_thread()
         if not (socket := self._iopub_sockets.get(thread)):
@@ -513,10 +512,6 @@ class Kernel(ConnectionFileMixin):
             socket = self._zmq_context.socket(zmq.SocketType.PUB)
             socket.connect(self._iopub_url)
             self._iopub_sockets[thread] = socket
-            if slow_subscriber_sleep:
-                # https://pyzmq.readthedocs.io/en/latest/howto/logging.html#slow-joiner-problem
-                # https://zguide.zeromq.org/docs/chapter5/#Slow-Subscriber-Detection-Suicidal-Snail-Pattern
-                time.sleep(slow_subscriber_sleep)
             try:
                 yield
             finally:
