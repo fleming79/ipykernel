@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import anyio.abc
-import traitlets
 from IPython.core.inputtransformer2 import leading_empty_lines
+from traitlets import Bool, Dict, HasTraits, Instance, Set, default
 
 from async_kernel import utils
 from async_kernel.pending_result import PendingResult
@@ -75,10 +75,10 @@ class _DummyPyDB:
         self.variable_presentation = PyDevdAPI.VariablePresentation()
 
 
-class VariableExplorer(traitlets.HasTraits):
+class VariableExplorer(HasTraits):
     """A variable explorer."""
 
-    kernel: traitlets.Instance[Kernel] = traitlets.Instance("async_kernel.Kernel", ())
+    kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
 
     def __init__(self):
         """Initialize the explorer."""
@@ -111,16 +111,16 @@ class VariableExplorer(traitlets.HasTraits):
         return [x.get_var_data() for x in variables.get_children_variables()]
 
 
-class DebugpyClient(traitlets.HasTraits):
+class DebugpyClient(HasTraits):
     """A client for debugpy."""
 
     HEADER = b"Content-Length: "
     SEPARATOR = b"\r\n\r\n"
     SEPARATOR_LENGTH = 4
     tcp_buffer = b""
-    _pending_responses: traitlets.Dict[int, PendingResult] = traitlets.Dict()
-    capabilities = traitlets.Dict()
-    kernel: traitlets.Instance[Kernel] = traitlets.Instance("async_kernel.Kernel", ())
+    _pending_responses: Dict[int, PendingResult] = Dict()
+    capabilities = Dict()
+    kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
     _socketstream: anyio.abc.SocketStream | None = None
 
     def __init__(self, log, event_callback):
@@ -201,22 +201,22 @@ class DebugpyClient(traitlets.HasTraits):
         return await self._wait_for_response(msg)
 
 
-class Debugger(traitlets.HasTraits):
+class Debugger(HasTraits):
     """The debugger class."""
 
     _seq = 0
-    breakpoint_list = traitlets.Dict()
-    stopped_threads = traitlets.Set()
-    _removed_cleanup = traitlets.Dict()
-    just_my_code = traitlets.Bool(True)
-    variable_explorer = traitlets.Instance(VariableExplorer, ())
-    debugpy_client = traitlets.Instance(DebugpyClient)
-    log = traitlets.Instance(logging.LoggerAdapter)
-    kernel: traitlets.Instance[Kernel] = traitlets.Instance("async_kernel.Kernel", ())
+    breakpoint_list = Dict()
+    stopped_threads = Set()
+    _removed_cleanup = Dict()
+    just_my_code = Bool(True)
+    variable_explorer = Instance(VariableExplorer, ())
+    debugpy_client = Instance(DebugpyClient)
+    log = Instance(logging.LoggerAdapter)
+    kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
     taskgroup: TaskGroup
-    init_event = traitlets.Instance(anyio.Event, ())
+    init_event = Instance(anyio.Event, ())
 
-    @traitlets.default("log")
+    @default("log")
     def _default_log(self):
         return logging.LoggerAdapter(logging.getLogger(self.__class__.__name__))
 

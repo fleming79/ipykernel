@@ -8,8 +8,8 @@ from __future__ import annotations
 from typing import Self
 
 import comm
-import traitlets
 from comm.base_comm import BaseComm, BuffersType, MaybeDict
+from traitlets import Dict, HasTraits, Instance, observe
 from typing_extensions import override
 
 from async_kernel.kernel import Kernel
@@ -70,7 +70,7 @@ class Comm(BaseComm):
             self._msg_callback(msg)
 
 
-class CommManager(comm.base_comm.CommManager, traitlets.HasTraits):
+class CommManager(comm.base_comm.CommManager, HasTraits):
     """A comm manager for Kernel (singleton).
 
     When `kernel` is set the `kernel` on all existing `Comm` instances is also set.
@@ -80,9 +80,9 @@ class CommManager(comm.base_comm.CommManager, traitlets.HasTraits):
     """
 
     _instance = None
-    kernel: traitlets.Instance[Kernel | None] = traitlets.Instance(Kernel, allow_none=True)  # type: ignore[assignment]
-    comms: traitlets.Dict[str, BaseComm] = traitlets.Dict()  # type: ignore[assignment]
-    targets: traitlets.Dict[str, comm.base_comm.CommTargetCallback] = traitlets.Dict()  # type: ignore[assignment]
+    kernel: Instance[Kernel | None] = Instance(Kernel, allow_none=True)  # type: ignore[assignment]
+    comms: Dict[str, BaseComm] = Dict()  # type: ignore[assignment]
+    targets: Dict[str, comm.base_comm.CommTargetCallback] = Dict()  # type: ignore[assignment]
 
     def __new__(cls) -> Self:
         if cls._instance:
@@ -90,7 +90,7 @@ class CommManager(comm.base_comm.CommManager, traitlets.HasTraits):
         cls._instance = super().__new__(cls)
         return cls._instance
 
-    @traitlets.observe("kernel")
+    @observe("kernel")
     def _observe_kernel(self, change: dict):
         kernel: Kernel = change["new"]
         for c in self.comms.values():
