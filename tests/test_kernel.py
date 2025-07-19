@@ -396,6 +396,7 @@ async def test_magic(client, code: str):
     assert stdout
     await utils.clear_iopub(client)
 
+
 @pytest.mark.parametrize("mode", ExecuteMode)
 async def test_header_mode(client, mode: ExecuteMode):
     code = f"""

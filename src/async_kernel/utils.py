@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import errno
 import inspect
 import logging
@@ -185,7 +186,7 @@ class ThreadCaller:
     _to_thread_instances: ClassVar[weakref.WeakSet[Self]] = weakref.WeakSet()
     MAX_IDLE_EVENT_THREADS = 10
     _taskgroup: TaskGroup | None = None
-    _jobs: deque
+    _jobs: deque[tuple[contextvars.Context, tuple[PendingResult, float, float, Callable, tuple, dict]]]
     _jobs_added: threading.Event
     _closed = False
 
@@ -217,7 +218,8 @@ class ThreadCaller:
         task_status.started()
         while not self._closed:
             while len(self._jobs):
-                tg.start_soon(self._wrap_call, *self._jobs.popleft())
+                context, args = self._jobs.popleft()
+                context.run(tg.start_soon, self._wrap_call, *args)
                 self._jobs_added.clear()
             await wait_thread_event(self._jobs_added)
         self.taskgroup.cancel_scope.cancel()
@@ -264,7 +266,7 @@ class ThreadCaller:
         if threading.current_thread() is self.thread and (tg := self._taskgroup):
             tg.start_soon(self._wrap_call, pending, time.monotonic(), delay, func, args, kwargs)
         else:
-            self._jobs.append((pending, time.monotonic(), delay, func, args, kwargs))
+            self._jobs.append((contextvars.copy_context(), (pending, time.monotonic(), delay, func, args, kwargs)))
             self._jobs_added.set()
         self._outstanding += 1
         return pending
