@@ -3,7 +3,6 @@
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
 
-
 import pytest
 
 from async_kernel.pending_result import PendingResult
@@ -78,4 +77,3 @@ class TestPendingResult:
         pr.set_result(1)
         with pytest.raises(RuntimeError):
             pr.set_exception(ValueError())
-

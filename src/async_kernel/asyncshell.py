@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import pathlib
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import IPython.core.release
 from IPython.core.displayhook import DisplayHook
@@ -16,7 +16,7 @@ from IPython.core.interactiveshell import ExecutionResult, InteractiveShell, Int
 from IPython.core.magic import Magics, line_magic, magics_class
 from jupyter_client.jsonutil import json_default
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import CBool, CBytes, Dict, Instance, Type, default, observe
+from traitlets import CBool, Dict, Instance, Type, default, observe
 from typing_extensions import override
 
 import async_kernel
@@ -61,7 +61,7 @@ class AsyncDisplayPublisher(DisplayPublisher):
     """A display publisher that publishes data using a ZeroMQ PUB socket."""
 
     kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
-    topic = CBytes(b"display_data")
+    topic: ClassVar = b"display_data"
 
     @override
     def publish(  # type: ignore[override]
