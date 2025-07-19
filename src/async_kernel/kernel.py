@@ -35,7 +35,7 @@ from jupyter_client.session import Session
 from jupyter_core.paths import jupyter_runtime_dir
 from traitlets import Dict, Instance, default
 from traitlets.utils.importstring import import_item
-from zmq import Flag, PollEvent, SocketOption
+from zmq import Context, Flag, PollEvent, Socket, SocketOption, SocketType
 
 from async_kernel import _version, utils
 from async_kernel.asyncshell import AsyncInteractiveShell
@@ -92,12 +92,9 @@ class Kernel(ConnectionFileMixin):
     _stop_event = Instance(threading.Event, ())
     _stop_on_error_time: float = 0
     _interrupt_events: traitlets.Container[set[threading.Event]] = traitlets.Set()
-    _zmq_context = Instance(zmq.Context, ())
     _sockets: Dict[SocketID, zmq.Socket] = Dict()
     _shell_handlers = Dict()
     _control_handlers = Dict()
-    _iopub_url = traitlets.Unicode("inproc://iopub")
-    _iopub_sockets: traitlets.Dict[threading.Thread, zmq.Socket] = traitlets.Dict()
     _interrupting = traitlets.Instance(threading.Event, ())
     debugger = Instance(Debugger, ())
     anyio_backend = traitlets.Enum(anyio.get_all_backends())
@@ -301,7 +298,7 @@ class Kernel(ConnectionFileMixin):
                 finally:
                     self.stop()
         finally:
-            self._zmq_context.term()
+            Context.instance().term()
 
     def _signal_handler(self, signum, frame: FrameType | None):
         "Handle interrupt signals."
@@ -321,7 +318,7 @@ class Kernel(ConnectionFileMixin):
         # Reference: https://jupyter-client.readthedocs.io/en/stable/messaging.html#heartbeat-for-kernels
 
         def heartbeat():
-            socket = self._zmq_context.socket(zmq.ROUTER)
+            socket: Socket = Context.instance().socket(zmq.ROUTER)
             with utils.do_not_debug_this_thread("heartbeat"), self._bind_socket(SocketID.heartbeat, socket):
                 ready_event.set()
                 try:
@@ -336,7 +333,7 @@ class Kernel(ConnectionFileMixin):
         task_status.started()
 
     async def _start_stdin(self, task_status: TaskStatus):
-        socket = self._zmq_context.socket(zmq.SocketType.ROUTER)
+        socket = Context.instance().socket(SocketType.ROUTER)
         socket.linger = 0
         with self._bind_socket(SocketID.stdin, socket), contextlib.suppress(self.CancelledError):
             task_status.started()
@@ -351,9 +348,9 @@ class Kernel(ConnectionFileMixin):
             # When thread-safe sockets become available, this could be changed...
             # which could come from any thread in this process.
             # Ref: https://zguide.zeromq.org/docs/chapter2/#Working-with-Messages (fig 14)
-            frontend: zmq.Socket = self._zmq_context.socket(zmq.XSUB)
-            frontend.bind(self._iopub_url)
-            iopub_socket: zmq.Socket = self._zmq_context.socket(zmq.XPUB)
+            frontend: zmq.Socket = Context.instance().socket(zmq.XSUB)
+            frontend.bind(ThreadCaller._iopub_url)
+            iopub_socket: zmq.Socket = Context.instance().socket(zmq.XPUB)
             with utils.do_not_debug_this_thread("iopub"), self._bind_socket(SocketID.iopub, iopub_socket):
                 ready_event.set()
                 try:
@@ -433,7 +430,7 @@ class Kernel(ConnectionFileMixin):
 
             selector = get_selector()
             utils.mark_thread_pydev_do_not_trace(selector._thread)
-        socket = zmq.Socket(self._zmq_context, zmq.SocketType.ROUTER)
+        socket: Socket = Context.instance().socket(SocketType.ROUTER)
         with self._bind_socket(socket_id, socket):
             try:
                 task_status.started()
@@ -503,23 +500,6 @@ class Kernel(ConnectionFileMixin):
             socket.close(linger=500)
             self._sockets.pop(socket_id)
 
-    @contextlib.contextmanager
-    def iopub_enabled_this_thread(self):
-        """A contextmanager to provide a iopub socket on the current thread."""
-        thread = threading.current_thread()
-        if not (socket := self._iopub_sockets.get(thread)):
-            self.log.info("Opening iopub socket for thread %s", thread.name)
-            socket = self._zmq_context.socket(zmq.SocketType.PUB)
-            socket.connect(self._iopub_url)
-            self._iopub_sockets[thread] = socket
-            try:
-                yield
-            finally:
-                socket.close(linger=500)
-                self._iopub_sockets.pop(thread, None)
-        else:
-            yield
-
     def iopub_send(
         self,
         msg_or_type: dict[str, Any] | str,
@@ -530,7 +510,7 @@ class Kernel(ConnectionFileMixin):
         buffers: list[bytes] | None = None,
     ):
         """Send a message on the zmq iopub socket."""
-        if socket := self._iopub_sockets.get(thread := threading.current_thread()):
+        if socket := ThreadCaller._iopub_sockets.get(thread := threading.current_thread()):
             msg = self.session.send(
                 stream=socket,
                 msg_or_type=msg_or_type,

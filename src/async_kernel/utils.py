@@ -19,9 +19,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, ParamSpec, Se
 import anyio
 import anyio.to_thread
 import sniffio
-from zmq import Socket, SocketType, ZMQError
+from zmq import Context, Socket, SocketType, ZMQError
 
-import async_kernel
 from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode, null
 
 if TYPE_CHECKING:
@@ -190,6 +189,8 @@ class ThreadCaller:
     _jobs: deque[tuple[contextvars.Context, tuple[PendingResult, float, float, Callable, tuple, dict]]]
     _jobs_added: threading.Event
     _closed = False
+    _iopub_sockets: ClassVar[weakref.WeakKeyDictionary[threading.Thread, Socket]] = weakref.WeakKeyDictionary()
+    _iopub_url: ClassVar = "inproc://iopub"
 
     def __new__(cls, thread: threading.Thread | None = None, *, log: logging.LoggerAdapter | None = None) -> Self:
         thread = thread or threading.current_thread()
@@ -215,8 +216,11 @@ class ThreadCaller:
             self.close()
             await self.__stack.__aexit__(exc_type, exc_value, exc_tb)
 
+    def __repr__(self) -> str:
+        return f"ThreadCaller<{self.thread}>"
+
     async def _server_loop(self, tg: TaskGroup, task_status: TaskStatus):
-        with async_kernel.Kernel().iopub_enabled_this_thread():
+        with self.iopub_enabled_this_thread():
             task_status.started()
             while not self._closed:
                 while len(self._jobs):
@@ -226,8 +230,22 @@ class ThreadCaller:
                 await wait_thread_event(self._jobs_added)
         self.taskgroup.cancel_scope.cancel()
 
-    def __repr__(self) -> str:
-        return f"ThreadCaller<{self.thread}>"
+    @classmethod
+    @contextlib.contextmanager
+    def iopub_enabled_this_thread(cls):
+        """A contextmanager to provide a iopub socket on the current thread."""
+        thread = threading.current_thread()
+        if not (socket := cls._iopub_sockets.get(thread)):
+            socket = Context.instance().socket(SocketType.PUB)
+            socket.connect(cls._iopub_url)
+            cls._iopub_sockets[thread] = socket
+            try:
+                yield
+            finally:
+                socket.close(linger=500)
+                cls._iopub_sockets.pop(thread, None)
+        else:
+            yield
 
     @property
     def taskgroup(self) -> TaskGroup:
