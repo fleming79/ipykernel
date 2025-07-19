@@ -18,9 +18,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, ParamSpec, Se
 import anyio
 import anyio.to_thread
 import sniffio
-from zmq import Socket, ZMQError
+from zmq import Socket, SocketType, ZMQError
 
-from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode
+from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode, null
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
@@ -43,7 +43,15 @@ P = ParamSpec("P")
 T = TypeVar("T")
 
 
-def bind_socket(socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port: int = 0, max_attempts=100) -> int:
+def bind_socket(
+    socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port: int = 0, max_attempts: int | null = null
+) -> int:
+    """Bind the socket to a port using the settings.
+
+    max_attempts: The maximum number of attempts to bind the socket. If un-specified,
+    defaults to 100 if port missing, else 2 attempts.
+    """
+
     def _try_bind_socket(port: int):
         if transport == "tcp":
             if not port:
@@ -63,13 +71,17 @@ def bind_socket(socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port:
             socket.bind(f"ipc://{path}")
         return port
 
+    if socket.TYPE == SocketType.ROUTER:
+        # ref: https://github.com/ipython/ipykernel/issues/270
+        socket.router_handover = 1
     try:
         win_in_use = errno.WSAEADDRINUSE  # type: ignore[attr-defined]
     except AttributeError:
         win_in_use = None
     # Try up to 100 times to bind a port when in conflict to avoid
     # infinite attempts in bad setups
-    max_attempts = 1 if port else max_attempts
+    if max_attempts is null:
+        max_attempts = 2 if port else 100
     e = None
     for _ in range(max_attempts):
         try:
@@ -79,6 +91,8 @@ def bind_socket(socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port:
             if e_.errno in {errno.EADDRINUSE, win_in_use}:
                 e = e_
                 break
+            if port:
+                time.sleep(1)
     msg = f"Failed to bind {socket} for {transport=}" + f" to {port=}!" if max_attempts == 1 else "!"
     raise RuntimeError(msg) from e
 

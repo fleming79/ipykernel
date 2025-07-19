@@ -9,6 +9,7 @@ import anyio
 import pytest
 from jupyter_client.asynchronous.client import AsyncKernelClient
 
+import async_kernel.utils
 from async_kernel.kernel import Kernel
 from async_kernel.kernelspec import KernelName, make_argv
 from tests import utils
@@ -28,7 +29,7 @@ if sys.platform.startswith("win"):
 
 @pytest.hookimpl
 def pytest_configure(config):
-    os.environ["PYTEST_TIMEOUT"] = str(1e6) if "debugpy" in sys.modules else str(60)
+    os.environ["PYTEST_TIMEOUT"] = str(1e6) if async_kernel.utils.LAUNCHED_BY_DEBUGPY else str(utils.TIMEOUT)
 
 
 @pytest.fixture(scope="module")
