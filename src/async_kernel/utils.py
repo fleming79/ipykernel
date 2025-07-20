@@ -72,7 +72,7 @@ def bind_socket(
                 break
             if port:
                 time.sleep(1)
-    msg = f"Failed to bind {socket} for {transport=}" + f" to {port=}!" if max_attempts == 1 else "!"
+    msg = f"Failed to bind {socket} for {transport=}" + (f" to {port=}!" if max_attempts == 2 else "!")
     raise RuntimeError(msg) from e
 
 
