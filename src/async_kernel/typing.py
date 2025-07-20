@@ -92,6 +92,6 @@ class ExecuteContent(TypedDict):
     code: str
     silent: bool
     store_history: bool
-    user_expressions: dict
+    user_expressions: dict[str, str]
     allow_stdin: bool
     stop_on_error: bool
