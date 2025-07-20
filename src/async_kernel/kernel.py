@@ -678,11 +678,13 @@ class Kernel(ConnectionFileMixin):
                     "user_expressions": user_expressions,
                 }
                 if err:
-                    reply_content.update({
-                        "traceback": self.shell._last_traceback or [],
-                        "ename": type(err).__name__,
-                        "evalue": str(err),
-                    })
+                    reply_content.update(
+                        {
+                            "traceback": self.shell._last_traceback or [],
+                            "ename": type(err).__name__,
+                            "evalue": str(err),
+                        }
+                    )
                 return reply_content
 
             stop_on_error = content.pop("stop_on_error", True)

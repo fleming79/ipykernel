@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import pathlib
 import sys
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar
 
+import anyio
 import IPython.core.release
 from IPython.core.displayhook import DisplayHook
 from IPython.core.displaypub import DisplayPublisher
@@ -21,6 +24,7 @@ from typing_extensions import override
 
 import async_kernel
 from async_kernel.compiler import XCachingCompiler
+from async_kernel.thread_caller import ThreadCaller
 
 if TYPE_CHECKING:
     from async_kernel.kernel import Kernel
@@ -120,6 +124,7 @@ class AsyncDisplayPublisher(DisplayPublisher):
 class AsyncInteractiveShell(InteractiveShell):
     """A subclass of InteractiveShell for ZMQ."""
 
+    _namespace_var: ClassVar[ContextVar[str]] = ContextVar("namespace", default="")
     displayhook_class = Type(AsyncDisplayHook)
     display_pub_class = Type(AsyncDisplayPublisher)
     displayhook: Instance[AsyncDisplayHook]
@@ -127,6 +132,9 @@ class AsyncInteractiveShell(InteractiveShell):
     kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
     compiler_class = Type(XCachingCompiler)
     compile: Instance[XCachingCompiler]
+    namespaces: Dict[str, dict] = Dict()
+    user_ns_hidden = Dict()
+    _main_mod_cache = Dict()
 
     @default("banner1")
     def _default_banner1(self):
@@ -161,9 +169,65 @@ class AsyncInteractiveShell(InteractiveShell):
         self.exit_now = True
 
     @override
-    def init_user_ns(self):
-        super().init_user_ns()
-        self.user_ns.update(self.kernel.namespace_defaults)
+    def init_create_namespaces(self, user_module=None, user_ns=None):
+        # self._main_mod_cache = {}
+        # super().init_create_namespaces(None, {})
+        return
+
+    @override
+    def save_sys_module_state(self):
+        return
+
+    @override
+    def init_sys_modules(self):
+        return
+
+    @override
+    def prepare_user_module(self, user_module=None, user_ns=None):
+        # return super().prepare_user_module(user_module or self.user_global_ns, user_ns or {})
+        return user_module or self.user_global_ns, user_ns or {}
+
+    @property
+    def user_global_ns(self):
+        return self.user_ns
+
+    @property
+    def namespace(self) -> str:
+        # Allow for namespace to be defined in the context of the async function
+        # This only requires us to maintain a dict for each namespace (str).
+        return self._namespace_var.get()
+
+    @namespace.setter
+    def namespace(self, value: str):
+        self._namespace_var.set(value)
+
+    @property
+    def _user_ns_builtin(self):
+        return {
+            "anyio": anyio,
+            "caller": self.kernel.main_thread_caller,
+            "KernelInterruptError": KernelInterruptError,
+            "CancelledError": self.kernel.CancelledError,
+            "ThreadCaller": ThreadCaller,
+        }
+
+    @property
+    def user_ns(self):
+        if (namspace := self.namespace) not in self.namespaces:
+            self.namespaces[namspace] = self._user_ns_builtin.copy()
+            self.init_user_ns()
+        return self.namespaces[namspace]
+
+    @user_ns.setter
+    def user_ns(self, ns: dict):
+        assert hasattr(ns, "clear")
+        assert isinstance(ns, dict)
+        ns.update(self._user_ns_builtin)
+        self.namespaces[self.namespace] = ns
+
+    @property
+    def ns_table(self):
+        return {"user_global": self.user_ns, "user_local": self.user_ns, "builtin": builtins.__dict__}
 
     @override
     async def run_cell_async(

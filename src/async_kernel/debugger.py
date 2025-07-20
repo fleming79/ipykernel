@@ -241,7 +241,7 @@ class Debugger(HasTraits):
             "richInspectVariables": self.do_rich_inspect_variables,
             "modules": self.do_modules,
         }
-        self._forbidden_names = tuple(self.kernel.shell.user_ns)
+        self._forbidden_names = tuple(self.kernel.shell.user_ns_hidden)
 
     async def _forward_message(self, msg):
         return await self.debugpy_client.send_dap_request(msg)

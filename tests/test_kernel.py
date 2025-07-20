@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import uuid
 from typing import Literal, cast
 
 import anyio
@@ -289,7 +290,7 @@ async def test():
     started.set()
     await anyio.sleep(0.01)
     try:
-        time.sleep(5)
+        time.sleep(100)
     except KernelInterruptError:
         print("KernelInterruptError")
     print("Failed")
@@ -436,3 +437,24 @@ async def test_invalid_message(client, channel):
         response = await f(client, "invalid-message-type")
     assert response is None
     await utils.clear_iopub(client)
+
+
+@pytest.mark.parametrize("namespace", ["", "my namespace"])
+@pytest.mark.parametrize("mode", ["", *ExecuteMode])
+async def test_run_thread_ns(client, kernel, namespace, mode: ExecuteMode):
+    symbol = str(uuid.uuid4())
+    kernel.shell.namespace = namespace
+    kernel.shell.user_ns["my_local_variable"] = symbol
+    code = f"""#@{mode} namespace="{namespace}"\n
+def test():
+    assert anyio
+    import threading
+    assert my_local_variable == "{symbol}"
+    assert threading.current_thread() is {"not" if mode is ExecuteMode.thread else ""} threading.main_thread()
+    return True
+test()
+    """
+    _, reply = await utils.execute(client, code, user_expressions={"symbol": "my_local_variable"})
+    assert reply["user_expressions"]["symbol"]["status"] == "ok"
+    symbol_ = eval(reply["user_expressions"]["symbol"]["data"]["text/plain"])
+    assert symbol_ == symbol
