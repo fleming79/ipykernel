@@ -36,11 +36,11 @@ from traitlets import Bool, Container, Dict, DottedObjectName, Enum, Instance, S
 from zmq import Context, Flag, PollEvent, Socket, SocketOption, SocketType
 
 from async_kernel import _version, utils
-from async_kernel.asyncshell import AsyncInteractiveShell
+from async_kernel.asyncshell import AsyncInteractiveShell, KernelInterruptError
 from async_kernel.debugger import Debugger
 from async_kernel.kernelspec import KernelName
 from async_kernel.thread_caller import ThreadCaller
-from async_kernel.typing import ExecuteJobInfo, ExecuteMode, MsgRequest, MsgType, SocketID, null
+from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode, MsgRequest, MsgType, SocketID, null
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -53,13 +53,7 @@ if TYPE_CHECKING:
     from async_kernel.iostream import OutStream
 
 
-__all__ = ["Kernel", "KernelInterruptError"]
-
-
-class KernelInterruptError(InterruptedError):
-    "Raised to interrupt the kernel."
-
-    # We subclass from InterruptedError so the async event loop can catch the exception.
+__all__ = ["Kernel"]
 
 
 class Kernel(ConnectionFileMixin):
@@ -116,7 +110,6 @@ class Kernel(ConnectionFileMixin):
     shell_class = Type(AsyncInteractiveShell)
     help_links = Tuple()
     comm_manager: Instance[CommManager] = Instance("async_kernel.comm.CommManager")
-    namespace_defaults = Dict()
 
     def __new__(cls, *, connection_file="", kernel_name: KernelName | None = None, **kwargs) -> Self:  # noqa: ARG004
         #  There is only one instance.
@@ -223,14 +216,6 @@ class Kernel(ConnectionFileMixin):
     @default("shell")
     def _default_shell(self):
         return self.shell_class.instance(parent=self, kernel=self)
-
-    @default("namespace_defaults")
-    def _default_namespace_defaults(self):
-        return {
-            "caller": self.main_thread_caller,
-            "KernelInterruptError": KernelInterruptError,
-            "CancelledError": self.CancelledError,
-        }
 
     @classmethod
     def start(cls, connection_file="", kernel_name=KernelName.asyncio) -> int:
@@ -627,7 +612,7 @@ class Kernel(ConnectionFileMixin):
         }
         self.send_reply(job, {"comms": comms})
 
-    async def execute_request(self, received_time: float, job: MsgRequest, info: ExecuteJobInfo):
+    async def execute_request(self, received_time: float, job: MsgRequest[ExecuteContent], info: ExecuteJobInfo):
         """Perform the actual execute_request."""
         content = job["parent"]["content"].copy()
         silent = content["silent"]
@@ -651,6 +636,10 @@ class Kernel(ConnectionFileMixin):
                 )
 
             async def _do_execute():
+                code = content["code"]
+                cell_id = None if silent else job["parent"].get("metadata", {}).get("cellId")
+                user_expressions = info.get("user_expressions") or content.get("user_expressions", {})
+                self.shell.namespace = info["namespace"]
                 interrupt = threading.Event()
                 result: ExecutionResult | None = None
                 if not silent:
@@ -681,7 +670,7 @@ class Kernel(ConnectionFileMixin):
                 finally:
                     self._interrupt_events.discard(interrupt)
                 err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError
-                if user_expressions := content.get("user_expressions", {}):
+                if user_expressions:
                     user_expressions = self.shell.user_expressions(user_expressions)
                 reply_content = {
                     "status": "ok" if not err else "error",
@@ -689,15 +678,14 @@ class Kernel(ConnectionFileMixin):
                     "user_expressions": user_expressions,
                 }
                 if err:
-                    reply_content.update(
-                        {
-                            "traceback": self.shell._last_traceback or [],
-                            "ename": type(err).__name__,
-                            "evalue": str(err),
-                        }
-                    )
+                    reply_content.update({
+                        "traceback": self.shell._last_traceback or [],
+                        "ename": type(err).__name__,
+                        "evalue": str(err),
+                    })
                 return reply_content
 
+            stop_on_error = content.pop("stop_on_error", True)
             if info["execute_mode"] == ExecuteMode.thread:
                 pr = ThreadCaller.to_thread(_do_execute)
                 reply_content = await pr.wait()
@@ -705,13 +693,10 @@ class Kernel(ConnectionFileMixin):
                 reply_content = await _do_execute()
             if not silent and stop_on_error and reply_content.get("status") == "error":
                 self._stop_on_error_time = time.monotonic()
-                self.log.info("An error occurred in a non-silent execution request at %s", self._stop_on_error_time)
+                self.log.info("An error occurred in a non-silent execution request")
             # Send the reply.
             self.send_reply(job, reply_content)
 
-        code = content["code"]
-        stop_on_error = content.pop("stop_on_error", True)
-        cell_id = None if silent else job["parent"].get("metadata", {}).get("cellId")
         await self._run_handler(execute_request_handler, job)
 
     async def interrupt_request(self, job: MsgRequest):

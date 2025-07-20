@@ -26,7 +26,13 @@ if TYPE_CHECKING:
     from async_kernel.kernel import Kernel
 
 
-__all__ = ["AsyncDisplayHook", "AsyncDisplayPublisher", "AsyncInteractiveShell"]
+__all__ = ["AsyncDisplayHook", "AsyncDisplayPublisher", "AsyncInteractiveShell", "KernelInterruptError"]
+
+
+class KernelInterruptError(InterruptedError):
+    "Raised to interrupt the kernel."
+
+    # We subclass from InterruptedError so the async event loop can catch the exception.
 
 
 class AsyncDisplayHook(DisplayHook):
