@@ -442,6 +442,7 @@ class Kernel(ConnectionFileMixin):
                         else:
                             hdlrs = self._shell_handlers if socket_id == SocketID.shell else self._control_handlers
                             await self._run_handler(hdlrs.get(msg_type), job)
+                        await anyio.sleep(0)
                     await anyio.wait_readable(socket)
             except (zmq.ContextTerminated, self.CancelledError):
                 return
