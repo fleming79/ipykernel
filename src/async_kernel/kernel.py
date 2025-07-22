@@ -40,7 +40,7 @@ from async_kernel.asyncshell import AsyncInteractiveShell, KernelInterruptError
 from async_kernel.debugger import Debugger
 from async_kernel.kernelspec import KernelName
 from async_kernel.thread_caller import ThreadCaller
-from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode, MsgRequest, MsgType, SocketID, null
+from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode, MsgRequest, MsgType, NoValue, SocketID
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -488,7 +488,7 @@ class Kernel(ConnectionFileMixin):
         msg_or_type: dict[str, Any] | str,
         content: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
-        parent: dict[str, Any] | None | null = null,
+        parent: dict[str, Any] | None | NoValue = NoValue,
         ident: bytes | list[bytes] | None = None,
         buffers: list[bytes] | None = None,
     ):
@@ -499,7 +499,7 @@ class Kernel(ConnectionFileMixin):
                 msg_or_type=msg_or_type,
                 content=content,
                 metadata=metadata,
-                parent=parent if parent is not null else self.job.get("parent"),  # type: ignore[call-arg]
+                parent=parent if parent is not NoValue else self.job.get("parent"),  # type: ignore[call-arg]
                 ident=ident,
                 buffers=buffers,
             )

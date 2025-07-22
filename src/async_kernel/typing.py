@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 __all__ = ["Message", "MsgHeader", "MsgRequest", "SocketID"]
 
 
-null = Sentinel("null")
+NoValue = Sentinel("NoValue")
 
 
 T = TypeVar("T")

@@ -15,7 +15,7 @@ import anyio
 import anyio.to_thread
 from zmq import Socket, SocketType, ZMQError
 
-from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode, null
+from async_kernel.typing import NoValue, ExecuteContent, ExecuteJobInfo, ExecuteMode
 
 __all__ = ["bind_socket", "do_not_debug_this_thread", "mark_thread_pydev_do_not_trace", "wait_thread_event"]
 
@@ -23,7 +23,7 @@ LAUNCHED_BY_DEBUGPY = "debugpy" in sys.modules
 
 
 def bind_socket(
-    socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port: int = 0, max_attempts: int | null = null
+    socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port: int = 0, max_attempts: int | NoValue = NoValue
 ) -> int:
     """Bind the socket to a port using the settings.
 
@@ -59,7 +59,7 @@ def bind_socket(
         win_in_use = None
     # Try up to 100 times to bind a port when in conflict to avoid
     # infinite attempts in bad setups
-    if max_attempts is null:
+    if max_attempts is NoValue:
         max_attempts = 2 if port else 100
     e = None
     for _ in range(max_attempts):
@@ -81,9 +81,6 @@ def get_execute_info(content: ExecuteContent) -> ExecuteJobInfo:
 
     If the top line of the code starts with '#@'; the execute mode and
     namespace_id will be extracted from that line.
-
-    Whitespace is stripped from
-
 
     code:
     ``` python
