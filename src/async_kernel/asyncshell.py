@@ -209,6 +209,7 @@ class AsyncInteractiveShell(InteractiveShell):
             "KernelInterruptError": KernelInterruptError,
             "CancelledError": self.kernel.CancelledError,
             "ThreadCaller": ThreadCaller,
+            "shell": self,
         }
 
     @property
