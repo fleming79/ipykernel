@@ -640,7 +640,7 @@ class Kernel(ConnectionFileMixin):
                 code = content["code"]
                 cell_id = None if silent else job["parent"].get("metadata", {}).get("cellId")
                 user_expressions = info.get("user_expressions") or content.get("user_expressions", {})
-                self.shell.namespace = info["namespace"]
+                self.shell.namespace_id = info["namespace_id"]
                 interrupt = threading.Event()
                 result: ExecutionResult | None = None
                 if not silent:

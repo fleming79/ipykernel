@@ -80,28 +80,28 @@ def get_execute_info(content: ExecuteContent) -> ExecuteJobInfo:
     """Extract ExecuteJobInfo from the content.
 
     If the top line of the code starts with '#@'; the execute mode and
-    namespace will be extacted from that line.
+    namespace_id will be extracted from that line.
 
     Whitespace is stripped from
 
 
     code:
     ``` python
-    # @<execute_mode>, namespace=<namespace>
+    # @<execute_mode>, namespace_id=<namespace_id>
     ```
     """
     mode = ExecuteMode.task if content.get("silent", True) else ExecuteMode.queue
-    namespace = ""
+    namespace_id = ""
     if (code := content["code"].strip()).startswith("#@") and (header := code.split("\n", maxsplit=1)[0]):
         match header.split(",")[0].strip().removeprefix("#@").lower():
             case "task":
                 mode = ExecuteMode.task
             case "thread":
                 mode = ExecuteMode.thread
-        if len(s := header.split("namespace=", maxsplit=1)) == 2:
-            namespace = s[1].strip().strip("'\"")
-            assert "," not in namespace, "Reserved symbol detected!"
-    return ExecuteJobInfo(execute_mode=mode, namespace=namespace)
+        if len(s := header.split("namespace_id=", maxsplit=1)) == 2:
+            namespace_id = s[1].strip().strip("'\"")
+            assert "," not in namespace_id, "Reserved symbol detected!"
+    return ExecuteJobInfo(execute_mode=mode, namespace_id=namespace_id)
 
 
 def mark_thread_pydev_do_not_trace(thread: threading.Thread, name="", *, remove=False):

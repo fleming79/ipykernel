@@ -190,7 +190,7 @@ class TestThreadCaller:
 
     async def test_call_early(self, anyio_backend):
         tsc = ThreadCaller()
-        with pytest.raises(RuntimeError, match=".*not currently open in an asnyc context"):
+        with pytest.raises(RuntimeError, match=".*not currently open in an async context"):
             tsc.taskgroup  # noqa: B018
         pr = tsc.call_soon(time.sleep, 0.1)
         with anyio.move_on_after(0.1):

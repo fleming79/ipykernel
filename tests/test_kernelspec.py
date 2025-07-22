@@ -26,7 +26,7 @@ def test_write_kernel_spec(kernel_name: KernelName):
 
 
 def test_write_all_kernelspec_creates_expected_kernels(tmp_path):
-    # Call twice; the second checks it can overwrite exisiting folders.
+    # Call twice; the second checks it can overwrite existing folders.
     for _ in range(2):
         write_all_kernelspec(tmp_path)
         for kernel_name in (KernelName.asyncio, KernelName.trio):

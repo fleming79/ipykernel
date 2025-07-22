@@ -31,18 +31,18 @@ def test_bind_socket(transport: Literal["tcp", "ipc"], tmp_path):
 @pytest.mark.parametrize(
     ("code", "silent", "expected"),
     [
-        ("#@task", False, ExecuteJobInfo(execute_mode=ExecuteMode.task, namespace="")),
-        ("print(1)", False, ExecuteJobInfo(execute_mode=ExecuteMode.queue, namespace="")),
-        ("", True, ExecuteJobInfo(execute_mode=ExecuteMode.task, namespace="")),
+        ("#@task", False, ExecuteJobInfo(execute_mode=ExecuteMode.task, namespace_id="")),
+        ("print(1)", False, ExecuteJobInfo(execute_mode=ExecuteMode.queue, namespace_id="")),
+        ("", True, ExecuteJobInfo(execute_mode=ExecuteMode.task, namespace_id="")),
         (
-            "#@thread, namespace= My namespace \nprint('hello')",
+            "#@thread, namespace_id= My namespace_id \nprint('hello')",
             False,
-            ExecuteJobInfo(execute_mode=ExecuteMode.thread, namespace="My namespace"),
+            ExecuteJobInfo(execute_mode=ExecuteMode.thread, namespace_id="My namespace_id"),
         ),
         (
-            "#@namespace=1 @!%n🌋 \nprint(None)",
+            "#@namespace_id=1 @!%n🌋 \nprint(None)",
             False,
-            ExecuteJobInfo(execute_mode=ExecuteMode.queue, namespace="1 @!%n🌋"),
+            ExecuteJobInfo(execute_mode=ExecuteMode.queue, namespace_id="1 @!%n🌋"),
         ),
     ],
 )

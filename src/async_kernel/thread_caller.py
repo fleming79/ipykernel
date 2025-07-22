@@ -192,7 +192,7 @@ class ThreadCaller:
     def taskgroup(self) -> TaskGroup:
         if tg := self._taskgroup:
             return tg
-        msg = f"{self}  is not currently open in an asnyc context."
+        msg = f"{self}  is not currently open in an async context."
         raise RuntimeError(msg)
 
     def close(self):

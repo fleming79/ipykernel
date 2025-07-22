@@ -124,7 +124,7 @@ class AsyncDisplayPublisher(DisplayPublisher):
 class AsyncInteractiveShell(InteractiveShell):
     """A subclass of InteractiveShell for ZMQ."""
 
-    _namespace_var: ClassVar[ContextVar[str]] = ContextVar("namespace", default="")
+    _namespace_var: ClassVar[ContextVar[str]] = ContextVar("namespace_id", default="")
     displayhook_class = Type(AsyncDisplayHook)
     display_pub_class = Type(AsyncDisplayPublisher)
     displayhook: Instance[AsyncDisplayHook]
@@ -192,13 +192,13 @@ class AsyncInteractiveShell(InteractiveShell):
         return self.user_ns
 
     @property
-    def namespace(self) -> str:
-        # Allow for namespace to be defined in the context of the async function
-        # This only requires us to maintain a dict for each namespace (str).
+    def namespace_id(self) -> str:
+        # Allow for namespace_id to be defined in the context of the async function
+        # This only requires us to maintain a dict for each namespace_id (str).
         return self._namespace_var.get()
 
-    @namespace.setter
-    def namespace(self, value: str):
+    @namespace_id.setter
+    def namespace_id(self, value: str):
         self._namespace_var.set(value)
 
     @property
@@ -214,17 +214,17 @@ class AsyncInteractiveShell(InteractiveShell):
 
     @property
     def user_ns(self):
-        if (namspace := self.namespace) not in self.namespaces:
-            self.namespaces[namspace] = self._user_ns_builtin.copy()
+        if (namespace_id := self.namespace_id) not in self.namespaces:
+            self.namespaces[namespace_id] = self._user_ns_builtin.copy()
             self.init_user_ns()
-        return self.namespaces[namspace]
+        return self.namespaces[namespace_id]
 
     @user_ns.setter
     def user_ns(self, ns: dict):
         assert hasattr(ns, "clear")
         assert isinstance(ns, dict)
         ns.update(self._user_ns_builtin)
-        self.namespaces[self.namespace] = ns
+        self.namespaces[self.namespace_id] = ns
 
     @property
     def ns_table(self):

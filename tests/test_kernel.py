@@ -439,13 +439,13 @@ async def test_invalid_message(client, channel):
     await utils.clear_iopub(client)
 
 
-@pytest.mark.parametrize("namespace", ["", "my namespace"])
+@pytest.mark.parametrize("namespace_id", ["", "my namespace_id"])
 @pytest.mark.parametrize("mode", ["", *ExecuteMode])
-async def test_run_thread_ns(client, kernel, namespace, mode: ExecuteMode):
+async def test_run_thread_ns(client, kernel, namespace_id, mode: ExecuteMode):
     symbol = str(uuid.uuid4())
-    kernel.shell.namespace = namespace
+    kernel.shell.namespace_id = namespace_id
     kernel.shell.user_ns["my_local_variable"] = symbol
-    code = f"""#@{mode} namespace="{namespace}"\n
+    code = f"""#@{mode} namespace_id="{namespace_id}"\n
 def test():
     assert anyio
     import threading

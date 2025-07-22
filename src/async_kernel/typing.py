@@ -84,7 +84,7 @@ class MsgRequest(TypedDict, Generic[T]):
 
 class ExecuteJobInfo(TypedDict):
     execute_mode: ExecuteMode
-    namespace: str
+    namespace_id: str
 
 
 class ExecuteContent(TypedDict):
