@@ -170,8 +170,6 @@ class AsyncInteractiveShell(InteractiveShell):
 
     @override
     def init_create_namespaces(self, user_module=None, user_ns=None):
-        # self._main_mod_cache = {}
-        # super().init_create_namespaces(None, {})
         return
 
     @override
@@ -181,11 +179,6 @@ class AsyncInteractiveShell(InteractiveShell):
     @override
     def init_sys_modules(self):
         return
-
-    @override
-    def prepare_user_module(self, user_module=None, user_ns=None):
-        # return super().prepare_user_module(user_module or self.user_global_ns, user_ns or {})
-        return user_module or self.user_global_ns, user_ns or {}
 
     @property
     def user_global_ns(self):
@@ -225,6 +218,7 @@ class AsyncInteractiveShell(InteractiveShell):
         assert isinstance(ns, dict)
         ns.update(self._user_ns_builtin)
         self.namespaces[self.namespace_id] = ns
+        self.init_user_ns()
 
     @property
     def ns_table(self):

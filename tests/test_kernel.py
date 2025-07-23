@@ -399,6 +399,18 @@ async def test_magic(client, code: str):
     await utils.clear_iopub(client)
 
 
+async def test_shell_required_properites(kernel):
+    # used by ipython AutoMagicChecker via is_shadowed (requires 'builitin')
+    assert set(kernel.shell.ns_table) == {"user_global", "user_local", "builtin"}
+    # U
+    kernel.shell.enable_gui()
+
+
+async def test_shell_can_set_namespace(kernel):
+    kernel.shell.user_ns = {}
+    assert set(kernel.shell.user_ns).intersection(kernel.shell._user_ns_builtin)
+
+
 @pytest.mark.parametrize("mode", ExecuteMode)
 async def test_header_mode(client, mode: ExecuteMode):
     code = f"""
