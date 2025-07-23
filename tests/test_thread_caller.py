@@ -7,7 +7,7 @@ import contextlib
 import threading
 import time
 from random import random
-from typing import cast
+from typing import Literal, cast
 
 import anyio
 import anyio.to_thread
@@ -37,9 +37,9 @@ class TestThreadCaller:
         ThreadCaller._shutdown_to_thread_instances()
 
     async def test_sync(self):
-        async with ThreadCaller() as tsc:
+        async with ThreadCaller() as caller:
             is_called = anyio.Event()
-            tsc.call_later(is_called.set)
+            caller.call_later(is_called.set)
             await is_called.wait()
 
     @pytest.mark.parametrize("args_kwargs", [((), {}), ((1, 2, 3), {"a": 10})])
@@ -52,23 +52,23 @@ class TestThreadCaller:
             is_called.set()
             return args, kwargs
 
-        async with ThreadCaller() as tsc:
+        async with ThreadCaller() as caller:
             is_called = anyio.Event()
-            pr = tsc.call_later(my_func, 0.2, is_called, *args_kwargs[0], **args_kwargs[1])
+            pr = caller.call_later(my_func, 0.2, is_called, *args_kwargs[0], **args_kwargs[1])
             await is_called.wait()
             assert val == args_kwargs
             assert (await pr.wait()) == args_kwargs
 
     async def test_anyio_to_thread(self):
         # Test the call works from another thread
-        async with ThreadCaller() as tsc:
+        async with ThreadCaller() as caller:
 
             def _in_thread():
                 def my_func(*args, **kwargs):
                     return args, kwargs
 
                 async def runner():
-                    pr = tsc.call_soon(my_func, 1, 2, 3, a=10)
+                    pr = caller.call_soon(my_func, 1, 2, 3, a=10)
                     result = await pr.wait()
                     assert result == ((1, 2, 3), {"a": 10})
 
@@ -78,7 +78,7 @@ class TestThreadCaller:
 
     async def test_cancels_on_exit(self):
         is_cancelled = False
-        async with ThreadCaller() as tsc:
+        async with ThreadCaller() as caller:
 
             async def my_test():
                 nonlocal is_cancelled
@@ -90,7 +90,7 @@ class TestThreadCaller:
                     is_cancelled = True
 
             started = anyio.Event()
-            tsc.call_later(my_test)
+            caller.call_later(my_test)
             await started.wait()
         assert is_cancelled
 
@@ -116,20 +116,20 @@ class TestThreadCaller:
         the_thread.start()
         ready.wait()
         assert finished_event
-        tsc = ThreadCaller.get_instance(the_thread)
+        caller = ThreadCaller.get_instance(the_thread)
         if check_result == "result":
             expr = "10"
             context = contextlib.nullcontext()
         else:
             expr = "invalid call"
             context = pytest.raises(SyntaxError)
-        pending = tsc.call_later(eval, 0.2, expr)
+        pending = caller.call_later(eval, 0.2, expr)
         with context:
             match check_mode:
                 case "main":
                     assert (await pending.wait()) == 10
                 case "local":
-                    pending_local = tsc.call_soon(pending.wait)
+                    pending_local = caller.call_soon(pending.wait)
                     result = await pending_local.wait()
                     assert result == 10
                 case "wait_sync":
@@ -147,11 +147,11 @@ class TestThreadCaller:
                     result = await anyio.to_thread.run_sync(another_thread)
                     assert result == 10
 
-        tsc.call_soon(finished_event.set)
+        caller.call_soon(finished_event.set)
 
     async def test_error_wait_sync(self):
-        async with ThreadCaller() as tsc:
-            pending = tsc.call_later(anyio.sleep, 0.1, 0.1)
+        async with ThreadCaller() as caller:
+            pending = caller.call_later(anyio.sleep, 0.1, 0.1)
             with pytest.raises(RuntimeError):
                 pending.wait_sync()
 
@@ -189,29 +189,59 @@ class TestThreadCaller:
         ThreadCaller._shutdown_to_thread_instances()
 
     async def test_call_early(self, anyio_backend):
-        tsc = ThreadCaller()
+        caller = ThreadCaller()
         with pytest.raises(RuntimeError, match=".*not currently open in an async context"):
-            tsc.taskgroup  # noqa: B018
-        pr = tsc.call_soon(time.sleep, 0.1)
+            caller.taskgroup  # noqa: B018
+        pr = caller.call_soon(time.sleep, 0.1)
         with anyio.move_on_after(0.1):
             await pr.wait()
         assert not pr.done()
-        async with tsc:
+        async with caller:
             await pr.wait()
 
     async def test_closed_in_call_soon(self, anyio_backend):
         # Check t
         async def close_tsc():
-            tsc = ThreadCaller.get_instance()
-            tsc.close()
+            caller = ThreadCaller.get_instance()
+            caller.close()
             await anyio.sleep_forever()
 
         pr = ThreadCaller.to_thread(close_tsc)
-        tsc = ThreadCaller.get_instance(pr.thread)
+        caller = ThreadCaller.get_instance(pr.thread)
         cancelled_ = anyio.get_cancelled_exc_class()
         with pytest.raises(cancelled_):
             await pr.wait()
         assert pr.done()
-        assert tsc._closed
+        assert caller._closed
         with pytest.raises(RuntimeError):
-            tsc.call_soon(time.sleep, 0)
+            caller.call_soon(time.sleep, 0)
+
+    @pytest.mark.parametrize("mode", ["sync", "async", "blocking"])
+    async def test_cancel(self, anyio_backend, mode: Literal["sync", "async", "blocking"]):
+        def sync_func():
+            print("hello")
+
+        async def async_func():
+            await anyio.sleep(1)
+            raise RuntimeError
+
+        def blocking_func():
+            import time  # noqa: PLC0415
+
+            time.sleep(0.5)
+
+        my_func = blocking_func
+        match mode:
+            case "sync":
+                my_func = sync_func
+            case "async":
+                my_func = async_func
+            case "blocking":
+                my_func = blocking_func
+
+        async with ThreadCaller() as caller:
+            pr = caller.call_soon(my_func)
+            pr.cancel()
+
+        with pytest.raises(anyio.get_cancelled_exc_class()):
+            await pr.wait()

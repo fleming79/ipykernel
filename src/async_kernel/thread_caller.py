@@ -11,13 +11,14 @@ import threading
 import time
 import weakref
 from collections import deque
-from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, cast
 
 import anyio
 import sniffio
 from zmq import Context, Socket, SocketType
 
 from async_kernel.pending_result import PendingResult
+from async_kernel.typing import T
 from async_kernel.utils import wait_thread_event
 
 if TYPE_CHECKING:
@@ -25,15 +26,42 @@ if TYPE_CHECKING:
 
     from anyio.abc import TaskGroup, TaskStatus
 
-    from async_kernel.typing import P, T
+    from async_kernel.typing import P
 
 __all__ = ["ThreadCaller"]
+
+
+class ThreadCallerPendingResult(PendingResult, Generic[T]):
+    """A pending result for use with ThreadCaller.
+
+    This class adds a cancel method which provides the mechanism to cancel the scope
+    in which the pending result execution is taking place. Note that blocking io will
+    not cancel until the blocking operation exits.
+    """
+
+    _cancel_scope: anyio.CancelScope | None = None
+    _cancel = False
+
+    def cancel(self):
+        "Cancel the pending resule"
+        if not self.done():
+            self._cancel = True
+            if scope := self._cancel_scope:
+                if threading.current_thread() is self.thread:
+                    scope.cancel()
+                else:
+                    ThreadCaller().call_soon(scope.cancel)
+
+    def _set_cancel_scope(self, scope: anyio.CancelScope):
+        if self._cancel:
+            scope.cancel()
+        self._cancel_scope = scope
 
 
 class ThreadCaller:
     """
     ThreadCaller provides a mechanism to safely schedule and execute functions
-    or coroutines from multiple threads within an async context.
+    or coroutines in its original thread within an async context.
 
     This class manages a queue of jobs that can be submitted from any thread,
     ensuring that all scheduled calls are executed in the context of a dedicated
@@ -55,7 +83,7 @@ class ThreadCaller:
     _to_thread_instances: ClassVar[weakref.WeakSet[Self]] = weakref.WeakSet()
     MAX_IDLE_EVENT_THREADS = 10
     _taskgroup: TaskGroup | None = None
-    _jobs: deque[tuple[contextvars.Context, tuple[PendingResult, float, float, Callable, tuple, dict]]]
+    _jobs: deque[tuple[contextvars.Context, tuple[ThreadCallerPendingResult, float, float, Callable, tuple, dict]]]
     _jobs_added: threading.Event
     _closed = False
     iopub_sockets: ClassVar[weakref.WeakKeyDictionary[threading.Thread, Socket]] = weakref.WeakKeyDictionary()
@@ -109,26 +137,32 @@ class ThreadCaller:
 
     async def _wrap_call(
         self,
-        pending: PendingResult,
+        pending: ThreadCallerPendingResult,
         starttime: float,
         delay: float,
         func: Callable[..., Any | Awaitable],
         args: tuple,
         kwargs: dict,
     ):
-        try:
-            if (delay_ := delay - time.monotonic() + starttime) > 0:
-                await anyio.sleep(float(delay_))
-            result = func(*args, **kwargs) if callable(func) else func
-            while inspect.isawaitable(result):
-                result = await result
-            self._outstanding -= 1
-            pending.set_result(result)
-        except (self._cancelled_exception_class, Exception) as e:
-            e.add_note(f"{self} {func=}")
-            self.log.exception("Exception occurred while running %s", func, exc_info=e)
-            self._outstanding -= 1
-            pending.set_exception(e)
+        with anyio.CancelScope() as scope:
+            pending._set_cancel_scope(scope)
+            try:
+                if (delay_ := delay - time.monotonic() + starttime) > 0:
+                    await anyio.sleep(float(delay_))
+                result = func(*args, **kwargs) if callable(func) else func
+                while inspect.isawaitable(result):
+                    result = await result
+                if scope.cancel_called:
+                    # await here to allow the cancel scope to be raised/caught.
+                    await anyio.sleep(0)
+                else:
+                    self._outstanding -= 1  # update first for _to_thread_on_done
+                    pending.set_result(result)
+            except (self._cancelled_exception_class, Exception) as e:
+                self._outstanding -= 1  # # update first for _to_thread_on_done
+                e.add_note(f"{self} {func=}")
+                self.log.exception("Exception occurred while running %s", func, exc_info=e)
+                pending.set_exception(e)
 
     def _to_thread_on_done(self, _):
         if not self._closed:
@@ -154,7 +188,9 @@ class ThreadCaller:
         raise RuntimeError(msg)
 
     @classmethod
-    def to_thread(cls, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs) -> PendingResult[T]:
+    def to_thread(
+        cls, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs
+    ) -> ThreadCallerPendingResult[T]:
         "Call func in a separate thread."
         try:
             tsc = cls._to_thread_pool.popleft()
@@ -205,7 +241,7 @@ class ThreadCaller:
 
     def call_later(
         self, func: Callable[P, T | Awaitable[T]], delay=0.0, /, *args: P.args, **kwargs: P.kwargs
-    ) -> PendingResult[T]:
+    ) -> ThreadCallerPendingResult[T]:
         """Schedules a function or coroutine for execution.
 
         If the instance is not open in an async context, the function will be queued and
@@ -216,7 +252,7 @@ class ThreadCaller:
         if self._closed:
             msg = f"{self} is closed!"
             raise RuntimeError(msg)
-        pending = PendingResult(thread=self.thread)
+        pending = ThreadCallerPendingResult(thread=self.thread)
         if threading.current_thread() is self.thread and (tg := self._taskgroup):
             tg.start_soon(self._wrap_call, pending, time.monotonic(), delay, func, args, kwargs)
         else:
@@ -225,6 +261,8 @@ class ThreadCaller:
         self._outstanding += 1
         return pending
 
-    def call_soon(self, func: Callable[P, T | Awaitable[T]], *args: P.args, **kwargs: P.kwargs) -> PendingResult[T]:
+    def call_soon(
+        self, func: Callable[P, T | Awaitable[T]], *args: P.args, **kwargs: P.kwargs
+    ) -> ThreadCallerPendingResult[T]:
         "Calls call_later with delay=0.0."
         return self.call_later(func, 0.0, *args, **kwargs)
