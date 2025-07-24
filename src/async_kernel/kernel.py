@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self
 
 import anyio
-import anyio.to_thread
 import sniffio
 import zmq
 from IPython.core.completer import provisionalcompleter as _provisionalcompleter
@@ -667,7 +666,7 @@ class Kernel(ConnectionFileMixin):
 
                     async with anyio.create_task_group() as tg:
                         tg.start_soon(run)
-                        await anyio.to_thread.run_sync(interrupt.wait)
+                        await utils.wait_thread_event(interrupt)
                         if result is None:
                             tg.cancel_scope.cancel()
                 finally:
