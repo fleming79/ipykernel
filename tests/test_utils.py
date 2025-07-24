@@ -31,9 +31,9 @@ def test_bind_socket(transport: Literal["tcp", "ipc"], tmp_path):
 @pytest.mark.parametrize(
     ("code", "silent", "expected"),
     [
-        ("#@task", False, ExecuteJobInfo(execute_mode=ExecuteMode.task, namespace_id="")),
-        ("print(1)", False, ExecuteJobInfo(execute_mode=ExecuteMode.queue, namespace_id="")),
-        ("", True, ExecuteJobInfo(execute_mode=ExecuteMode.task, namespace_id="")),
+        ("#@task", False, ExecuteJobInfo(execute_mode=ExecuteMode.task)),
+        ("print(1)", False, ExecuteJobInfo(execute_mode=ExecuteMode.queue)),
+        ("", True, ExecuteJobInfo(execute_mode=ExecuteMode.task)),
         (
             "#@thread, namespace_id= My namespace_id \nprint('hello')",
             False,

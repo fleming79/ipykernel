@@ -37,7 +37,7 @@ def clear_kernel():
         kernel.stop()
     Kernel._instance = None
     AsyncInteractiveShell.clear_instance()
-    Caller._shutdown_to_thread_instances()
+    Caller._shutdown_all()
 
 
 async def get_reply(

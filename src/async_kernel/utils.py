@@ -15,7 +15,7 @@ import anyio
 import anyio.to_thread
 from zmq import Socket, SocketType, ZMQError
 
-from async_kernel.typing import NoValue, ExecuteContent, ExecuteJobInfo, ExecuteMode
+from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode, NoValue
 
 __all__ = ["bind_socket", "do_not_debug_this_thread", "mark_thread_pydev_do_not_trace", "wait_thread_event"]
 
@@ -84,21 +84,27 @@ def get_execute_info(content: ExecuteContent) -> ExecuteJobInfo:
 
     code:
     ``` python
-    # @<execute_mode>, namespace_id=<namespace_id>
+    # @<execute_mode>, namespace_id=<namespace_id>, thread_name=<name>
     ```
     """
-    mode = ExecuteMode.task if content.get("silent", True) else ExecuteMode.queue
-    namespace_id = ""
+    execute_mode = ExecuteMode.task if content.get("silent", True) else ExecuteMode.queue
+    info = ExecuteJobInfo(execute_mode=execute_mode)
     if (code := content["code"].strip()).startswith("#@") and (header := code.split("\n", maxsplit=1)[0]):
-        match header.split(",")[0].strip().removeprefix("#@").lower():
+
+        def extract_value(key: Literal["namespace_id", "thread_name"]):
+            "Extracts the value from the header"
+            if len(s := header.split(f"{key}=", maxsplit=1)) == 2:
+                info[key] = s[1].split(",")[0].strip().strip("'\"")
+
+        extract_value("namespace_id")
+        mode = header.split(" ")[0].split(",")[0].strip().removeprefix("#@").lower()
+        match mode:
             case "task":
-                mode = ExecuteMode.task
+                info["execute_mode"] = ExecuteMode.task
             case "thread":
-                mode = ExecuteMode.thread
-        if len(s := header.split("namespace_id=", maxsplit=1)) == 2:
-            namespace_id = s[1].strip().strip("'\"")
-            assert "," not in namespace_id, "Reserved symbol detected!"
-    return ExecuteJobInfo(execute_mode=mode, namespace_id=namespace_id)
+                info["execute_mode"] = ExecuteMode.thread
+                extract_value("thread_name")
+    return info
 
 
 def mark_thread_pydev_do_not_trace(thread: threading.Thread, name="", *, remove=False):

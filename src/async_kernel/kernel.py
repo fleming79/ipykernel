@@ -351,7 +351,7 @@ class Kernel(ConnectionFileMixin):
             await tsc.taskgroup.start(self._receive_msg_loop, SocketID.control)
             ready_event.set()
 
-        self.control_thread_caller = tsc = Caller.start_new(backend=self.anyio_backend, name="Control")
+        self.control_thread_caller = tsc = Caller.start_new(backend=self.anyio_backend, thread_name="Control")
         ready_event = threading.Event()
         tsc.call_soon(run_in_control_event_loop)
         ready_event.wait(10)
@@ -398,7 +398,7 @@ class Kernel(ConnectionFileMixin):
             pass
         self.control_thread_caller.close()
         self.main_thread_caller.close()
-        Caller._shutdown_to_thread_instances()
+        Caller._shutdown_all()
 
     async def _receive_msg_loop(self, socket_id: Literal[SocketID.control, SocketID.shell], *, task_status: TaskStatus):
         """Receive messages from the socket, unpack them and pass them to be processed with process_message."""
@@ -640,7 +640,7 @@ class Kernel(ConnectionFileMixin):
                 code = content["code"]
                 cell_id = None if silent else job["parent"].get("metadata", {}).get("cellId")
                 user_expressions = info.get("user_expressions") or content.get("user_expressions", {})
-                self.shell.namespace_id = info["namespace_id"]
+                self.shell.namespace_id = info.get("namespace_id", "")
                 interrupt = threading.Event()
                 result: ExecutionResult | None = None
                 if not silent:
@@ -690,7 +690,7 @@ class Kernel(ConnectionFileMixin):
 
             stop_on_error = content.pop("stop_on_error", True)
             if info["execute_mode"] == ExecuteMode.thread:
-                pr = Caller.to_thread(_do_execute)
+                pr = Caller.to_thread_by_thread_name(info.get("thread_name"), _do_execute)
                 reply_content = await pr.wait()
             else:
                 reply_content = await _do_execute()

@@ -18,7 +18,7 @@ import sniffio
 from zmq import Context, Socket, SocketType
 
 from async_kernel.pending_result import PendingResult
-from async_kernel.typing import T
+from async_kernel.typing import NoValue, T
 from async_kernel.utils import wait_thread_event
 
 if TYPE_CHECKING:
@@ -80,7 +80,7 @@ class Caller:
     __stack = None
     _outstanding = 0
     _to_thread_pool: ClassVar[deque[Self]] = deque()
-    _to_thread_instances: ClassVar[weakref.WeakSet[Self]] = weakref.WeakSet()
+    _pool_instances: ClassVar[weakref.WeakSet[Self]] = weakref.WeakSet()
     MAX_IDLE_EVENT_THREADS = 10
     _taskgroup: TaskGroup | None = None
     _jobs: deque[tuple[contextvars.Context, tuple[ThreadCallerPendingResult, float, float, Callable, tuple, dict]]]
@@ -172,18 +172,23 @@ class Caller:
                 self.close()
 
     @classmethod
-    def _shutdown_to_thread_instances(cls):
+    def _shutdown_all(cls):
         "Shutdown currently open instance created via 'to_thread'."
-        for tsc in set(cls._to_thread_instances):
-            tsc.close()
+        for caller in set(cls._instances.values()):
+            caller.close()
         while cls._instances:
             time.sleep(0.01)
 
     @classmethod
-    def get_instance(cls, thread: threading.Thread | None = None) -> Self:
-        thread = thread or threading.current_thread()
-        if instance := cls._instances.get(thread):
-            return instance
+    def get_instance(cls, *, thread: threading.Thread | None = None, thread_name: str | NoValue = NoValue) -> Self:
+        if thread_name is not NoValue:
+            for thread in cls._instances:
+                if thread.name == thread_name:
+                    return cls._instances[thread]
+        else:
+            thread = thread or threading.current_thread()
+            if instance := cls._instances.get(thread):
+                return instance
         msg = f"A Caller was not found for {thread=}."
         raise RuntimeError(msg)
 
@@ -192,23 +197,37 @@ class Caller:
         cls, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs
     ) -> ThreadCallerPendingResult[T]:
         "Call func in a separate thread."
-        try:
-            tsc = cls._to_thread_pool.popleft()
-        except IndexError:
-            tsc = cls.start_new()
-            cls._to_thread_instances.add(tsc)
-        pending = tsc.call_soon(func, *args, **kwargs)
-        pending._done_callbacks.add(tsc._to_thread_on_done)
+        return cls.to_thread_by_thread_name(None, func, *args, **kwargs)
+
+    @classmethod
+    def to_thread_by_thread_name(
+        cls, thread_name: str | None, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs
+    ) -> ThreadCallerPendingResult[T]:
+        """Call the function in the Caller thread by name.
+
+        If a caller thread is not found a new one is created with the specified name."""
+        if not thread_name and cls._to_thread_pool:
+            caller = cls._to_thread_pool.popleft()
+        else:
+            try:
+                caller = cls.get_instance(thread_name=thread_name)
+            except RuntimeError:
+                caller = cls.start_new(thread_name=thread_name)
+
+        pending = caller.call_soon(func, *args, **kwargs)
+        if not thread_name:
+            cls._pool_instances.add(caller)
+            pending._done_callbacks.add(caller._to_thread_on_done)
         return pending
 
     @classmethod
-    def start_new(cls, *, backend="", log: logging.LoggerAdapter | None = None, name: str | None = None):
+    def start_new(cls, *, backend="", log: logging.LoggerAdapter | None = None, thread_name: str | None = None):
         "Start a new thread, open a Caller in a new event loop  returning the Caller instance."
 
         def run_event_loop():
             async def run_event_loop_():
-                nonlocal tsc
-                async with cls(log=log) as tsc:
+                nonlocal caller
+                async with cls(log=log) as caller:
                     ready_event.set()
                     with contextlib.suppress(anyio.get_cancelled_exc_class()):
                         await anyio.sleep_forever()
@@ -216,13 +235,13 @@ class Caller:
             anyio.run(run_event_loop_, backend=backend)
 
         backend = backend or sniffio.current_async_library()
-        tsc = cast("Self", None)
+        caller = cast("Self", None)
         ready_event = threading.Event()
-        thread = threading.Thread(target=run_event_loop, name=name, daemon=True)
+        thread = threading.Thread(target=run_event_loop, name=thread_name, daemon=True)
         thread.start()
         ready_event.wait()
-        assert isinstance(tsc, cls)
-        return tsc
+        assert isinstance(caller, cls)
+        return caller
 
     @property
     def taskgroup(self) -> TaskGroup:

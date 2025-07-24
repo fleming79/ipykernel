@@ -16,9 +16,9 @@ import pytest
 import zmq
 
 import async_kernel.utils
+from async_kernel.caller import Caller
 from async_kernel.comm import Comm
 from async_kernel.kernel import ExecuteMode, SocketID
-from async_kernel.thread_caller import ThreadCaller
 from tests import utils
 
 
@@ -52,7 +52,7 @@ async def test_iopub(kernel, mode: Literal["direct", "proxy"]):
     try:
         time.sleep(0.05)
         if mode == "proxy":
-            socket = ThreadCaller.iopub_sockets[threading.current_thread()]
+            socket = Caller.iopub_sockets[threading.current_thread()]
         for i in range(n):
             socket.send_multipart([b"0", f"{i}".encode()])
         thread.join()
@@ -457,7 +457,11 @@ async def test_run_thread_ns(client, kernel, namespace_id, mode: ExecuteMode):
     symbol = str(uuid.uuid4())
     kernel.shell.namespace_id = namespace_id
     kernel.shell.user_ns["my_local_variable"] = symbol
-    code = f"""#@{mode} namespace_id="{namespace_id}"\n
+    header = f'#@{mode} namespace_id="{namespace_id}'
+    if mode is ExecuteMode.thread:
+        header += ",thread_name=My thread 1324"
+
+    code = f"""{header}"\n
 def test():
     assert anyio
     import threading
@@ -470,3 +474,5 @@ test()
     assert reply["user_expressions"]["symbol"]["status"] == "ok"
     symbol_ = eval(reply["user_expressions"]["symbol"]["data"]["text/plain"])
     assert symbol_ == symbol
+    if mode is ExecuteMode.thread:
+        assert any(inst for inst in Caller._instances if inst.name == "My thread 1324")
