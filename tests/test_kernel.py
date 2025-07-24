@@ -281,6 +281,15 @@ async def test_interrupt_request(client, kernel):
     assert event.is_set()
 
 
+async def test_interrupt_request_async_request(subprocess_kernels_client):
+    client = subprocess_kernels_client
+    msg_id = client.execute("await anyio.sleep(100)")
+    await anyio.sleep(0.1)
+    reply = await utils.send_control_message(client, "interrupt_request")
+    reply = await utils.get_reply(client, msg_id)
+    assert reply["content"]["status"] == "error"
+
+
 async def test_interrupt_request_blocking_exec_request(subprocess_kernels_client):
     client = subprocess_kernels_client
     msg_id = client.execute("import time;time.sleep(100)")

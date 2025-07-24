@@ -19,7 +19,7 @@ import traceback
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast
 
 import anyio
 import sniffio
@@ -641,37 +641,31 @@ class Kernel(ConnectionFileMixin):
                 user_expressions = info.get("user_expressions") or content.get("user_expressions", {})
                 self.shell.namespace_id = info.get("namespace_id", "")
                 interrupt = threading.Event()
-                result: ExecutionResult | None = None
+                result: ExecutionResult = cast("ExecutionResult", None)
                 traceback = None
                 if not silent:
                     self._interrupt_events.add(interrupt)
-                try:
 
-                    async def run():
-                        nonlocal result, traceback
-                        try:
-                            result = await self.shell.run_cell_async(
-                                raw_cell=code,
-                                store_history=content.get("store_history", False),
-                                silent=silent,
-                                transformed_cell=self.shell.transform_cell(code),
-                                shell_futures=True,
-                                cell_id=cell_id,
-                            )
-                            traceback = self.shell._traceback_var.get()
-                        except asyncio.CancelledError:
-                            pass
-                        finally:
-                            interrupt.set()
+                async def run():
+                    nonlocal result, traceback
+                    result = await self.shell.run_cell_async(
+                        raw_cell=code,
+                        store_history=content.get("store_history", False),
+                        silent=silent,
+                        transformed_cell=self.shell.transform_cell(code),
+                        shell_futures=True,
+                        cell_id=cell_id,
+                    )
+                    traceback = self.shell._traceback_var.get()
+                    interrupt.set()
 
-                    async with anyio.create_task_group() as tg:
-                        tg.start_soon(run)
-                        await utils.wait_thread_event(interrupt)
-                        if result is None:
-                            tg.cancel_scope.cancel()
-                finally:
-                    self._interrupt_events.discard(interrupt)
-                err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError
+                async with anyio.create_task_group() as tg:
+                    tg.start_soon(run)
+                    await utils.wait_thread_event(interrupt)
+                    if result is None:
+                        tg.cancel_scope.cancel()
+                self._interrupt_events.discard(interrupt)
+                err = result.error_before_exec or result.error_in_exec
                 if user_expressions:
                     user_expressions = self.shell.user_expressions(user_expressions)
                 reply_content = {
