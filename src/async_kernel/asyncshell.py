@@ -125,6 +125,7 @@ class AsyncInteractiveShell(InteractiveShell):
     """A subclass of InteractiveShell for ZMQ."""
 
     _namespace_var: ClassVar[ContextVar[str]] = ContextVar("namespace_id", default="")
+    _traceback_var: ClassVar[ContextVar[list | None]] = ContextVar("last_traceback", default=None)
     displayhook_class = Type(AsyncDisplayHook)
     display_pub_class = Type(AsyncDisplayPublisher)
     displayhook: Instance[AsyncDisplayHook]
@@ -236,8 +237,7 @@ class AsyncInteractiveShell(InteractiveShell):
         preprocessing_exc_tuple: tuple | None = None,
         cell_id: str | None = None,
     ) -> ExecutionResult:
-        if not silent:
-            self._last_traceback = None
+        self._traceback_var.set(None)
         result = None
         try:
             result = await super().run_cell_async(
@@ -264,7 +264,7 @@ class AsyncInteractiveShell(InteractiveShell):
             stb.pop(-2)
         self.kernel.iopub_send(msg_or_type="error", content={"traceback": stb, "ename": ename, "evalue": str(evalue)})
         # store the formatted traceback
-        self._last_traceback = stb
+        self._traceback_var.set(stb)
 
     def init_magics(self):
         """Initialize magics."""

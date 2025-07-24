@@ -183,15 +183,23 @@ async def test_message_order(client):
     await utils.clear_iopub(client)
 
 
-async def test_execute_request(client):
-    reply = await utils.send_shell_message(client, "execute_request", {"code": "hello", "silent": False})
+async def test_execute_request_success(client):
+    reply = await utils.send_shell_message(client, "execute_request", {"code": "1 + 1", "silent": False})
+    assert reply["header"]["msg_type"] == "execute_reply"
+    assert reply["content"]["status"] == "ok"
+    await utils.clear_iopub(client)
+
+
+async def test_execute_request_error(client):
+    reply = await utils.send_shell_message(client, "execute_request", {"code": "some invalid code", "silent": False})
     assert reply["header"]["msg_type"] == "execute_reply"
     assert reply["content"]["status"] == "error"
+    await utils.clear_iopub(client)
 
 
 async def test_execute_request_stop_on_error(client, kernel):
     kernel._stop_on_error_time = time.monotonic() + 10
-    reply = await utils.send_shell_message(client, "execute_request", {"code": "hello", "silent": False})
+    reply = await utils.send_shell_message(client, "execute_request", {"code": "some invalid code", "silent": False})
     assert reply["header"]["msg_type"] == "execute_reply"
     assert reply["content"]["status"] == "error"
     kernel._stop_on_error_time = 0
@@ -275,7 +283,7 @@ async def test_interrupt_request(client, kernel):
 
 async def test_interrupt_request_blocking_exec_request(subprocess_kernels_client):
     client = subprocess_kernels_client
-    msg_id = client.execute("import time;time.sleep(5)")
+    msg_id = client.execute("import time;time.sleep(100)")
     await anyio.sleep(0.1)
     reply = await utils.send_control_message(client, "interrupt_request")
     reply = await utils.get_reply(client, msg_id)

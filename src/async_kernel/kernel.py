@@ -643,12 +643,13 @@ class Kernel(ConnectionFileMixin):
                 self.shell.namespace_id = info.get("namespace_id", "")
                 interrupt = threading.Event()
                 result: ExecutionResult | None = None
+                traceback = None
                 if not silent:
                     self._interrupt_events.add(interrupt)
                 try:
 
                     async def run():
-                        nonlocal result
+                        nonlocal result, traceback
                         try:
                             result = await self.shell.run_cell_async(
                                 raw_cell=code,
@@ -658,6 +659,7 @@ class Kernel(ConnectionFileMixin):
                                 shell_futures=True,
                                 cell_id=cell_id,
                             )
+                            traceback = self.shell._traceback_var.get()
                         except asyncio.CancelledError:
                             pass
                         finally:
@@ -681,7 +683,7 @@ class Kernel(ConnectionFileMixin):
                 if err:
                     reply_content.update(
                         {
-                            "traceback": self.shell._last_traceback or [],
+                            "traceback": traceback or [],
                             "ename": type(err).__name__,
                             "evalue": str(err),
                         }

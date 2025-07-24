@@ -11,7 +11,7 @@ import threading
 import time
 import weakref
 from collections import deque
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, cast
+from typing import TYPE_CHECKING, ClassVar, Generic, Self, cast
 
 import anyio
 import sniffio
@@ -137,10 +137,10 @@ class Caller:
 
     async def _wrap_call(
         self,
-        pending: ThreadCallerPendingResult,
+        pending: ThreadCallerPendingResult[T],
         starttime: float,
         delay: float,
-        func: Callable[..., Any | Awaitable],
+        func: Callable[..., T | Awaitable[T]],
         args: tuple,
         kwargs: dict,
     ):
