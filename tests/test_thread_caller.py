@@ -148,6 +148,7 @@ class TestThreadCaller:
                     assert result == 10
 
         caller.call_soon(finished_event.set)
+        the_thread.join()
 
     async def test_error_wait_sync(self):
         async with Caller() as caller:
