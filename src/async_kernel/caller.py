@@ -155,9 +155,8 @@ class Caller:
                 if scope.cancel_called:
                     # await here to allow the cancel scope to be raised/caught.
                     await anyio.sleep(0)
-                else:
-                    self._outstanding -= 1  # update first for _to_thread_on_done
-                    pending.set_result(result)
+                self._outstanding -= 1  # update first for _to_thread_on_done
+                pending.set_result(result)
             except (self._cancelled_exception_class, Exception) as e:
                 self._outstanding -= 1  # # update first for _to_thread_on_done
                 e.add_note(f"{self} {func=}")
