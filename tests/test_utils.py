@@ -40,6 +40,11 @@ def test_bind_socket(transport: Literal["tcp", "ipc"], tmp_path):
             ExecuteJobInfo(execute_mode=ExecuteMode.thread, namespace_id="My namespace_id"),
         ),
         (
+            "#@thread, namespace_id= My namespace_id,thread_name=My thread \nprint('hello')",
+            False,
+            ExecuteJobInfo(execute_mode=ExecuteMode.thread, namespace_id="My namespace_id", thread_name="My thread"),
+        ),
+        (
             "#@namespace_id=1 @!%n🌋 \nprint(None)",
             False,
             ExecuteJobInfo(execute_mode=ExecuteMode.queue, namespace_id="1 @!%n🌋"),

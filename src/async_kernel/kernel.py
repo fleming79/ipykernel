@@ -37,9 +37,9 @@ from zmq import Context, Flag, PollEvent, Socket, SocketOption, SocketType
 
 from async_kernel import _version, utils
 from async_kernel.asyncshell import AsyncInteractiveShell, KernelInterruptError
+from async_kernel.caller import Caller
 from async_kernel.debugger import Debugger
 from async_kernel.kernelspec import KernelName
-from async_kernel.thread_caller import ThreadCaller
 from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode, MsgRequest, MsgType, NoValue, SocketID
 
 if TYPE_CHECKING:
@@ -259,7 +259,7 @@ class Kernel(ConnectionFileMixin):
         if self.connection_file and Path(self.connection_file).exists():
             self.load_connection_file()
         try:
-            async with ThreadCaller(log=self.log) as tc:
+            async with Caller(log=self.log) as tc:
                 self.main_thread_caller, tg = tc, tc.taskgroup
                 try:
                     await tg.start(self._start_heartbeat)
@@ -331,7 +331,7 @@ class Kernel(ConnectionFileMixin):
             # which could come from any thread in this process.
             # Ref: https://zguide.zeromq.org/docs/chapter2/#Working-with-Messages (fig 14)
             frontend: zmq.Socket = Context.instance().socket(zmq.XSUB)
-            frontend.bind(ThreadCaller.iopub_url)
+            frontend.bind(Caller.iopub_url)
             iopub_socket: zmq.Socket = Context.instance().socket(zmq.XPUB)
             with utils.do_not_debug_this_thread("iopub"), self._bind_socket(SocketID.iopub, iopub_socket):
                 ready_event.set()
@@ -351,7 +351,7 @@ class Kernel(ConnectionFileMixin):
             await tsc.taskgroup.start(self._receive_msg_loop, SocketID.control)
             ready_event.set()
 
-        self.control_thread_caller = tsc = ThreadCaller.start_new(backend=self.anyio_backend, name="Control")
+        self.control_thread_caller = tsc = Caller.start_new(backend=self.anyio_backend, name="Control")
         ready_event = threading.Event()
         tsc.call_soon(run_in_control_event_loop)
         ready_event.wait(10)
@@ -398,7 +398,7 @@ class Kernel(ConnectionFileMixin):
             pass
         self.control_thread_caller.close()
         self.main_thread_caller.close()
-        ThreadCaller._shutdown_to_thread_instances()
+        Caller._shutdown_to_thread_instances()
 
     async def _receive_msg_loop(self, socket_id: Literal[SocketID.control, SocketID.shell], *, task_status: TaskStatus):
         """Receive messages from the socket, unpack them and pass them to be processed with process_message."""
@@ -436,7 +436,7 @@ class Kernel(ConnectionFileMixin):
                         if msg_type == MsgType.execute_request:
                             info = utils.get_execute_info(parent["content"])
                             if socket_id != SocketID.shell or info["execute_mode"] != ExecuteMode.queue:
-                                ThreadCaller().call_soon(self.execute_request, time.monotonic(), job, info)
+                                Caller().call_soon(self.execute_request, time.monotonic(), job, info)
                             else:
                                 await self._exec_send_stream.send((time.monotonic(), job, info))
                         else:
@@ -493,7 +493,7 @@ class Kernel(ConnectionFileMixin):
         buffers: list[bytes] | None = None,
     ):
         """Send a message on the zmq iopub socket."""
-        if socket := ThreadCaller.iopub_sockets.get(thread := threading.current_thread()):
+        if socket := Caller.iopub_sockets.get(thread := threading.current_thread()):
             msg = self.session.send(
                 stream=socket,
                 msg_or_type=msg_or_type,
@@ -690,7 +690,7 @@ class Kernel(ConnectionFileMixin):
 
             stop_on_error = content.pop("stop_on_error", True)
             if info["execute_mode"] == ExecuteMode.thread:
-                pr = ThreadCaller.to_thread(_do_execute)
+                pr = Caller.to_thread(_do_execute)
                 reply_content = await pr.wait()
             else:
                 reply_content = await _do_execute()

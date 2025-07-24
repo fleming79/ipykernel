@@ -11,9 +11,8 @@ import anyio
 from jupyter_client.asynchronous.client import AsyncKernelClient
 
 import async_kernel.utils
-from async_kernel import Kernel
+from async_kernel import Caller, Kernel
 from async_kernel.asyncshell import AsyncInteractiveShell
-from async_kernel.thread_caller import ThreadCaller
 from tests.references import RMessage, references
 
 if TYPE_CHECKING:
@@ -38,7 +37,7 @@ def clear_kernel():
         kernel.stop()
     Kernel._instance = None
     AsyncInteractiveShell.clear_instance()
-    ThreadCaller._shutdown_to_thread_instances()
+    Caller._shutdown_to_thread_instances()
 
 
 async def get_reply(

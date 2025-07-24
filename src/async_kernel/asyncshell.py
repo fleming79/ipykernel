@@ -23,8 +23,8 @@ from traitlets import CBool, Dict, Instance, Type, default, observe
 from typing_extensions import override
 
 import async_kernel
+from async_kernel.caller import Caller
 from async_kernel.compiler import XCachingCompiler
-from async_kernel.thread_caller import ThreadCaller
 
 if TYPE_CHECKING:
     from async_kernel.kernel import Kernel
@@ -201,7 +201,7 @@ class AsyncInteractiveShell(InteractiveShell):
             "caller": self.kernel.main_thread_caller,
             "KernelInterruptError": KernelInterruptError,
             "CancelledError": self.kernel.CancelledError,
-            "ThreadCaller": ThreadCaller,
+            "Caller": Caller,
             "shell": self,
         }
 

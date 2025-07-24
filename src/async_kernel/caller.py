@@ -28,11 +28,11 @@ if TYPE_CHECKING:
 
     from async_kernel.typing import P
 
-__all__ = ["ThreadCaller"]
+__all__ = ["Caller"]
 
 
 class ThreadCallerPendingResult(PendingResult, Generic[T]):
-    """A pending result for use with ThreadCaller.
+    """A pending result for use with Caller.
 
     This class adds a cancel method which provides the mechanism to cancel the scope
     in which the pending result execution is taking place. Note that blocking io will
@@ -50,7 +50,7 @@ class ThreadCallerPendingResult(PendingResult, Generic[T]):
                 if threading.current_thread() is self.thread:
                     scope.cancel()
                 else:
-                    ThreadCaller().call_soon(scope.cancel)
+                    Caller().call_soon(scope.cancel)
 
     def _set_cancel_scope(self, scope: anyio.CancelScope):
         if self._cancel:
@@ -58,9 +58,9 @@ class ThreadCallerPendingResult(PendingResult, Generic[T]):
         self._cancel_scope = scope
 
 
-class ThreadCaller:
+class Caller:
     """
-    ThreadCaller provides a mechanism to safely schedule and execute functions
+    Caller provides a mechanism to safely schedule and execute functions
     or coroutines in its original thread within an async context.
 
     This class manages a queue of jobs that can be submitted from any thread,
@@ -101,7 +101,7 @@ class ThreadCaller:
         return inst
 
     def __repr__(self) -> str:
-        return f"ThreadCaller<{self.thread}>"
+        return f"Caller<{self.thread}>"
 
     async def __aenter__(self) -> Self:
         self._cancelled_exception_class = anyio.get_cancelled_exc_class()
@@ -184,7 +184,7 @@ class ThreadCaller:
         thread = thread or threading.current_thread()
         if instance := cls._instances.get(thread):
             return instance
-        msg = f"A ThreadCaller was not found for {thread=}."
+        msg = f"A Caller was not found for {thread=}."
         raise RuntimeError(msg)
 
     @classmethod
@@ -203,7 +203,7 @@ class ThreadCaller:
 
     @classmethod
     def start_new(cls, *, backend="", log: logging.LoggerAdapter | None = None, name: str | None = None):
-        "Start a new thread, open a ThreadCaller in a new event loop  returning the ThreadCaller instance."
+        "Start a new thread, open a Caller in a new event loop  returning the Caller instance."
 
         def run_event_loop():
             async def run_event_loop_():

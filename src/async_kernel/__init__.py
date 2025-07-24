@@ -3,16 +3,16 @@
 
 from async_kernel._version import __version__, kernel_protocol_version, kernel_protocol_version_info
 from async_kernel.asyncshell import KernelInterruptError
+from async_kernel.caller import Caller
 from async_kernel.kernel import Kernel, KernelName
 from async_kernel.pending_result import PendingResult
-from async_kernel.thread_caller import ThreadCaller
 
 __all__ = [
+    "Caller",
     "Kernel",
     "KernelInterruptError",
     "KernelName",
     "PendingResult",
-    "ThreadCaller",
     "__version__",
     "kernel_protocol_version",
     "kernel_protocol_version_info",
