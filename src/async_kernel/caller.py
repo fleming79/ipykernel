@@ -35,8 +35,8 @@ class ThreadCallerPendingResult(PendingResult, Generic[T]):
     """A pending result for use with Caller.
 
     This class adds a cancel method which provides the mechanism to cancel the scope
-    in which the pending result execution is taking place. Note that blocking io will
-    not cancel until the blocking operation exits.
+    in which the pending result execution is taking place. Note that blocking calls
+    and sync function may not cancel until the function exits.
     """
 
     _cancel_scope: anyio.CancelScope | None = None
@@ -50,7 +50,7 @@ class ThreadCallerPendingResult(PendingResult, Generic[T]):
                 if threading.current_thread() is self.thread:
                     scope.cancel()
                 else:
-                    Caller().call_soon(scope.cancel)
+                    Caller(self.thread).call_soon(self.cancel)
 
     def _set_cancel_scope(self, scope: anyio.CancelScope):
         if self._cancel:
@@ -153,6 +153,8 @@ class Caller:
                 result = func(*args, **kwargs) if callable(func) else func
                 while inspect.isawaitable(result):
                     result = await result
+                if pending._cancel and not scope.cancel_called:
+                    scope.cancel()
                 if scope.cancel_called:
                     # await here to allow the cancel scope to be raised/caught.
                     await anyio.sleep(0)

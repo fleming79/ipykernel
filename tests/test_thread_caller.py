@@ -217,13 +217,13 @@ class TestCaller:
         with pytest.raises(RuntimeError):
             caller.call_soon(time.sleep, 0)
 
-    @pytest.mark.parametrize("mode", ["sync", "async", "blocking"])
-    async def test_cancel(self, anyio_backend, mode: Literal["sync", "async", "blocking"]):
-        def sync_func():
-            print("hello")
-
+    @pytest.mark.parametrize("mode", ["async", "blocking"])
+    @pytest.mark.parametrize("cancel_mode", ["local", "thread"])
+    async def test_cancel(
+        self, anyio_backend, mode: Literal["async", "blocking"], cancel_mode: Literal["local", "thread"]
+    ):
         async def async_func():
-            await anyio.sleep(1)
+            await anyio.sleep(10)
             raise RuntimeError
 
         def blocking_func():
@@ -233,8 +233,6 @@ class TestCaller:
 
         my_func = blocking_func
         match mode:
-            case "sync":
-                my_func = sync_func
             case "async":
                 my_func = async_func
             case "blocking":
@@ -242,10 +240,13 @@ class TestCaller:
 
         async with Caller() as caller:
             pr = caller.call_soon(my_func)
-            pr.cancel()
+            if cancel_mode == "local":
+                pr.cancel()
+            else:
+                caller.to_thread(pr.cancel)
 
-        with pytest.raises(anyio.get_cancelled_exc_class()):
-            await pr.wait()
+            with pytest.raises(anyio.get_cancelled_exc_class()):
+                await pr.wait()
 
     async def test_subshell(self, anyio_backend):
         subshell_id = Caller.start_subshell()
