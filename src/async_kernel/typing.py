@@ -11,7 +11,7 @@ from typing_extensions import Sentinel
 if TYPE_CHECKING:
     import zmq
 
-__all__ = ["Message", "MsgHeader", "MsgRequest", "SocketID"]
+__all__ = ["Job", "Message", "MsgHeader", "SocketID"]
 
 
 NoValue = Sentinel("NoValue")
@@ -75,7 +75,7 @@ class Message(TypedDict, Generic[T]):
     buffers: list[bytearray | bytes]
 
 
-class MsgRequest(TypedDict, Generic[T]):
+class Job(TypedDict, Generic[T]):
     "A message bundled with its details."
 
     parent: Message[T]

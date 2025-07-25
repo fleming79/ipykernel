@@ -39,7 +39,7 @@ from async_kernel.asyncshell import AsyncInteractiveShell, KernelInterruptError
 from async_kernel.caller import Caller
 from async_kernel.debugger import Debugger
 from async_kernel.kernelspec import KernelName
-from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode, MsgRequest, MsgType, NoValue, SocketID
+from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode, Job, MsgType, NoValue, SocketID
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -76,7 +76,7 @@ class Kernel(ConnectionFileMixin):
 
     """
 
-    _job_var: ClassVar[contextvars.ContextVar[MsgRequest]] = contextvars.ContextVar("job")
+    _job_var: ClassVar[contextvars.ContextVar[Job]] = contextvars.ContextVar("job")
     _instance: Self | None = None
     _interrupt_requested = False
     _last_interrupt_frame = None
@@ -432,7 +432,7 @@ class Kernel(ConnectionFileMixin):
                             continue
                         msg_type = parent["header"]["msg_type"]
                         self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, parent["content"])
-                        job = MsgRequest(
+                        job = Job(
                             socket_id=socket_id,
                             socket=socket,
                             ident=ident,
@@ -453,7 +453,7 @@ class Kernel(ConnectionFileMixin):
             except (zmq.ContextTerminated, self.CancelledError):
                 return
 
-    async def _run_handler(self, handler: Callable[[MsgRequest], CoroutineType] | None, job: MsgRequest):
+    async def _run_handler(self, handler: Callable[[Job], CoroutineType] | None, job: Job):
         self._job_var.set(job)
         if not handler:
             self.log.error("Unknown message type: %r", job["msg_type"])
@@ -524,7 +524,7 @@ class Kernel(ConnectionFileMixin):
                 buffers=buffers,
             )
 
-    def _publish_status(self, status: Literal["busy", "idle"], job: MsgRequest):
+    def _publish_status(self, status: Literal["busy", "idle"], job: Job):
         """send status (busy/idle) on IOPub"""
         self.iopub_send(
             msg_or_type="status",
@@ -533,7 +533,7 @@ class Kernel(ConnectionFileMixin):
             ident=self._topic("status"),
         )
 
-    def send_reply(self, job: MsgRequest, content: dict | None = None):
+    def send_reply(self, job: Job, content: dict | None = None):
         content = content or {}
         if "status" not in content:
             content["status"] = "ok"
@@ -549,9 +549,7 @@ class Kernel(ConnectionFileMixin):
                 "send_reply: '%s' msg_id: %s %s", msg["msg_type"], job["parent"]["header"]["msg_id"], msg["content"]
             )
 
-    def _send_error_reply(
-        self, job: MsgRequest, *, ename="RuntimeError", evalue="", traceback: list[str] | None = None
-    ):
+    def _send_error_reply(self, job: Job, *, ename="RuntimeError", evalue="", traceback: list[str] | None = None):
         "Send a reply to the request"
         content = {
             "status": "error",
@@ -564,7 +562,7 @@ class Kernel(ConnectionFileMixin):
 
     async def _shell_execute_request_loop(self, *, task_status: TaskStatus):
         self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[
-            tuple[float, MsgRequest, ExecuteJobInfo]
+            tuple[float, Job, ExecuteJobInfo]
         ](max_buffer_size=1000)
         with contextlib.suppress(self.CancelledError):
             async with self._exec_receive_stream as receive_stream:
@@ -603,12 +601,12 @@ class Kernel(ConnectionFileMixin):
             return reply["content"]["value"]
         raise ValueError
 
-    async def kernel_info_request(self, job: MsgRequest):
+    async def kernel_info_request(self, job: Job):
         """Handle a kernel info request."""
 
         self.send_reply(job, self.kernel_info)
 
-    async def comm_info_request(self, job: MsgRequest):
+    async def comm_info_request(self, job: Job):
         """Handle a comm info request."""
         content = job["parent"]["content"]
         target_name = content.get("target_name", None)
@@ -619,7 +617,7 @@ class Kernel(ConnectionFileMixin):
         }
         self.send_reply(job, {"comms": comms})
 
-    async def execute_request(self, received_time: float, job: MsgRequest[ExecuteContent], info: ExecuteJobInfo):
+    async def execute_request(self, received_time: float, job: Job[ExecuteContent], info: ExecuteJobInfo):
         """Perform the actual execute_request."""
         content = job["parent"]["content"].copy()
         silent = content["silent"]
@@ -704,7 +702,7 @@ class Kernel(ConnectionFileMixin):
 
         await self._run_handler(execute_request_handler, job)
 
-    async def interrupt_request(self, job: MsgRequest):
+    async def interrupt_request(self, job: Job):
         """Handle an interrupt request."""
         self._interrupt_requested = True
         if sys.platform == "win32":
@@ -716,18 +714,18 @@ class Kernel(ConnectionFileMixin):
             event.set()
         self.send_reply(job)
 
-    async def complete_request(self, job: MsgRequest):
+    async def complete_request(self, job: Job):
         """Handle a completion request."""
         parent = job["parent"]
         matches = await self.do_complete(parent["content"]["code"], parent["content"]["cursor_pos"])
         self.send_reply(job, matches)
 
-    async def is_complete_request(self, job: MsgRequest):
+    async def is_complete_request(self, job: Job):
         """Handle an is_complete request."""
         reply_content = await self.do_is_complete(job["parent"]["content"]["code"])
         self.send_reply(job, reply_content)
 
-    async def inspect_request(self, job: MsgRequest):
+    async def inspect_request(self, job: Job):
         """Handle an inspect request."""
         content = job["parent"]["content"]
         reply_content = await self.do_inspect(
@@ -738,39 +736,39 @@ class Kernel(ConnectionFileMixin):
         )
         self.send_reply(job, reply_content)
 
-    async def history_request(self, job: MsgRequest):
+    async def history_request(self, job: Job):
         """Handle a history request."""
         reply_content = await self.do_history(**job["parent"]["content"])  # type: ignore[call-arg]
         self.send_reply(job, reply_content)
 
-    async def comm_open(self, job: MsgRequest):
+    async def comm_open(self, job: Job):
         self.comm_manager.comm_open(job["socket"], job["ident"], job["parent"])  # type: ignore[call-arg]
 
-    async def comm_msg(self, job: MsgRequest):
+    async def comm_msg(self, job: Job):
         self.comm_manager.comm_msg(job["socket"], job["ident"], job["parent"])  # type: ignore[call-arg]
 
-    async def comm_close(self, job: MsgRequest):
+    async def comm_close(self, job: Job):
         self.comm_manager.comm_close(job["socket"], job["ident"], job["parent"])  # type: ignore[call-arg]
 
-    async def control_shutdown_request(self, job: MsgRequest):
+    async def control_shutdown_request(self, job: Job):
         """Handle a shutdown request."""
         await self.debugger.disconnect()
         self.send_reply(job, {"status": "ok", "restart": job["parent"]["content"].get("restart", False)})
         self.stop()
 
-    async def debug_request(self, job: MsgRequest):
+    async def debug_request(self, job: Job):
         """Handle a debug request."""
         content = await self.debugger.process_request(job["parent"]["content"])
         self.send_reply(job=job, content=content)
 
-    async def create_subshell_request(self, job: MsgRequest):
+    async def create_subshell_request(self, job: Job):
         self.send_reply(job=job, content={"subshell_id": Caller.start_subshell()})
 
-    async def delete_subshell_request(self, job: MsgRequest):
+    async def delete_subshell_request(self, job: Job):
         Caller.delete_subshell(job["parent"]["content"]["subshell_id"])
         self.send_reply(job)
 
-    async def list_subshell_request(self, job: MsgRequest):
+    async def list_subshell_request(self, job: Job):
         self.send_reply(job, {"subshell_id": Caller.list_subshells()})
 
     async def do_complete(self, code, cursor_pos):
