@@ -149,7 +149,10 @@ class Kernel(ConnectionFileMixin):
     @property
     def job(self):
         "The job in context of the current coroutine."
-        return self._job_var.get()
+        try:
+            return self._job_var.get()
+        except LookupError:
+            return {}
 
     @property
     def kernel_info(self):
