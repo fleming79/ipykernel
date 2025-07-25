@@ -29,7 +29,7 @@ def transport(request):
 
 
 @pytest.mark.anyio
-class TestThreadCaller:
+class TestCaller:
     def setup_method(self, test_method):
         Caller._shutdown_all()
 
@@ -246,3 +246,9 @@ class TestThreadCaller:
 
         with pytest.raises(anyio.get_cancelled_exc_class()):
             await pr.wait()
+
+    async def test_subshell(self, anyio_backend):
+        subshell_id = Caller.start_subshell()
+        assert subshell_id in Caller.list_subshells()
+        Caller.delete_subshell(subshell_id)
+        assert not Caller.list_subshells()

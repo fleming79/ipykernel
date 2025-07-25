@@ -73,6 +73,7 @@ class Caller:
     within an async context for call_soon and call_later to be processed.
     """
 
+    SUBSHELL_PREFIX = "subshell-"
     _instances: ClassVar[dict[threading.Thread, Self]] = {}
     thread: threading.Thread
     backend = ""
@@ -242,12 +243,37 @@ class Caller:
         assert isinstance(caller, cls)
         return caller
 
+    @classmethod
+    def start_subshell(cls) -> str:
+        n = max((*(int(s.removeprefix(cls.SUBSHELL_PREFIX)) for s in cls.list_subshells()), 0)) + 1
+        subshell_id = f"{cls.SUBSHELL_PREFIX}{n}"
+        cls.start_new(thread_name=subshell_id)
+        return subshell_id
+
+    @classmethod
+    def delete_subshell(cls, subshell_id: str) -> None:
+        cls.get_instance(thread_name=subshell_id).close()
+
+    @classmethod
+    def list_subshells(cls) -> list[str]:
+        return [i.name for i in Caller._instances if i.name.startswith(cls.SUBSHELL_PREFIX)]
+
+    @classmethod
+    def list_threads(cls) -> list[str]:
+        "List user created threads."
+        omit = (*cls.list_subshells(), "Control", "MainThread")
+        return sorted(i.name for i in Caller._instances if i not in cls._pool_instances and i.name not in omit)
+
     @property
     def taskgroup(self) -> TaskGroup:
         if tg := self._taskgroup:
             return tg
         msg = f"{self}  is not currently open in an async context."
         raise RuntimeError(msg)
+
+    @property
+    def closed(self):
+        return self._closed
 
     def close(self):
         "Once closed it can not be reopened."

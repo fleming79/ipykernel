@@ -76,7 +76,7 @@ def bind_socket(
     raise RuntimeError(msg) from e
 
 
-def get_execute_info(content: ExecuteContent) -> ExecuteJobInfo:
+def get_execute_info(content: ExecuteContent, subshell_id: str | None = None) -> ExecuteJobInfo:
     """Extract ExecuteJobInfo from the content.
 
     If the top line of the code starts with '#@'; the execute mode and
@@ -89,6 +89,9 @@ def get_execute_info(content: ExecuteContent) -> ExecuteJobInfo:
     """
     execute_mode = ExecuteMode.task if content.get("silent", True) else ExecuteMode.queue
     info = ExecuteJobInfo(execute_mode=execute_mode)
+    if subshell_id:
+        info["execute_mode"] = ExecuteMode.thread
+        info["thread_name"] = subshell_id
     if (code := content["code"].strip()).startswith("#@") and (header := code.split("\n", maxsplit=1)[0]):
 
         def extract_value(key: Literal["namespace_id", "thread_name"]):

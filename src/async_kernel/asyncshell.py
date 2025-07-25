@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import builtins
 import json
+import os
 import pathlib
 import sys
+import threading
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -302,6 +304,14 @@ class KernelMagics(Magics):
             f"    $> jupyter <app> --existing\n"
             f"if this is the most recent Jupyter kernel you have started.",
         )
+
+    @line_magic
+    def subshell(self, arg_s):
+        print(f"thread name: {threading.current_thread().name}")
+        print(f"pid: {os.getpid()}")
+        print(f"thread count: {threading.active_count()}")
+        print(f"subshell list: {Caller.list_subshells()}")
+        print(f"thread list: {Caller.list_threads()}")
 
 
 InteractiveShellABC.register(AsyncInteractiveShell)

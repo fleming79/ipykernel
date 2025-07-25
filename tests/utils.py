@@ -13,6 +13,7 @@ from jupyter_client.asynchronous.client import AsyncKernelClient
 import async_kernel.utils
 from async_kernel import Caller, Kernel
 from async_kernel.asyncshell import AsyncInteractiveShell
+from async_kernel.typing import ExecuteContent
 from tests.references import RMessage, references
 
 if TYPE_CHECKING:
@@ -84,13 +85,30 @@ def validate_message(msg: Mapping[str, Any], msg_type="", parent=None):
         raise
 
 
-async def execute(client: AsyncKernelClient, /, code="", clear_pub=True, **kwargs):
-    """wrapper for doing common steps for validating an execution request"""
+async def execute(client: AsyncKernelClient, /, code="", clear_pub=True, subshell_id="", **kwargs):
+    """Send an execute_request to the kernel and return the msg_id and content of the reply from the kernel."""
 
     assert isinstance(client, AsyncKernelClient)
+    header = client.session.msg_header("execute_request")
+    if subshell_id:
+        header["subshell_id"] = subshell_id
+    msg = client.session.msg(
+        "execute_request",
+        header=header,
+        content=ExecuteContent(
+            code=code,
+            store_history=True,
+            silent=False,
+            user_expressions={},
+            allow_stdin=False,
+            stop_on_error=True,
+        )
+        | kwargs,
+    )
+    client.shell_channel.send(msg)
+    msg_id = header["msg_id"]
 
     with anyio.fail_after(TIMEOUT):
-        msg_id = client.execute(code=code, **kwargs)
         reply = await get_reply(client, msg_id, clear_pub=clear_pub)
         validate_message(reply, "execute_reply", msg_id)
     return msg_id, reply["content"]
