@@ -78,7 +78,7 @@ class Message(TypedDict, Generic[T]):
 class Job(TypedDict, Generic[T]):
     "A message bundled with its details."
 
-    parent: Message[T]
+    msg: Message[T]
     socket_id: Literal[SocketID.control, SocketID.shell]
     socket: zmq.Socket
     ident: bytes | list[bytes]

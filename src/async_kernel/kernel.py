@@ -150,7 +150,7 @@ class Kernel(ConnectionFileMixin):
             os.environ["MPLBACKEND"] = "module://matplotlib_inline.backend_inline"
 
     @property
-    def job(self):
+    def job(self) -> Job | dict:
         "The job in context of the current coroutine."
         try:
             return self._job_var.get()
@@ -424,23 +424,23 @@ class Kernel(ConnectionFileMixin):
                 task_status.started()
                 while True:
                     while socket.get(SocketOption.EVENTS) & PollEvent.POLLIN:  # type: ignore[call-arg]
-                        ident, parent = self.session.recv(socket, copy=False)
+                        ident, msg = self.session.recv(socket, copy=False)
                         if socket_id == SocketID.shell:
                             # Reset the frame to show the main thread is not blocked.
                             self._last_interrupt_frame = None
-                        if not ident or not parent:
+                        if not ident or not msg:
                             continue
-                        msg_type = parent["header"]["msg_type"]
-                        self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, parent["content"])
+                        msg_type = msg["header"]["msg_type"]
+                        self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, msg["content"])
                         job = Job(
                             socket_id=socket_id,
                             socket=socket,
                             ident=ident,
-                            parent=parent,  # type: ignore[call-arg]
+                            msg=msg,  # type: ignore[call-arg]
                             msg_type=msg_type,
                         )
                         if msg_type == MsgType.execute_request:
-                            info = utils.get_execute_info(parent["content"], parent["header"].get("subshell_id"))
+                            info = utils.get_execute_info(msg["content"], msg["header"].get("subshell_id"))
                             if socket_id != SocketID.shell or info["execute_mode"] != ExecuteMode.queue:
                                 Caller().call_soon(self.execute_request, time.monotonic(), job, info)
                             else:
@@ -505,7 +505,7 @@ class Kernel(ConnectionFileMixin):
                 msg_or_type=msg_or_type,
                 content=content,
                 metadata=metadata,
-                parent=parent if parent is not NoValue else self.job.get("parent"),  # type: ignore[call-arg]
+                parent=parent if parent is not NoValue else self.job.get("msg"),  # type: ignore[call-arg]
                 ident=ident,
                 buffers=buffers,
             )
@@ -529,7 +529,7 @@ class Kernel(ConnectionFileMixin):
         self.iopub_send(
             msg_or_type="status",
             content={"execution_state": status},
-            parent=job["parent"],  # type: ignore[call-arg]
+            parent=job["msg"],  # type: ignore[call-arg]
             ident=self._topic("status"),
         )
 
@@ -541,12 +541,12 @@ class Kernel(ConnectionFileMixin):
             stream=job["socket"],
             msg_or_type=job["msg_type"].replace("request", "reply"),
             content=content,
-            parent=job["parent"]["header"],  # type: ignore[call-arg]
+            parent=job["msg"]["header"],  # type: ignore[call-arg]
             ident=job["ident"],
         )
         if msg:
             self.log.debug(
-                "send_reply: '%s' msg_id: %s %s", msg["msg_type"], job["parent"]["header"]["msg_id"], msg["content"]
+                "send_reply: '%s' msg_id: %s %s", msg["msg_type"], job["msg"]["header"]["msg_id"], msg["content"]
             )
 
     def _send_error_reply(self, job: Job, *, ename="RuntimeError", evalue="", traceback: list[str] | None = None):
@@ -576,7 +576,7 @@ class Kernel(ConnectionFileMixin):
 
     def _input_request(self, prompt: str, *, password=False):
         job = self.job
-        if not job["parent"].get("content", {}).get("allow_stdin", False):
+        if not job["msg"].get("content", {}).get("allow_stdin", False):
             msg = "Stdin is not allowed in this context!"
             raise StdinNotImplementedError(msg)
         socket = self._sockets[SocketID.stdin]
@@ -589,7 +589,7 @@ class Kernel(ConnectionFileMixin):
             stream=socket,
             msg_or_type="input_request",
             content={"prompt": prompt, "password": password},
-            parent=job["parent"],  # type: ignore[call-arg]
+            parent=job["msg"],  # type: ignore[call-arg]
             ident=job["ident"],
         )
         # Poll for a reply.
@@ -608,7 +608,7 @@ class Kernel(ConnectionFileMixin):
 
     async def comm_info_request(self, job: Job):
         """Handle a comm info request."""
-        content = job["parent"]["content"]
+        content = job["msg"]["content"]
         target_name = content.get("target_name", None)
         comms = {
             k: {"target_name": v.target_name}
@@ -619,7 +619,7 @@ class Kernel(ConnectionFileMixin):
 
     async def execute_request(self, received_time: float, job: Job[ExecuteContent], info: ExecuteJobInfo):
         """Perform the actual execute_request."""
-        content = job["parent"]["content"].copy()
+        content = job["msg"]["content"].copy()
         silent = content["silent"]
 
         if not silent and received_time < self._stop_on_error_time:
@@ -636,13 +636,13 @@ class Kernel(ConnectionFileMixin):
                 self.iopub_send(
                     msg_or_type="execute_input",
                     content={"code": content["code"], "execution_count": self.shell.execution_count},
-                    parent=job["parent"],
+                    parent=job["msg"],
                     ident=self._topic("execute_input"),
                 )
 
             async def _do_execute():
                 code = content["code"]
-                cell_id = None if silent else job["parent"].get("metadata", {}).get("cellId")
+                cell_id = None if silent else job["msg"].get("metadata", {}).get("cellId")
                 user_expressions = info.get("user_expressions") or content.get("user_expressions", {})
                 self.shell.namespace_id = info.get("namespace_id", "")
                 interrupt = threading.Event()
@@ -716,18 +716,18 @@ class Kernel(ConnectionFileMixin):
 
     async def complete_request(self, job: Job):
         """Handle a completion request."""
-        parent = job["parent"]
+        parent = job["msg"]
         matches = await self.do_complete(parent["content"]["code"], parent["content"]["cursor_pos"])
         self.send_reply(job, matches)
 
     async def is_complete_request(self, job: Job):
         """Handle an is_complete request."""
-        reply_content = await self.do_is_complete(job["parent"]["content"]["code"])
+        reply_content = await self.do_is_complete(job["msg"]["content"]["code"])
         self.send_reply(job, reply_content)
 
     async def inspect_request(self, job: Job):
         """Handle an inspect request."""
-        content = job["parent"]["content"]
+        content = job["msg"]["content"]
         reply_content = await self.do_inspect(
             content["code"],
             content["cursor_pos"],
@@ -738,34 +738,34 @@ class Kernel(ConnectionFileMixin):
 
     async def history_request(self, job: Job):
         """Handle a history request."""
-        reply_content = await self.do_history(**job["parent"]["content"])  # type: ignore[call-arg]
+        reply_content = await self.do_history(**job["msg"]["content"])  # type: ignore[call-arg]
         self.send_reply(job, reply_content)
 
     async def comm_open(self, job: Job):
-        self.comm_manager.comm_open(job["socket"], job["ident"], job["parent"])  # type: ignore[call-arg]
+        self.comm_manager.comm_open(job["socket"], job["ident"], job["msg"])  # type: ignore[call-arg]
 
     async def comm_msg(self, job: Job):
-        self.comm_manager.comm_msg(job["socket"], job["ident"], job["parent"])  # type: ignore[call-arg]
+        self.comm_manager.comm_msg(job["socket"], job["ident"], job["msg"])  # type: ignore[call-arg]
 
     async def comm_close(self, job: Job):
-        self.comm_manager.comm_close(job["socket"], job["ident"], job["parent"])  # type: ignore[call-arg]
+        self.comm_manager.comm_close(job["socket"], job["ident"], job["msg"])  # type: ignore[call-arg]
 
     async def control_shutdown_request(self, job: Job):
         """Handle a shutdown request."""
         await self.debugger.disconnect()
-        self.send_reply(job, {"status": "ok", "restart": job["parent"]["content"].get("restart", False)})
+        self.send_reply(job, {"status": "ok", "restart": job["msg"]["content"].get("restart", False)})
         self.stop()
 
     async def debug_request(self, job: Job):
         """Handle a debug request."""
-        content = await self.debugger.process_request(job["parent"]["content"])
+        content = await self.debugger.process_request(job["msg"]["content"])
         self.send_reply(job=job, content=content)
 
     async def create_subshell_request(self, job: Job):
         self.send_reply(job=job, content={"subshell_id": Caller.start_subshell()})
 
     async def delete_subshell_request(self, job: Job):
-        Caller.delete_subshell(job["parent"]["content"]["subshell_id"])
+        Caller.delete_subshell(job["msg"]["content"]["subshell_id"])
         self.send_reply(job)
 
     async def list_subshell_request(self, job: Job):
