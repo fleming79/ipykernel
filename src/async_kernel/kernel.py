@@ -519,7 +519,7 @@ class Kernel(ConnectionFileMixin):
                 msg_or_type=msg_or_type,
                 content=content,
                 metadata=metadata,
-                parent=parent,
+                parent= parent if parent is not NoValue else None,
                 ident=ident,
                 buffers=buffers,
             )
