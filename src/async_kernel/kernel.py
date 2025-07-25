@@ -797,7 +797,6 @@ class Kernel(ConnectionFileMixin):
             "cursor_end": e,
             "cursor_start": s,
             "metadata": {"_jupyter_types_experimental": comps},
-            "status": "ok",
         }
 
     async def do_is_complete(self, code):
@@ -849,10 +848,7 @@ class Kernel(ConnectionFileMixin):
             hist = history_manager.search(pattern, raw=raw, output=output, n=n, unique=unique)
         else:
             hist = []
-        return {
-            "status": "ok",
-            "history": list(hist),
-        }
+        return {"history": list(hist)}
 
     def excepthook(self, etype, evalue, tb):
         """Handle an exception."""
