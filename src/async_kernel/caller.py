@@ -178,8 +178,6 @@ class Caller:
         "Shutdown currently open instance created via 'to_thread'."
         for caller in set(cls._instances.values()):
             caller.close()
-        while cls._instances:
-            time.sleep(0.01)
 
     @classmethod
     def get_instance(cls, *, thread: threading.Thread | None = None, thread_name: str | NoValue = NoValue) -> Self:
