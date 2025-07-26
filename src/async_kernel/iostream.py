@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from io import TextIOBase
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -15,34 +15,35 @@ if TYPE_CHECKING:
 class OutStream(TextIOBase):
     """A file like object that calls flusher with the string output when flush is called."""
 
-    topic = None
-    encoding = "UTF-8"
-
-    def __init__(self, name: Literal["stderr", "stdout"], flusher: Callable[[str], None], *, isatty=False):
+    def __init__(self, flusher: Callable[[str], None]):
         """
         Parameters
         ----------
-        session : object
-            the session object
-        name : str {'stderr', 'stdout'}
-            the name of the standard stream to replace
-        isatty : bool (default, False)
-            Indication of whether this stream has terminal capabilities (e.g. can handle colors)
+        flusher: Callable
+            A callback responsible for sending the output.
 
+        ref: https://docs.python.org/3/library/io.html#io.IOBase
         """
         super().__init__()
-        self.name = name
-        self._isatty = bool(isatty)
-        self._sender = flusher
+        self._flusher = flusher
         self._out = ""
 
-    def flush(self):
-        if send := self._out:
-            self._out = ""
-            self._sender(send)
-
     def isatty(self):
-        return self._isatty
+        return True
+
+    def readable(self):
+        return False
+
+    def seekable(self):
+        return False
+
+    def writable(self):
+        return True
+
+    def flush(self):
+        if out := self._out:
+            self._out = ""
+            self._flusher(out)
 
     def write(self, string: str) -> int:
         """Write to current stream after encoding if necessary
@@ -60,7 +61,3 @@ class OutStream(TextIOBase):
     def writelines(self, sequence):
         """Write lines to the stream (separators are not added)."""
         self.write("".join(sequence))
-
-    def writable(self):
-        """Test whether the stream is writable."""
-        return True

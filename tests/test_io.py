@@ -18,10 +18,9 @@ def test_io_api():
         nonlocal output
         output += string  # type: ignore[operator]
 
-    stream = OutStream("stdout", flusher)
+    stream = OutStream(flusher)
 
     assert stream.errors is None
-    assert not stream.isatty()
     with pytest.raises(io.UnsupportedOperation):
         stream.detach()
     with pytest.raises(io.UnsupportedOperation):
@@ -39,8 +38,6 @@ def test_io_api():
     stream.writelines(("a", "b"))
     assert output == "ab"
     assert stream.writable() is True
-
-
-def test_io_isatty():
-    stream = OutStream("stdout", lambda _: None, isatty=True)
-    assert stream.isatty()
+    assert stream.isatty() is True
+    assert stream.readable() is False
+    assert stream.seekable() is False

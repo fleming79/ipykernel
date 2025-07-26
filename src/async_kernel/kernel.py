@@ -383,7 +383,7 @@ class Kernel(ConnectionFileMixin):
                         echo.write(string)
                         echo.flush()
 
-                wrapper = cls(name=name, flusher=flusher)  # type: ignore[call-arg]
+                wrapper = cls(flusher=flusher)
                 setattr(sys, name, wrapper)
         task_status.started()
         self.comm_manager.kernel = self
