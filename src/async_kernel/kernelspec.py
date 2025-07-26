@@ -45,7 +45,7 @@ def write_kernel_spec(
     shutil.copytree(RESOURCES, path, dirs_exist_ok=True)
 
     spec = KernelSpec()
-    spec.argv = make_argv(module_name=module_name, kernel_name=kernel_name)
+    spec.argv = make_argv(module_name=module_name, kernel_name=kernel_name, fullpath=False)
     spec.name = kernel_name
     spec.display_name = f"Python ({kernel_name})"
     spec.language = "python"
@@ -58,7 +58,9 @@ def write_kernel_spec(
     return path
 
 
-def make_argv(module_name="async_kernel", connection_file="{connection_file}", kernel_name=KernelName.asyncio):
+def make_argv(
+    module_name="async_kernel", connection_file="{connection_file}", kernel_name=KernelName.asyncio, fullpath=True
+):
     """
     Constructs the argument vector (argv) for launching a Python kernel module.
 
@@ -70,7 +72,8 @@ def make_argv(module_name="async_kernel", connection_file="{connection_file}", k
     Returns:
         list: A list of command-line arguments to launch the kernel module.
     """
-    return ["python", "-m", module_name, "-f", connection_file, "--kernel_name", str(KernelName(kernel_name))]
+    python = sys.executable if fullpath else "python"
+    return [python, "-m", module_name, "-f", connection_file, "--kernel_name", str(KernelName(kernel_name))]
 
 
 def write_all_kernelspec(base: Path, *, module_name="async_kernel", kernel_names=tuple(KernelName)):
