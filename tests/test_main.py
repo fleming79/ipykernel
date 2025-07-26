@@ -119,7 +119,7 @@ async def test_subprocess_kernels_client(subprocess_kernels_client):
     return
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Can't simulate key interrupt.")
+@pytest.mark.skipif(sys.platform == "win32", reason="Can't simulate keyboard interrupt on windows.")
 async def test_subprocess_kernel_keyboard_interrupt(tmp_path, anyio_backend):
     # This is the keyboard interrupt from a console app, not to be confused with 'interrupt_request'.
     connection_file = tmp_path / "connection_file.json"

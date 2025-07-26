@@ -17,7 +17,7 @@ def transport(request):
 
 def test_bind_socket(transport: Literal["tcp", "ipc"], tmp_path):
     if transport == "ipc" and not zmq.has("ipc"):
-        pytest.skip("transport='ipc' not supported")
+        pytest.skip("transport='ipc' not supported.")
 
     ctx = zmq.Context()
     ip = tmp_path / "mypath" if transport == "ipc" else "0.0.0.0"
