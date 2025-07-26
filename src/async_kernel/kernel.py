@@ -431,7 +431,7 @@ class Kernel(ConnectionFileMixin):
                         if not ident or not msg:
                             continue
                         msg_type = msg["header"]["msg_type"]
-                        self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, msg["content"])
+                        self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, msg)
                         job = Job(
                             socket_id=socket_id,
                             socket=socket,
