@@ -4,6 +4,7 @@
 # Distributed under the terms of the Modified BSD License.
 
 import pytest
+import zmq
 
 from async_kernel.pending_result import PendingResult
 
@@ -13,7 +14,7 @@ def anyio_backend(request):
     return request.param
 
 
-@pytest.fixture(scope="module", params=["tcp", "ipc"])
+@pytest.fixture(scope="module", params=["tcp", "ipc"] if zmq.has("ipc") else ["tcp"])
 def transport(request):
     return request.param
 

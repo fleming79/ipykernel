@@ -22,11 +22,6 @@ from async_kernel.kernel import ExecuteMode, SocketID
 from tests import utils
 
 
-@pytest.fixture(scope="module", params=["tcp", "ipc"])
-def transport(request):
-    return request.param
-
-
 @pytest.mark.parametrize("mode", ["direct", "proxy"])
 async def test_iopub(kernel, mode: Literal["direct", "proxy"]):
     def pubio_subscribe():

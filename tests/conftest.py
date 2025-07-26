@@ -2,11 +2,13 @@
 # Distributed under the terms of the Modified BSD License.
 
 import os
+import subprocess
 import sys
 from typing import TYPE_CHECKING
 
 import anyio
 import pytest
+import zmq
 from jupyter_client.asynchronous.client import AsyncKernelClient
 
 import async_kernel.utils
@@ -39,7 +41,7 @@ def anyio_backend(request):
 
 @pytest.fixture(scope="module")
 def transport():
-    return "ipc"
+    return "ipc" if zmq.has("ipc") else "tcp"
 
 
 @pytest.fixture(scope="module")
@@ -87,10 +89,10 @@ async def subprocess_kernels_client(anyio_backend, tmp_path_factory, kernel_name
     assert anyio_backend == "asyncio", "Asyncio is required for the client"
     connection_file = tmp_path_factory.mktemp("async_kernel") / "temp_connection.json"
     command = make_argv(connection_file=connection_file, kernel_name=kernel_name)
-    process = await anyio.open_process(command)
+    process = subprocess.Popen(command)
     try:
         client = AsyncKernelClient()
-        while not connection_file.exists():
+        while not connection_file.exists() or not connection_file.stat().st_size:
             await anyio.sleep(0.1)
         client.load_connection_file(connection_file)
         client.start_channels()
@@ -101,12 +103,9 @@ async def subprocess_kernels_client(anyio_backend, tmp_path_factory, kernel_name
         finally:
             client.shutdown()
             client.stop_channels()
+            assert process.wait(10) == 0
     finally:
-        with anyio.move_on_after(utils.TIMEOUT):
-            while process.returncode is None:
-                await anyio.sleep(0.01)
         if process.returncode is None:
             process.kill()
-        assert process.returncode == 0
 
     assert not connection_file.exists(), "cleanup_connection_file not called by atexit ..."

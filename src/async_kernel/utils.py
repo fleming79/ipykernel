@@ -50,6 +50,8 @@ def bind_socket(
             socket.bind(f"ipc://{path}")
         return port
 
+    if transport == "ipc":
+        ip = Path(ip).as_posix()
     if socket.TYPE == SocketType.ROUTER:
         # ref: https://github.com/ipython/ipykernel/issues/270
         socket.router_handover = 1
@@ -67,7 +69,8 @@ def bind_socket(
             return _try_bind_socket(port)
         except ZMQError as e_:
             # Raise if we have any error not related to socket binding
-            if e_.errno in {errno.EADDRINUSE, win_in_use}:
+            # 135: Protocol not supported
+            if e_.errno in {errno.EADDRINUSE, win_in_use, 135}:
                 e = e_
                 break
             if port:

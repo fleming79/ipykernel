@@ -23,11 +23,6 @@ def anyio_backend(request):
     return request.param
 
 
-@pytest.fixture(scope="module", params=["tcp", "ipc"])
-def transport(request):
-    return request.param
-
-
 @pytest.mark.anyio
 class TestCaller:
     def setup_method(self, test_method):

@@ -48,7 +48,8 @@ async def client(subprocess_kernels_client):
         },
     )
     # Attach
-    await send_debug_request(client, "attach")
+    reply = await send_debug_request(client, "attach")
+    assert reply["status"] == "ok"
     return client
 
 
