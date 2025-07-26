@@ -67,10 +67,11 @@ def main():
                 else str(pathlib.Path(args.connection_file).resolve()),
                 kernel_name=KernelName(args.kernel_name),
             )
-            sys.exit(0)
         except Exception as e:
             print(e)
             sys.exit(1)
+        else:
+            sys.exit(0)
 
 
 if __name__ == "__main__":
