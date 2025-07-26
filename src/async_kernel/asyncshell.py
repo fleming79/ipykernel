@@ -16,7 +16,6 @@ import anyio
 import IPython.core.release
 from IPython.core.displayhook import DisplayHook
 from IPython.core.displaypub import DisplayPublisher
-from IPython.core.error import StdinNotImplementedError
 from IPython.core.interactiveshell import ExecutionResult, InteractiveShell, InteractiveShellABC
 from IPython.core.magic import Magics, line_magic, magics_class
 from jupyter_client.jsonutil import json_default
@@ -162,14 +161,8 @@ class AsyncInteractiveShell(InteractiveShell):
             self.kernel.stop()
 
     def ask_exit(self):
-        try:
-            response = self.kernel.raw_input("Are you sure you want to stop the kernel?\ny/[n]\n")
-        except StdinNotImplementedError:
-            pass
-        else:
-            if response != "y":
-                return
-        self.exit_now = True
+        if self.kernel.raw_input("Are you sure you want to stop the kernel?\ny/[n]\n") == "y":
+            self.exit_now = True
 
     @override
     def init_create_namespaces(self, user_module=None, user_ns=None):
