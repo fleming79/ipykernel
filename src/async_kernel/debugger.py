@@ -134,18 +134,17 @@ class DebugpyClient(HasTraits):
     def connected(self):
         return bool(self._socketstream)
 
-    async def _send_request(self, request: dict):
-        if socketstream := self._socketstream:
-            content = self._pack(request)
-            content_length = str(len(content)).encode()
-            buf = self.HEADER + content_length + self.SEPARATOR
-            buf += content
-            self.log.debug("DEBUGPYCLIENT: request %s", buf)
-            await socketstream.send(buf)
-
-    async def _wait_for_response(self, request: dict):
+    async def _send_request(self, request: dict) -> PendingResult:
+        if not (socketstream := self._socketstream):
+            raise RuntimeError
         self._pending_responses[request["seq"]] = pending = PendingResult()
-        return await pending.wait()
+        content = self._pack(request)
+        content_length = str(len(content)).encode()
+        buf = self.HEADER + content_length + self.SEPARATOR
+        buf += content
+        self.log.debug("DEBUGPYCLIENT: request %s", buf)
+        await socketstream.send(buf)
+        return pending
 
     def put_tcp_frame(self, frame: bytes):
         """Put a tcp frame in the queue."""
@@ -197,8 +196,8 @@ class DebugpyClient(HasTraits):
 
     async def send_dap_request(self, msg):
         """Send a dap request and return the response."""
-        await self._send_request(msg)
-        return await self._wait_for_response(msg)
+        pending = await self._send_request(msg)
+        return await pending.wait()
 
 
 class Debugger(HasTraits):
@@ -541,13 +540,11 @@ class Debugger(HasTraits):
 
     async def do_attach(self, message):
         """Handle an attach message."""
-
         message["arguments"]["connect"] = self.debugpy_client.get_host_port()
         if self.just_my_code:
             message["arguments"]["debugOptions"] = ["justMyCode"]
-        await self.debugpy_client._send_request(message)
-        with anyio.move_on_after(10):
-            await self.init_event.wait()
+        pending_response = await self.debugpy_client._send_request(message)
+        await self.init_event.wait()
         await self._forward_message(
             {
                 "type": "request",
@@ -555,7 +552,7 @@ class Debugger(HasTraits):
                 "command": "configurationDone",
             }
         )
-        return await self.debugpy_client._wait_for_response(message)
+        return await pending_response.wait()
 
     async def do_configuration_done(self, message):
         """Handle a configuration done message."""
