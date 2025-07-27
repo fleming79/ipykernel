@@ -25,6 +25,7 @@ class PendingResult(Generic[T]):
     """
 
     __slots__ = ["_anyio_event_done", "_done_callbacks", "_event_done", "_exception", "result", "thread"]
+    result: T
 
     def __init__(self, thread: threading.Thread | None = None) -> None:
         self._event_done = threading.Event()

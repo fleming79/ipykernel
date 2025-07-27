@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 __all__ = ["Caller"]
 
 
-class ThreadCallerPendingResult(PendingResult, Generic[T]):
+class ThreadCallerPendingResult(PendingResult[T], Generic[T]):
     """A pending result for use with Caller.
 
     This class adds a cancel method which provides the mechanism to cancel the scope
