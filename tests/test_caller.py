@@ -146,6 +146,10 @@ class TestCaller:
         caller.call_soon(finished_event.set)
         the_thread.join()
 
+    async def test_get_instance_no_instance(self, anyio_backend):
+        with pytest.raises(RuntimeError):
+            Caller.get_instance(None, allow_create=False)
+
     async def test_error_wait_sync(self):
         async with Caller() as caller:
             pending = caller.call_later(anyio.sleep, 0.1, 0.1)
