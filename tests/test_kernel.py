@@ -36,6 +36,10 @@ async def test_iopub(kernel, mode: Literal["direct", "proxy"]):
                 if msg[0] == b"0":
                     assert int(msg[1]) == i
                     i += 1
+            # Also test iopub from a thread that doesn't have a socket works via control thread.
+            print("done")
+            msg = socket.recv_multipart()
+            assert msg[-1] == b'{"name": "stdout", "text": "done"}'
 
     n = 10
     socket = kernel._sockets[SocketID.iopub]

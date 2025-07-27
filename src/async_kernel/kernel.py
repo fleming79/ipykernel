@@ -514,7 +514,7 @@ class Kernel(ConnectionFileMixin):
                     "iopub_send: (thread=%s) msg_type:'%s', content: %s", thread.name, msg["msg_type"], msg["content"]
                 )
         else:
-            self.control_thread_caller.call_later(
+            self.control_thread_caller.call_no_context(
                 self.iopub_send,
                 msg_or_type=msg_or_type,
                 content=content,
