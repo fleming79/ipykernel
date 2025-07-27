@@ -175,12 +175,13 @@ class Caller:
 
     @classmethod
     def _shutdown_all(cls):
-        "Shutdown currently open instance created via 'to_thread'."
+        "Shutdown all instances."
         for caller in set(cls._instances.values()):
             caller.close()
 
     @classmethod
     def get_instance(cls, *, thread: threading.Thread | None = None, thread_name: str | NoValue = NoValue) -> Self:
+        "Gets an instance of Caller that is already registered and capable of executing code."
         if thread_name is not NoValue:
             for thread in cls._instances:
                 if thread.name == thread_name:
