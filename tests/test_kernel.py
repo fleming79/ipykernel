@@ -405,7 +405,7 @@ async def test_matplotlib_inline_on_import(kernel, client):
     await utils.clear_iopub(client)
 
 
-@pytest.mark.parametrize("code", ["%connect_info", "%matplotlib --list", "%subshell"])
+@pytest.mark.parametrize("code", ["%connect_info", "%matplotlib --list", "%threads"])
 async def test_magic(client, code: str):
     assert code
     _, reply = await utils.execute(client, code, clear_pub=False)
@@ -496,31 +496,3 @@ test()
         assert any(inst for inst in Caller._instances if inst.name == "My thread 1324")
         assert Caller.list_threads() == ["My thread 1324"]
         Caller.get_instance(thread_name="My thread 1324").close()
-
-
-async def test_subshell_requests(client, kernel):
-    # create subshell
-    reply = await utils.send_control_message(client, "create_subshell_request")
-    assert reply["content"]["status"] == "ok"
-    subshell_id = reply["content"]["subshell_id"]
-
-    inst = Caller.get_instance(thread_name=subshell_id)
-
-    _, reply = await utils.execute(
-        client,
-        subshell_id=subshell_id,
-        code="import threading;thread_name = threading.current_thread().name",
-        user_expressions={"thread_name": "thread_name"},
-    )
-    assert eval(reply["user_expressions"]["thread_name"]["data"]["text/plain"]) == subshell_id
-    # list subshells
-    reply = await utils.send_control_message(client, "list_subshell_request")
-    assert reply["content"]["status"] == "ok"
-    assert subshell_id in reply["content"]["subshell_id"]
-    assert Caller.list_threads() == []
-
-    # delete subshell
-    reply = await utils.send_control_message(client, "delete_subshell_request", {"subshell_id": subshell_id})
-    assert reply["content"]["status"] == "ok"
-
-    assert inst.closed

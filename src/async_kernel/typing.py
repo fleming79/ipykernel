@@ -51,9 +51,6 @@ class MsgType(enum.StrEnum):
     # Control
     shutdown_request = "shutdown_request"
     debug_request = "debug_request"
-    create_subshell_request = "create_subshell_request"
-    delete_subshell_request = "delete_subshell_request"
-    list_subshell_request = "list_subshell_request"
 
 
 class MsgHeader(TypedDict):
@@ -64,7 +61,6 @@ class MsgHeader(TypedDict):
     date: str
     msg_type: str
     version: str
-    subshell_id: NotRequired[str | None]
 
 
 class Message(TypedDict, Generic[T]):

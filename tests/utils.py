@@ -85,13 +85,11 @@ def validate_message(msg: Mapping[str, Any], msg_type="", parent=None):
         raise
 
 
-async def execute(client: AsyncKernelClient, /, code="", clear_pub=True, subshell_id="", **kwargs):
+async def execute(client: AsyncKernelClient, /, code="", clear_pub=True, **kwargs):
     """Send an execute_request to the kernel and return the msg_id and content of the reply from the kernel."""
 
     assert isinstance(client, AsyncKernelClient)
     header = client.session.msg_header("execute_request")
-    if subshell_id:
-        header["subshell_id"] = subshell_id
     msg = client.session.msg(
         "execute_request",
         header=header,

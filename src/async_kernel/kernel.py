@@ -139,9 +139,6 @@ class Kernel(ConnectionFileMixin):
         self._control_handlers = self._shell_handlers | {
             MsgType.shutdown_request: self.control_shutdown_request,
             MsgType.debug_request: self.debug_request,
-            MsgType.create_subshell_request: self.create_subshell_request,
-            MsgType.delete_subshell_request: self.delete_subshell_request,
-            MsgType.list_subshell_request: self.list_subshell_request,
         }
         sys.excepthook = self.excepthook
         sys.unraisablehook = self.unraisablehook
@@ -168,7 +165,6 @@ class Kernel(ConnectionFileMixin):
             "help_links": self.help_links,
             "debugger": not utils.LAUNCHED_BY_DEBUGPY,
             "kernel_name": self.kernel_name,
-            "supported_features": ["kernel subshells"],
         }
 
     @default("help_links")
@@ -440,7 +436,7 @@ class Kernel(ConnectionFileMixin):
                             msg_type=msg_type,
                         )
                         if msg_type == MsgType.execute_request:
-                            info = utils.get_execute_info(msg["content"], msg["header"].get("subshell_id"))
+                            info = utils.get_execute_info(msg["content"])
                             if socket_id != SocketID.shell or info["execute_mode"] != ExecuteMode.queue:
                                 Caller().call_soon(self.execute_request, time.monotonic(), job, info)
                             else:
@@ -760,16 +756,6 @@ class Kernel(ConnectionFileMixin):
         """Handle a debug request."""
         content = await self.debugger.process_request(job["msg"]["content"])
         self.send_reply(job=job, content=content)
-
-    async def create_subshell_request(self, job: Job):
-        self.send_reply(job=job, content={"subshell_id": Caller.start_subshell()})
-
-    async def delete_subshell_request(self, job: Job):
-        Caller.delete_subshell(job["msg"]["content"]["subshell_id"])
-        self.send_reply(job)
-
-    async def list_subshell_request(self, job: Job):
-        self.send_reply(job, {"subshell_id": Caller.list_subshells()})
 
     async def do_complete(self, code, cursor_pos):
         """Completions from IPython, using Jedi."""

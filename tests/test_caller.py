@@ -272,9 +272,3 @@ class TestCaller:
 
             with pytest.raises(anyio.ClosedResourceError):
                 await pr.wait()
-
-    async def test_subshell(self, anyio_backend):
-        subshell_id = Caller.start_subshell()
-        assert subshell_id in Caller.list_subshells()
-        Caller.delete_subshell(subshell_id)
-        assert not Caller.list_subshells()

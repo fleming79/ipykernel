@@ -299,11 +299,10 @@ class KernelMagics(Magics):
         )
 
     @line_magic
-    def subshell(self, arg_s):
+    def threads(self, arg_s):
         print(f"thread name: {threading.current_thread().name}")
         print(f"pid: {os.getpid()}")
         print(f"thread count: {threading.active_count()}")
-        print(f"subshell list: {Caller.list_subshells()}")
         print(f"thread list: {Caller.list_threads()}")
 
 
