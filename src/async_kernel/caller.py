@@ -5,24 +5,26 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import functools
 import inspect
 import logging
 import threading
 import time
 import weakref
 from collections import deque
-from typing import TYPE_CHECKING, ClassVar, Generic, Self, cast
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, cast
 
 import anyio
 import sniffio
 from zmq import Context, Socket, SocketType
 
 from async_kernel.pending_result import PendingResult
-from async_kernel.typing import NoValue, T
+from async_kernel.typing import T
 from async_kernel.utils import wait_thread_event
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable
 
     from anyio.abc import TaskGroup, TaskStatus
 
@@ -36,7 +38,7 @@ class ThreadCallerPendingResult(PendingResult, Generic[T]):
 
     This class adds a cancel method which provides the mechanism to cancel the scope
     in which the pending result execution is taking place. Note that blocking calls
-    and sync function may not cancel until the function exits.
+    and sync function may not cancel until the function is complete.
     """
 
     _cancel_scope: anyio.CancelScope | None = None
@@ -50,7 +52,7 @@ class ThreadCallerPendingResult(PendingResult, Generic[T]):
                 if threading.current_thread() is self.thread:
                     scope.cancel()
                 else:
-                    Caller(self.thread).call_soon(self.cancel)
+                    Caller(self.thread).call_no_context(self.cancel)
 
     def _set_cancel_scope(self, scope: anyio.CancelScope):
         if self._cancel:
@@ -84,7 +86,10 @@ class Caller:
     _pool_instances: ClassVar[weakref.WeakSet[Self]] = weakref.WeakSet()
     MAX_IDLE_EVENT_THREADS = 10
     _taskgroup: TaskGroup | None = None
-    _jobs: deque[tuple[contextvars.Context, tuple[ThreadCallerPendingResult, float, float, Callable, tuple, dict]]]
+    _jobs: deque[
+        tuple[contextvars.Context, tuple[ThreadCallerPendingResult, float, float, Callable, tuple, dict]]
+        | Callable[[], Any]
+    ]
     _jobs_added: threading.Event
     _closed = False
     iopub_sockets: ClassVar[weakref.WeakKeyDictionary[threading.Thread, Socket]] = weakref.WeakKeyDictionary()
@@ -127,8 +132,15 @@ class Caller:
             task_status.started()
             while not self._closed:
                 while len(self._jobs):
-                    context, args = self._jobs.popleft()
-                    context.run(tg.start_soon, self._wrap_call, *args)
+                    job = self._jobs.popleft()
+                    if isinstance(job, Callable):
+                        try:
+                            job()
+                        except Exception as e:
+                            self.log.exception("Simple call failed", exc_info=e)
+                    else:
+                        context, args = job
+                        context.run(tg.start_soon, self._wrap_call, *args)
                     self._jobs_added.clear()
                 await wait_thread_event(self._jobs_added)
         finally:
@@ -180,24 +192,29 @@ class Caller:
             caller.close()
 
     @classmethod
-    def get_instance(cls, *, thread: threading.Thread | None = None, thread_name: str | NoValue = NoValue) -> Self:
-        "Gets an instance of Caller that is already registered and capable of executing code."
-        if thread_name is not NoValue:
-            for thread in cls._instances:
-                if thread.name == thread_name:
-                    return cls._instances[thread]
-        else:
-            thread = thread or threading.current_thread()
-            if instance := cls._instances.get(thread):
-                return instance
-        msg = f"A Caller was not found for {thread=}."
+    def get_instance(cls, thread_name: str | None, *, allow_create=True) -> Self:
+        """Gets an instance of Caller for thread_name.
+
+        allow_create: bool
+            If an instance does not exist that has a thread whose name is thread_name;
+            a new thread is started using start_new.
+        """
+        for thread in cls._instances:
+            if thread.name == thread_name:
+                return cls._instances[thread]
+        if allow_create:
+            return cls.start_new(thread_name=thread_name)
+        msg = f"A Caller was not found for {thread_name=}."
         raise RuntimeError(msg)
 
     @classmethod
     def to_thread(
         cls, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs
     ) -> ThreadCallerPendingResult[T]:
-        "Call func in a separate thread."
+        """Call func in a separate thread.
+
+        A pool of 'workers' is are used to provide an event loop
+        """
         return cls.to_thread_by_thread_name(None, func, *args, **kwargs)
 
     @classmethod
@@ -210,11 +227,7 @@ class Caller:
         if not thread_name and cls._to_thread_pool:
             caller = cls._to_thread_pool.popleft()
         else:
-            try:
-                caller = cls.get_instance(thread_name=thread_name)
-            except RuntimeError:
-                caller = cls.start_new(thread_name=thread_name)
-
+            caller = cls.get_instance(thread_name=thread_name)
         pending = caller.call_soon(func, *args, **kwargs)
         if not thread_name:
             cls._pool_instances.add(caller)
@@ -225,20 +238,20 @@ class Caller:
     def start_new(cls, *, backend="", log: logging.LoggerAdapter | None = None, thread_name: str | None = None):
         "Start a new thread, open a Caller in a new event loop  returning the Caller instance."
 
-        def run_event_loop():
-            async def run_event_loop_():
+        def anyio_run_caller():
+            async def caller_context():
                 nonlocal caller
                 async with cls(log=log) as caller:
                     ready_event.set()
                     with contextlib.suppress(anyio.get_cancelled_exc_class()):
                         await anyio.sleep_forever()
 
-            anyio.run(run_event_loop_, backend=backend)
+            anyio.run(caller_context, backend=backend)
 
         backend = backend or sniffio.current_async_library()
         caller = cast("Self", None)
         ready_event = threading.Event()
-        thread = threading.Thread(target=run_event_loop, name=thread_name, daemon=True)
+        thread = threading.Thread(target=anyio_run_caller, name=thread_name, daemon=True)
         thread.start()
         ready_event.wait()
         assert isinstance(caller, cls)
@@ -311,3 +324,8 @@ class Caller:
     ) -> ThreadCallerPendingResult[T]:
         "Calls call_later with delay=0.0."
         return self.call_later(func, 0.0, *args, **kwargs)
+
+    def call_no_context(self, func: Callable[P, Any], *args: P.args, **kwargs: P.kwargs) -> None:
+        """Call func in the thread event loop."""
+        self._jobs.append(functools.partial(func, *args, **kwargs))
+        self._jobs_added.set()

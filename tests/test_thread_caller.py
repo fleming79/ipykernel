@@ -111,7 +111,7 @@ class TestCaller:
         the_thread.start()
         ready.wait()
         assert finished_event
-        caller = Caller.get_instance(thread=the_thread)
+        caller = Caller.get_instance(the_thread.name)
         if check_result == "result":
             expr = "10"
             context = contextlib.nullcontext()
@@ -150,10 +150,6 @@ class TestCaller:
             pending = caller.call_later(anyio.sleep, 0.1, 0.1)
             with pytest.raises(RuntimeError):
                 pending.wait_sync()
-
-    async def test_not_available_for_thread(self):
-        with pytest.raises(RuntimeError):
-            Caller.get_instance(thread=threading.Thread())
 
     async def test_to_thread(self, anyio_backend, mocker):
         mocker.patch.object(Caller, "MAX_IDLE_EVENT_THREADS", new=2)
@@ -196,14 +192,13 @@ class TestCaller:
             await pr.wait()
 
     async def test_closed_in_call_soon(self, anyio_backend):
-        # Check t
         async def close_tsc():
-            caller = Caller.get_instance()
+            caller = Caller()
             caller.close()
             await anyio.sleep_forever()
 
         pr = Caller.to_thread(close_tsc)
-        caller = Caller.get_instance(thread=pr.thread)
+        caller = Caller.get_instance(pr.thread.name)
         cancelled_ = anyio.get_cancelled_exc_class()
         with pytest.raises(cancelled_):
             await pr.wait()
