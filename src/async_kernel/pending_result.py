@@ -66,7 +66,7 @@ class PendingResult(Generic[T]):
         while self._done_callbacks:
             self._done_callbacks.pop()(self)
 
-    def set_exception(self, exception: BaseException):
+    def set_exception(self, exception: BaseException | type[BaseException]):
         if self._event_done.is_set() or threading.current_thread() is not self.thread:
             raise RuntimeError
         self._exception = exception

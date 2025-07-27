@@ -15,7 +15,7 @@ import anyio.to_thread
 import pytest
 import sniffio
 
-from async_kernel.caller import Caller
+from async_kernel.caller import Caller, CancelledError
 from async_kernel.pending_result import PendingResult
 
 
@@ -214,20 +214,29 @@ class TestCaller:
         assert val is True
 
     async def test_closed_in_call_soon(self, anyio_backend):
+        ready = threading.Event()
+        proceed = threading.Event()
+
         async def close_tsc():
             caller = Caller()
+            ready.set()
+            proceed.wait()
             caller.close()
             await anyio.sleep_forever()
 
         pr = Caller.to_thread(close_tsc)
         caller = Caller.get_instance(pr.thread.name)
-        cancelled_ = anyio.get_cancelled_exc_class()
-        with pytest.raises(cancelled_):
+        ready.wait()
+        never_called_pending = caller.call_later(str, 10)
+        proceed.set()
+        with pytest.raises(CancelledError):
             await pr.wait()
         assert pr.done()
         assert caller._closed
-        with pytest.raises(RuntimeError):
+        with pytest.raises(anyio.ClosedResourceError):
             caller.call_soon(time.sleep, 0)
+        with pytest.raises(CancelledError):
+            await never_called_pending.wait()
 
     @pytest.mark.parametrize("mode", ["async", "blocking"])
     @pytest.mark.parametrize("cancel_mode", ["local", "thread"])
@@ -257,7 +266,7 @@ class TestCaller:
             else:
                 caller.to_thread(pr.cancel)
 
-            with pytest.raises(anyio.get_cancelled_exc_class()):
+            with pytest.raises(anyio.ClosedResourceError):
                 await pr.wait()
 
     async def test_subshell(self, anyio_backend):

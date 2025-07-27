@@ -30,10 +30,12 @@ if TYPE_CHECKING:
 
     from async_kernel.typing import P
 
-__all__ = ["Caller"]
+__all__ = ["Caller", "CancelledError"]
 
+class CancelledError(anyio.ClosedResourceError):
+    "Used to indicate a pending result is cancelled"
 
-class ThreadCallerPendingResult(PendingResult[T], Generic[T]):
+class CallerPendingResult(PendingResult[T], Generic[T]):
     """A pending result for use with Caller.
 
     This class adds a cancel method which provides the mechanism to cancel the scope
@@ -45,7 +47,7 @@ class ThreadCallerPendingResult(PendingResult[T], Generic[T]):
     _cancel = False
 
     def cancel(self):
-        "Cancel the pending resule"
+        "Cancel the function call associated with this pending result."
         if not self.done():
             self._cancel = True
             if scope := self._cancel_scope:
@@ -87,7 +89,7 @@ class Caller:
     MAX_IDLE_EVENT_THREADS = 10
     _taskgroup: TaskGroup | None = None
     _jobs: deque[
-        tuple[contextvars.Context, tuple[ThreadCallerPendingResult, float, float, Callable, tuple, dict]]
+        tuple[contextvars.Context, tuple[CallerPendingResult, float, float, Callable, tuple, dict]]
         | Callable[[], Any]
     ]
     _jobs_added: threading.Event
@@ -144,13 +146,16 @@ class Caller:
                     self._jobs_added.clear()
                 await wait_thread_event(self._jobs_added)
         finally:
-            socket.close(linger=500)
+            for job in self._jobs:
+                if not callable(job):
+                    job[1][0].set_exception(CancelledError)
+            socket.close()
             self.iopub_sockets.pop(thread, None)
             self.taskgroup.cancel_scope.cancel()
 
     async def _wrap_call(
         self,
-        pending: ThreadCallerPendingResult[T],
+        pending: CallerPendingResult[T],
         starttime: float,
         delay: float,
         func: Callable[..., T | Awaitable[T]],
@@ -174,9 +179,12 @@ class Caller:
                 pending.set_result(result)
             except (self._cancelled_exception_class, Exception) as e:
                 self._outstanding -= 1  # # update first for _to_thread_on_done
-                e.add_note(f"{self} {func=}")
-                self.log.exception("Exception occurred while running %s", func, exc_info=e)
-                pending.set_exception(e)
+                if not pending.done():
+                    if isinstance(e, self._cancelled_exception_class):
+                        e = CancelledError
+                    else:
+                        self.log.exception("Exception occurred while running %s", func, exc_info=e)
+                    pending.set_exception(e)
 
     def _to_thread_on_done(self, _):
         if not self._closed:
@@ -210,7 +218,7 @@ class Caller:
     @classmethod
     def to_thread(
         cls, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs
-    ) -> ThreadCallerPendingResult[T]:
+    ) -> CallerPendingResult[T]:
         """Call func in a separate thread.
 
         A pool of 'workers' is are used to provide an event loop
@@ -220,7 +228,7 @@ class Caller:
     @classmethod
     def to_thread_by_thread_name(
         cls, thread_name: str | None, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs
-    ) -> ThreadCallerPendingResult[T]:
+    ) -> CallerPendingResult[T]:
         """Call the function in the Caller thread by name.
 
         If a caller thread is not found a new one is created with the specified name."""
@@ -299,7 +307,7 @@ class Caller:
 
     def call_later(
         self, func: Callable[P, T | Awaitable[T]], delay=0.0, /, *args: P.args, **kwargs: P.kwargs
-    ) -> ThreadCallerPendingResult[T]:
+    ) -> CallerPendingResult[T]:
         """Schedules a function or coroutine for execution.
 
         If the instance is not open in an async context, the function will be queued and
@@ -308,9 +316,8 @@ class Caller:
         The delay is calculated from the submission time.
         """
         if self._closed:
-            msg = f"{self} is closed!"
-            raise RuntimeError(msg)
-        pending = ThreadCallerPendingResult(thread=self.thread)
+            raise anyio.ClosedResourceError
+        pending = CallerPendingResult(thread=self.thread)
         if threading.current_thread() is self.thread and (tg := self._taskgroup):
             tg.start_soon(self._wrap_call, pending, time.monotonic(), delay, func, args, kwargs)
         else:
@@ -321,7 +328,7 @@ class Caller:
 
     def call_soon(
         self, func: Callable[P, T | Awaitable[T]], *args: P.args, **kwargs: P.kwargs
-    ) -> ThreadCallerPendingResult[T]:
+    ) -> CallerPendingResult[T]:
         "Calls call_later with delay=0.0."
         return self.call_later(func, 0.0, *args, **kwargs)
 
