@@ -6,6 +6,7 @@
 import contextlib
 import threading
 import time
+from contextvars import ContextVar
 from random import random
 from typing import Literal, cast
 
@@ -190,6 +191,27 @@ class TestCaller:
         assert not pr.done()
         async with caller:
             await pr.wait()
+
+    async def test_call_coroutine(self, anyio_backend):
+        # Test we can await a coroutine, note that it is not permitted with the type hints,
+        # but should probably be discouraged anyway since there is no way of knowing
+        # (with type hints) if a coroutine has already been awaited.
+        my_contextvar = ContextVar[int]("my_contextvar")
+        my_contextvar.set(1)
+
+        async def my_func():
+            await anyio.sleep(0)
+            assert my_contextvar.get() == 1
+            return True
+
+        # Discouraged
+        pr = Caller.to_thread(my_func())  # type: ignore[call-arg]
+        val = await pr.wait()
+        assert val is True
+        # This the preferred way of calling.
+        pr = Caller.to_thread(my_func)
+        val = await pr.wait()
+        assert val is True
 
     async def test_closed_in_call_soon(self, anyio_backend):
         async def close_tsc():
