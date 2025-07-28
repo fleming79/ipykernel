@@ -195,6 +195,9 @@ ignore = [
   "PT023", # Use `@pytest.mark.skip` over `@pytest.mark.skip()`
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"examples/*" = ["F821", "PLC0415"]
+
 [tool.ruff.format]
 docstring-code-format = true
 

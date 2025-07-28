@@ -10,14 +10,14 @@ Async-kernel is a python implementation of a [Jupyter kernel](https://docs.jupyt
 - [Execute-requests](#kerneljob) are run inside tasks.
 - Multiple namespaces are supported.
 - Uses [ContextVars](#contextvars) for better concurrent execution and to enable multiple namespaces.
-- A [header directive](#header-directives) inserted in the code enables the user to modify how the code is executed (in a task or thread) and what namespace to use.
+- A [kernel directive](#kernel-directive) inserted in the code enables the user to modify how the code is executed (in a task or thread) and what namespace to use.
 - The `Caller` class provides methods to executed code in threads with different event loops and awaiting the result.
 - Uses the anyio function [`wait_readable`](https://anyio.readthedocs.io/en/stable/api.html#anyio.wait_readable) to await ZMQ socket messages.
 
-### Header directives
+### Kernel directive
 
-Async-kernel adds the concept of a header directive `#@<execute-mode>, <options>`. Code passed in *execute requests* that start with symbols `#@` in the first non-blank line will be
-interpreted as a header directive.
+Async-kernel adds the concept of a kernel directive `#@<execute-mode>, <options>`. Code passed in *execute requests* that start with symbols `#@` in the first non-blank line will be
+interpreted as a kernel directive.
 
 The directive can be used to modify how the code is executed and the `namespace_id` to use.
 
@@ -57,7 +57,7 @@ import time
 time.sleep(100)
 ```
 
-Irrespective of the header directive, any code run in a cell will respect cancellation, though in the example above, the cancellation will only occur after the `time.sleep` call has returned. Should this have been run in the `MainThread` the time.sleep would have been cancelled.
+Irrespective of the kernel directive, any code run in a cell will respect cancellation, though in the example above, the cancellation will only occur after the `time.sleep` call has returned. Should this have been run in the `MainThread` the time.sleep would have been cancelled immediately by means of a signal.
 
 ## Kernel variants
 
@@ -69,7 +69,7 @@ The kernel name defines the anyio backend that is used. Currently there are thre
 
 ### Enabling / disabling kernels
 
-Kernels can be added/removed via the command line. In Jupyter Lab, you can do this by prefixing the command with '!' and refreshing the browser after the command is run.
+Kernels can be added/removed via the command line.
 
 #### Add
 
