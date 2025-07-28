@@ -284,4 +284,5 @@ class TestCaller:
                 tg.start_soon(pr.wait)
                 await anyio.sleep(0)
                 tg.cancel_scope.cancel()
+            await anyio.sleep(0)
             assert pr._exception is CancelledError
