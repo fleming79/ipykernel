@@ -190,8 +190,7 @@ class TestCaller:
         with pytest.raises(RuntimeError, match=".*not currently open in an async context"):
             caller.taskgroup  # noqa: B018
         pr = caller.call_soon(time.sleep, 0.1)
-        with anyio.move_on_after(0.1):
-            await pr.wait()
+        await anyio.sleep(0.1)
         assert not pr.done()
         async with caller:
             await pr.wait()
@@ -272,3 +271,17 @@ class TestCaller:
 
             with pytest.raises(anyio.ClosedResourceError):
                 await pr.wait()
+
+    async def test_cancelled_waiter(self, anyio_backend):
+        # Cancelling the waiter should also cancel call soon operation.
+        async def async_func():
+            await anyio.sleep(10)
+            raise RuntimeError
+
+        async with Caller() as caller:
+            async with anyio.create_task_group() as tg:
+                pr = caller.call_soon(async_func)
+                tg.start_soon(pr.wait)
+                await anyio.sleep(0)
+                tg.cancel_scope.cancel()
+            assert pr._exception is CancelledError

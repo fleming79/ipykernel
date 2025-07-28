@@ -13,7 +13,7 @@ import time
 import weakref
 from collections import deque
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, cast, override
 
 import anyio
 import sniffio
@@ -62,6 +62,15 @@ class CallerPendingResult(PendingResult[T], Generic[T]):
         if self._cancel:
             scope.cancel()
         self._cancel_scope = scope
+
+    @override
+    async def wait(self) -> T:
+        "Wait for the pending result to complete."
+        try:
+            return await super().wait()
+        except anyio.get_cancelled_exc_class():
+            self.cancel()
+            raise
 
 
 class Caller:
