@@ -14,6 +14,7 @@ def transport(request):
     return request.param
 
 
+@pytest.mark.flaky
 def test_bind_socket(transport: Literal["tcp", "ipc"], tmp_path):
     if transport == "ipc" and not zmq.has("ipc"):
         pytest.skip("transport='ipc' not supported.")

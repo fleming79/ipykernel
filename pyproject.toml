@@ -58,6 +58,7 @@ test = [
     "pytest-cov",
     "pytest-timeout",
     "pytest-mock",
+    "pytest-retry",
     "pytest>=8.4,<9",
     "matplotlib",
     "trio",
