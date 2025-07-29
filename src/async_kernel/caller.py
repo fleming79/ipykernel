@@ -171,29 +171,32 @@ class Caller:
         args: tuple,
         kwargs: dict,
     ):
-        with anyio.CancelScope() as scope:
-            pending._set_cancel_scope(scope)
-            try:
-                if (delay_ := delay - time.monotonic() + starttime) > 0:
-                    await anyio.sleep(float(delay_))
-                result = func(*args, **kwargs) if callable(func) else func
-                while inspect.isawaitable(result):
-                    result = await result
-                if pending._cancel and not scope.cancel_called:
-                    scope.cancel()
-                if scope.cancel_called:
-                    # await here to allow the cancel scope to be raised/caught.
-                    await anyio.sleep(0)
-                self._outstanding -= 1  # update first for _to_thread_on_done
-                pending.set_result(result)
-            except (self._cancelled_exception_class, Exception) as e:
-                self._outstanding -= 1  # # update first for _to_thread_on_done
-                if not pending.done():
-                    if isinstance(e, self._cancelled_exception_class):
-                        e = CancelledError()
-                    else:
-                        self.log.exception("Exception occurred while running %s", func, exc_info=e)
-                    pending.set_exception(e)
+        try:
+            with anyio.CancelScope() as scope:
+                pending._set_cancel_scope(scope)
+                try:
+                    if (delay_ := delay - time.monotonic() + starttime) > 0:
+                        await anyio.sleep(float(delay_))
+                    result = func(*args, **kwargs) if callable(func) else func
+                    while inspect.isawaitable(result):
+                        result = await result
+                    if pending._cancel and not scope.cancel_called:
+                        scope.cancel()
+                    if scope.cancel_called:
+                        # await here to allow the cancel scope to be raised/caught.
+                        await anyio.sleep(0)
+                    self._outstanding -= 1  # update first for _to_thread_on_done
+                    pending.set_result(result)  # type: ignore[call-arg]
+                except (self._cancelled_exception_class, Exception) as e:
+                    self._outstanding -= 1  # # update first for _to_thread_on_done
+                    if not pending.done():
+                        if isinstance(e, self._cancelled_exception_class):
+                            e = CancelledError()
+                        else:
+                            self.log.exception("Exception occurred while running %s", func, exc_info=e)
+                        pending.set_exception(e)
+        except Exception:
+            pass
 
     def _to_thread_on_done(self, _):
         if not self._closed:
