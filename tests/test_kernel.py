@@ -274,7 +274,7 @@ async def test_comm_open_msg_close(client, kernel, mocker):
 
 async def test_interrupt_request(client, kernel):
     event = threading.Event()
-    kernel._interrupters.add(event.set)
+    kernel._interrupts.add(event.set)
     reply = await utils.send_control_message(client, "interrupt_request")
     assert reply["header"]["msg_type"] == "interrupt_reply"
     assert reply["content"] == {"status": "ok"}

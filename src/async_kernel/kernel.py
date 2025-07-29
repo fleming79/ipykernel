@@ -81,7 +81,7 @@ class Kernel(ConnectionFileMixin):
     _last_interrupt_frame = None
     _stop_event = Instance(threading.Event, ())
     _stop_on_error_time: float = 0
-    _interrupters: Container[set[Callable[[], None]]] = Set()
+    _interrupts: Container[set[Callable[[], None]]] = Set()
     _sockets: Dict[SocketID, zmq.Socket] = Dict()
     _shell_handlers = Dict()
     _control_handlers = Dict()
@@ -636,27 +636,9 @@ class Kernel(ConnectionFileMixin):
 
     async def execute_request(self, received_time: float, job: Job[ExecuteContent], info: ExecuteSettings):
         """Perform the actual execute_request."""
-        content = job["msg"]["content"].copy()
-        silent = content["silent"]
-
-        if not silent and received_time < self._stop_on_error_time:
-            self.log.info("Aborting execute_request: %s", job)
-            self._publish_status("busy", job)
-            self._send_error_reply(job, evalue="Aborting due to prior exception")
-            self._publish_status("idle", job)
-            return
 
         async def execute_request_handler(job):
             # ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute
-
-            if not silent:
-                self.iopub_send(
-                    msg_or_type="execute_input",
-                    content={"code": content["code"], "execution_count": self.shell.execution_count},
-                    parent=job["msg"],
-                    ident=self._topic("execute_input"),
-                )
-
             async def _do_execute():
                 code = content["code"]
                 cell_id = None if silent else job["msg"].get("metadata", {}).get("cellId")
@@ -671,14 +653,14 @@ class Kernel(ConnectionFileMixin):
                     shell_futures=True,
                     cell_id=cell_id,
                 )
-                if interrupter := pr.cancel if not silent else None:
-                    self._interrupters.add(interrupter)
+                if interrupt := pr.cancel if not silent else None:
+                    self._interrupts.add(interrupt)
                 try:
                     result = await pr.wait()
                 except CancelledError:
                     result = None
-                if interrupter:
-                    self._interrupters.discard(interrupter)
+                if interrupt:
+                    self._interrupts.discard(interrupt)
                 err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError()
                 if user_expressions:
                     user_expressions = self.shell.user_expressions(user_expressions)
@@ -697,6 +679,13 @@ class Kernel(ConnectionFileMixin):
                     )
                 return reply_content
 
+            if not silent:
+                self.iopub_send(
+                    msg_or_type="execute_input",
+                    content={"code": content["code"], "execution_count": self.shell.execution_count},
+                    parent=job["msg"],
+                    ident=self._topic("execute_input"),
+                )
             stop_on_error = content.pop("stop_on_error", True)
             if info["execute_mode"] == ExecuteMode.thread:
                 pr = Caller.to_thread_by_thread_name(info.get("thread_name"), _do_execute)
@@ -706,9 +695,16 @@ class Kernel(ConnectionFileMixin):
             if not silent and stop_on_error and reply_content.get("status") == "error":
                 self._stop_on_error_time = time.monotonic()
                 self.log.info("An error occurred in a non-silent execution request")
-            # Send the reply.
             self.send_reply(job, reply_content)
 
+        content = job["msg"]["content"].copy()
+        silent = content["silent"]
+        if not silent and received_time < self._stop_on_error_time:
+            self.log.info("Aborting execute_request: %s", job)
+            self._publish_status("busy", job)
+            self._send_error_reply(job, evalue="Aborting due to prior exception")
+            self._publish_status("idle", job)
+            return
         await self._run_handler(execute_request_handler, job)
 
     async def interrupt_request(self, job: Job):
@@ -719,7 +715,7 @@ class Kernel(ConnectionFileMixin):
             time.sleep(0)
         else:
             os.kill(os.getpid(), signal.SIGINT)
-        for interrupter in tuple(self._interrupters):
+        for interrupter in tuple(self._interrupts):
             interrupter()
         self.send_reply(job)
 
