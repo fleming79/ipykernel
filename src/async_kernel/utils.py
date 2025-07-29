@@ -15,7 +15,7 @@ import anyio
 import anyio.to_thread
 from zmq import Socket, SocketType, ZMQError
 
-from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode, NoValue
+from async_kernel.typing import NoValue
 
 __all__ = ["bind_socket", "do_not_debug_this_thread", "mark_thread_pydev_do_not_trace", "wait_thread_event"]
 
@@ -77,37 +77,6 @@ def bind_socket(
                 time.sleep(1)
     msg = f"Failed to bind {socket} for {transport=}" + (f" to {port=}!" if port else "!")
     raise RuntimeError(msg) from e
-
-
-def get_execute_info(content: ExecuteContent) -> ExecuteJobInfo:
-    """Extract ExecuteJobInfo from the content.
-
-    If the top line of the code starts with '#@'; the execute mode and
-    namespace_id will be extracted from that line.
-
-    code:
-    ``` python
-    # @<execute_mode>, namespace_id=<namespace_id>, thread_name=<name>
-    ```
-    """
-    execute_mode = ExecuteMode.task if content.get("silent", True) else ExecuteMode.queue
-    info = ExecuteJobInfo(execute_mode=execute_mode)
-    if (code := content["code"].strip()).startswith("#@") and (header := code.split("\n", maxsplit=1)[0]):
-
-        def extract_value(key: Literal["namespace_id", "thread_name"]):
-            "Extracts the value from the header"
-            if len(s := header.split(f"{key}=", maxsplit=1)) == 2:
-                info[key] = s[1].split(",")[0].strip().strip("'\"")
-
-        extract_value("namespace_id")
-        mode = header.split(" ")[0].split(",")[0].strip().removeprefix("#@").lower()
-        match mode:
-            case "task":
-                info["execute_mode"] = ExecuteMode.task
-            case "thread":
-                info["execute_mode"] = ExecuteMode.thread
-                extract_value("thread_name")
-    return info
 
 
 def mark_thread_pydev_do_not_trace(thread: threading.Thread, name="", *, remove=False):

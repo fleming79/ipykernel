@@ -4,8 +4,7 @@
 from __future__ import annotations
 
 import threading
-from collections import deque
-from typing import TYPE_CHECKING, Generic
+from typing import TYPE_CHECKING, Generic, Literal, Self
 
 import anyio
 
@@ -13,7 +12,7 @@ from async_kernel.typing import T
 from async_kernel.utils import wait_thread_event
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable
 
 __all__ = ["PendingResult"]
 
@@ -32,7 +31,7 @@ class PendingResult(Generic[T]):
         self._exception = None
         self._anyio_event_done = None
         self.thread = thread or threading.current_thread()
-        self._done_callbacks = set()
+        self._done_callbacks = []
 
     async def wait(self) -> T:
         "Wait for the result (thread-safe)."
@@ -56,50 +55,30 @@ class PendingResult(Generic[T]):
             raise self._exception
         return self.result
 
-    def set_result(self, value):
-        if self._event_done.is_set() or threading.current_thread() is not self.thread:
-            raise RuntimeError
-        self.result = value
-        self._event_done.set()
-        if self._anyio_event_done:
-            self._anyio_event_done.set()
-        while self._done_callbacks:
-            self._done_callbacks.pop()(self)
+    def set_result(self, value: T):
+        self._set_value("result", value)
 
-    def set_exception(self, exception: BaseException | type[BaseException]):
+    def set_exception(self, exception: BaseException):
+        self._set_value("exception", exception)
+
+    def _set_value(self, mode: Literal["result", "exception"], value):
         if self._event_done.is_set() or threading.current_thread() is not self.thread:
             raise RuntimeError
-        self._exception = exception
+        if mode == "exception":
+            self._exception = value
+        else:
+            self.result = value
         self._event_done.set()
         if self._anyio_event_done:
             self._anyio_event_done.set()
-        while self._done_callbacks:
-            self._done_callbacks.pop()(self)
+        for cb in reversed(self._done_callbacks):
+            try:
+                cb(self)
+            except Exception:
+                pass
 
     def done(self):
         return self._event_done.is_set()
 
-    @classmethod
-    async def as_completed(cls, items: Iterable[PendingResult[T]]):
-        "An iterator to wait for pending results to complete."
-        event_pending_done = threading.Event()
-        has_result: deque[PendingResult[T]] = deque()
-        n = 0
-
-        def _on_done(pending_):
-            has_result.append(pending_)
-            event_pending_done.set()
-
-        for pending in items:
-            n += 1
-            if pending.done():
-                has_result.append(pending)
-            else:
-                pending._done_callbacks.add(_on_done)
-
-        for _ in range(n):
-            if has_result:
-                event_pending_done.clear()
-                yield has_result.popleft()
-                continue
-            await wait_thread_event(event_pending_done)
+    def add_done_callback(self, callback: Callable[[Self], None]):
+        self._done_callbacks.append(callback)

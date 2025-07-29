@@ -12,7 +12,7 @@ import threading
 import time
 import weakref
 from collections import deque
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, cast, override
 
 import anyio
@@ -20,11 +20,11 @@ import sniffio
 from zmq import Context, Socket, SocketType
 
 from async_kernel.pending_result import PendingResult
-from async_kernel.typing import T
+from async_kernel.typing import NoValue, T
 from async_kernel.utils import wait_thread_event
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import Awaitable, Iterable
 
     from anyio.abc import TaskGroup, TaskStatus
 
@@ -157,7 +157,7 @@ class Caller:
         finally:
             for job in self._jobs:
                 if not callable(job):
-                    job[1][0].set_exception(CancelledError)
+                    job[1][0].set_exception(CancelledError())
             socket.close()
             self.iopub_sockets.pop(thread, None)
             self.taskgroup.cancel_scope.cancel()
@@ -190,14 +190,14 @@ class Caller:
                 self._outstanding -= 1  # # update first for _to_thread_on_done
                 if not pending.done():
                     if isinstance(e, self._cancelled_exception_class):
-                        e = CancelledError
+                        e = CancelledError()
                     else:
                         self.log.exception("Exception occurred while running %s", func, exc_info=e)
                     pending.set_exception(e)
 
     def _to_thread_on_done(self, _):
         if not self._closed:
-            if len(self._to_thread_pool) < self.MAX_IDLE_EVENT_THREADS or self._outstanding:
+            if (len(self._to_thread_pool) < self.MAX_IDLE_EVENT_THREADS) or self._outstanding:
                 self._to_thread_pool.append(self)
             else:
                 self.close()
@@ -248,7 +248,7 @@ class Caller:
         pending = caller.call_soon(func, *args, **kwargs)
         if not thread_name:
             cls._pool_instances.add(caller)
-            pending._done_callbacks.add(caller._to_thread_on_done)
+            pending.add_done_callback(caller._to_thread_on_done)
         return pending
 
     @classmethod
@@ -273,6 +273,81 @@ class Caller:
         ready_event.wait()
         assert isinstance(caller, cls)
         return caller
+
+    @classmethod
+    async def as_completed(
+        cls,
+        items: Iterable[PendingResult[T]] | AsyncGenerator[PendingResult[T]],
+        *,
+        max_pending: NoValue | int = NoValue,
+    ):
+        """An iterator to get PendingResults as they complete.
+
+        Pass a generator should you wish to limit the number pending jobs when calling to_thread/to_task etc.
+        Pass a set/list/tuple to ensure all get monitored at once.
+
+        max_pending: int
+            The maximum number of pending results to maintain. This may be useful when passing a generator
+            and you wish to limit the number pending tasks.
+        """
+
+        event_pending_done = threading.Event()
+        has_result: deque[PendingResult[T]] = deque()
+        pending_results: set[PendingResult[T]] = set()
+        done = False
+        resume: anyio.Event | None = None
+
+        def _on_done(pending_):
+            has_result.append(pending_)
+            event_pending_done.set()
+
+        async def iter_items(task_status: TaskStatus):
+            nonlocal done, resume
+            if isinstance(items, set | list | tuple):
+                max_pending_ = 0
+            else:
+                max_pending_ = cls.MAX_IDLE_EVENT_THREADS if max_pending is NoValue else int(max_pending)
+
+            gen = items if isinstance(items, AsyncGenerator) else iter(items)
+            task_status.started()
+            try:
+                while True:
+                    pr = await anext(gen) if isinstance(gen, AsyncGenerator) else next(gen)
+                    pending_results.add(pr)
+                    if pr.done():
+                        has_result.append(pr)
+                        event_pending_done.set()
+                    else:
+                        pr.add_done_callback(_on_done)
+                    if max_pending_ and len(pending_results) == max_pending_:
+                        resume = anyio.Event()
+                        await resume.wait()
+            except (StopAsyncIteration, StopIteration):
+                return
+            finally:
+                done = True
+                event_pending_done.set()
+
+        try:
+            async with anyio.create_task_group() as tg:
+                await tg.start(iter_items)
+                while pending_results or not done:
+                    if tg.cancel_scope.cancel_called:
+                        await anyio.sleep(0)
+                    if has_result:
+                        event_pending_done.clear()
+                        pr = has_result.popleft()
+                        pending_results.discard(pr)
+                        yield pr
+                        if resume:
+                            resume.set()
+                        continue
+                    if not has_result:
+                        await wait_thread_event(event_pending_done)
+        finally:
+            for pending in pending_results:
+                if isinstance(pending, CallerPendingResult):
+                    pending.cancel()
 
     @classmethod
     def list_threads(cls) -> list[str]:

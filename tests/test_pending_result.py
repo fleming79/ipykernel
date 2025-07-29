@@ -30,7 +30,7 @@ class TestPendingResult:
             assert obj is pr
             done_called = True
 
-        pr._done_callbacks.add(callback)
+        pr.add_done_callback(callback)
         pr.set_result(42)
         result = await pr.wait()
         assert result == 42
@@ -45,7 +45,7 @@ class TestPendingResult:
             assert obj is pr
             done_called = True
 
-        pr._done_callbacks.add(callback)
+        pr.add_done_callback(callback)
         assert not pr.done()
         exc = ValueError("fail")
         pr.set_exception(exc)

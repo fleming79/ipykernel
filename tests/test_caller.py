@@ -14,9 +14,9 @@ import anyio
 import anyio.to_thread
 import pytest
 import sniffio
+from anyio.abc import TaskStatus
 
 from async_kernel.caller import Caller, CancelledError
-from async_kernel.pending_result import PendingResult
 
 
 @pytest.fixture(scope="module", params=["asyncio", "trio"])
@@ -156,34 +156,59 @@ class TestCaller:
             with pytest.raises(RuntimeError):
                 pending.wait_sync()
 
-    async def test_to_thread(self, anyio_backend, mocker):
+    async def test_as_completed(self, anyio_backend, mocker):
         mocker.patch.object(Caller, "MAX_IDLE_EVENT_THREADS", new=2)
 
         async def func():
             assert sniffio.current_async_library() == anyio_backend
             n = random()
             if n < 0.2:
-                time.sleep(0.01)
+                time.sleep(n / 10)
             elif n < 0.6:
-                await anyio.sleep(0.01)
+                await anyio.sleep(n / 10)
             return threading.current_thread()
 
         threads = set()
         n = 40
-
         pending = Caller.to_thread(time.sleep, 0)
         await pending.wait()
         # check can handle completed pending okay first
-        async for pending_ in PendingResult.as_completed([pending]):
+        async for pending_ in Caller.as_completed([pending]):
             assert pending_.done()
         # work directly with iterator
-        async for pending in PendingResult.as_completed(Caller.to_thread(func) for _ in range(n)):
+        n_ = 0
+        async for pending in Caller.as_completed(Caller.to_thread(func) for _ in range(n)):
             assert pending.done()
+            n_ += 1
             thread = await pending.wait()
             threads.add(thread)
-        assert len(threads) > Caller.MAX_IDLE_EVENT_THREADS
-        assert len(Caller._to_thread_pool) <= Caller.MAX_IDLE_EVENT_THREADS
-        Caller._shutdown_all()
+        assert n_ == n
+        assert len(threads) == Caller.MAX_IDLE_EVENT_THREADS
+        assert {caller.thread for caller in Caller._to_thread_pool} == threads
+
+    async def test_as_completed_error(self, anyio_backend):
+        def func():
+            raise RuntimeError()
+
+        async for pending in Caller.as_completed((Caller.to_thread(func) for _ in range(6)), max_pending=4):
+            with pytest.raises(RuntimeError):
+                await pending.wait()
+
+    async def test_as_completed_cancelled(self, anyio_backend):
+        items = {Caller.to_thread(anyio.sleep, 100) for _ in range(4)}
+
+        async def cancelled(task_status: TaskStatus):
+            with pytest.raises(anyio.get_cancelled_exc_class()):  # noqa: PT012
+                task_status.started()
+                async for _ in Caller.as_completed(items):
+                    pass
+
+        async with anyio.create_task_group() as tg:
+            await tg.start(cancelled)
+            tg.cancel_scope.cancel()
+        for item in items:
+            with pytest.raises(CancelledError):
+                await item.wait()
 
     async def test_call_early(self, anyio_backend):
         caller = Caller()
@@ -285,4 +310,4 @@ class TestCaller:
                 await anyio.sleep(0)
                 tg.cancel_scope.cancel()
             await anyio.sleep(0)
-            assert pr._exception is CancelledError
+            assert isinstance(pr._exception, CancelledError)

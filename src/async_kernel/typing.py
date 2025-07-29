@@ -81,7 +81,7 @@ class Job(TypedDict, Generic[T]):
     msg_type: MsgType
 
 
-class ExecuteJobInfo(TypedDict):
+class ExecuteSettings(TypedDict):
     execute_mode: ExecuteMode
     namespace_id: NotRequired[str]
     thread_name: NotRequired[str]

@@ -244,7 +244,8 @@ class AsyncInteractiveShell(InteractiveShell):
                 preprocessing_exc_tuple=preprocessing_exc_tuple,
                 cell_id=cell_id,
             )
-            return result  # noqa: RET504
+            result.formatted_traceback = self._traceback_var.get()  # type: ignore[attr-defined]
+            return result
         finally:
             self.events.trigger("post_execute")
             if not silent:

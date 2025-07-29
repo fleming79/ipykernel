@@ -50,7 +50,7 @@ In async-kernel the `kernel.shell` maintains a mapping of `namespace_id`'s to di
 This code will run in a `Caller` thread 'My thread' in the shell namespace 'My Namespace'.
 
 ```python
-# @thread, namespace=My namespace, thread_name=My thread
+###@thread, namespace=My namespace, thread_name=My thread
 
 import time
 

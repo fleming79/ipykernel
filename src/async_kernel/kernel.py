@@ -19,7 +19,7 @@ import traceback
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self
 
 import anyio
 import sniffio
@@ -36,17 +36,16 @@ from zmq import Context, Flag, PollEvent, Socket, SocketOption, SocketType
 
 from async_kernel import _version, utils
 from async_kernel.asyncshell import AsyncInteractiveShell, KernelInterruptError
-from async_kernel.caller import Caller
+from async_kernel.caller import Caller, CancelledError
 from async_kernel.debugger import Debugger
 from async_kernel.kernelspec import KernelName
-from async_kernel.typing import ExecuteContent, ExecuteJobInfo, ExecuteMode, Job, MsgType, NoValue, SocketID
+from async_kernel.typing import ExecuteContent, ExecuteMode, ExecuteSettings, Job, MsgType, NoValue, SocketID
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import CoroutineType, FrameType
 
     from anyio.abc import TaskStatus
-    from IPython.core.interactiveshell import ExecutionResult
 
     from async_kernel.comm import CommManager
     from async_kernel.iostream import OutStream
@@ -82,7 +81,7 @@ class Kernel(ConnectionFileMixin):
     _last_interrupt_frame = None
     _stop_event = Instance(threading.Event, ())
     _stop_on_error_time: float = 0
-    _interrupt_events: Container[set[threading.Event]] = Set()
+    _interrupters: Container[set[Callable[[], None]]] = Set()
     _sockets: Dict[SocketID, zmq.Socket] = Dict()
     _shell_handlers = Dict()
     _control_handlers = Dict()
@@ -436,7 +435,7 @@ class Kernel(ConnectionFileMixin):
                             msg_type=msg_type,
                         )
                         if msg_type == MsgType.execute_request:
-                            info = utils.get_execute_info(msg["content"])
+                            info = self._get_execute_settings(msg["content"])
                             if socket_id != SocketID.shell or info["execute_mode"] != ExecuteMode.queue:
                                 Caller().call_soon(self.execute_request, time.monotonic(), job, info)
                             else:
@@ -448,6 +447,28 @@ class Kernel(ConnectionFileMixin):
                     await anyio.wait_readable(socket)
             except (zmq.ContextTerminated, self.CancelledError):
                 return
+
+    @staticmethod
+    def _get_execute_settings(content: ExecuteContent) -> ExecuteSettings:
+        """Extract ExecuteSettings from the content."""
+        execute_mode = ExecuteMode.task if content.get("silent", True) else ExecuteMode.queue
+        info = ExecuteSettings(execute_mode=execute_mode)
+        if (code := content["code"].strip()).startswith("##@") and (header := code.split("\n", maxsplit=1)[0]):
+
+            def extract_value(key: Literal["namespace_id", "thread_name"]):
+                "Extracts the value from the header"
+                if len(s := header.split(f"{key}=", maxsplit=1)) == 2:
+                    info[key] = s[1].split(",")[0].strip().strip("'\"")
+
+            extract_value("namespace_id")
+            mode = header.removeprefix("##@").lower().strip().split(" ")[0].strip(",")
+            match mode:
+                case "task":
+                    info["execute_mode"] = ExecuteMode.task
+                case "thread":
+                    info["execute_mode"] = ExecuteMode.thread
+                    extract_value("thread_name")
+        return info
 
     async def _run_handler(self, handler: Callable[[Job], CoroutineType] | None, job: Job):
         self._job_var.set(job)
@@ -558,7 +579,7 @@ class Kernel(ConnectionFileMixin):
 
     async def _shell_execute_request_loop(self, *, task_status: TaskStatus):
         self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[
-            tuple[float, Job, ExecuteJobInfo]
+            tuple[float, Job, ExecuteSettings]
         ](max_buffer_size=1000)
         with contextlib.suppress(self.CancelledError):
             async with self._exec_receive_stream as receive_stream:
@@ -613,7 +634,7 @@ class Kernel(ConnectionFileMixin):
         }
         self.send_reply(job, {"comms": comms})
 
-    async def execute_request(self, received_time: float, job: Job[ExecuteContent], info: ExecuteJobInfo):
+    async def execute_request(self, received_time: float, job: Job[ExecuteContent], info: ExecuteSettings):
         """Perform the actual execute_request."""
         content = job["msg"]["content"].copy()
         silent = content["silent"]
@@ -641,32 +662,24 @@ class Kernel(ConnectionFileMixin):
                 cell_id = None if silent else job["msg"].get("metadata", {}).get("cellId")
                 user_expressions = info.get("user_expressions") or content.get("user_expressions", {})
                 self.shell.namespace_id = info.get("namespace_id", "")
-                interrupt = threading.Event()
-                result: ExecutionResult = cast("ExecutionResult", None)
-                traceback = None
-                if not silent:
-                    self._interrupt_events.add(interrupt)
-
-                async def run():
-                    nonlocal result, traceback
-                    result = await self.shell.run_cell_async(
-                        raw_cell=code,
-                        store_history=content.get("store_history", False),
-                        silent=silent,
-                        transformed_cell=self.shell.transform_cell(code),
-                        shell_futures=True,
-                        cell_id=cell_id,
-                    )
-                    traceback = self.shell._traceback_var.get()
-                    interrupt.set()
-
-                async with anyio.create_task_group() as tg:
-                    tg.start_soon(run)
-                    await utils.wait_thread_event(interrupt)
-                    if result is None:
-                        tg.cancel_scope.cancel()
-                self._interrupt_events.discard(interrupt)
-                err = result.error_before_exec or result.error_in_exec
+                pr = Caller().call_soon(
+                    self.shell.run_cell_async,
+                    raw_cell=code,
+                    store_history=content.get("store_history", False),
+                    silent=silent,
+                    transformed_cell=self.shell.transform_cell(code),
+                    shell_futures=True,
+                    cell_id=cell_id,
+                )
+                if interrupter := pr.cancel if not silent else None:
+                    self._interrupters.add(interrupter)
+                try:
+                    result = await pr.wait()
+                except CancelledError:
+                    result = None
+                if interrupter:
+                    self._interrupters.discard(interrupter)
+                err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError()
                 if user_expressions:
                     user_expressions = self.shell.user_expressions(user_expressions)
                 reply_content = {
@@ -677,7 +690,7 @@ class Kernel(ConnectionFileMixin):
                 if err:
                     reply_content.update(
                         {
-                            "traceback": traceback or [],
+                            "traceback": getattr(result, "formatted_traceback", None) or [],
                             "ename": type(err).__name__,
                             "evalue": str(err),
                         }
@@ -706,8 +719,8 @@ class Kernel(ConnectionFileMixin):
             time.sleep(0)
         else:
             os.kill(os.getpid(), signal.SIGINT)
-        for event in tuple(self._interrupt_events):
-            event.set()
+        for interrupter in tuple(self._interrupters):
+            interrupter()
         self.send_reply(job)
 
     async def complete_request(self, job: Job):

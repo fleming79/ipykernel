@@ -19,6 +19,7 @@ import async_kernel.utils
 from async_kernel.caller import Caller
 from async_kernel.comm import Comm
 from async_kernel.kernel import ExecuteMode, SocketID
+from async_kernel.typing import ExecuteContent, ExecuteSettings
 from tests import utils
 
 
@@ -273,7 +274,7 @@ async def test_comm_open_msg_close(client, kernel, mocker):
 
 async def test_interrupt_request(client, kernel):
     event = threading.Event()
-    kernel._interrupt_events.add(event)
+    kernel._interrupters.add(event.set)
     reply = await utils.send_control_message(client, "interrupt_request")
     assert reply["header"]["msg_type"] == "interrupt_reply"
     assert reply["content"] == {"status": "ok"}
@@ -475,7 +476,7 @@ async def test_run_thread_ns(client, kernel, namespace_id, mode: ExecuteMode):
     symbol = str(uuid.uuid4())
     kernel.shell.namespace_id = namespace_id
     kernel.shell.user_ns["my_local_variable"] = symbol
-    header = f'#@{mode} namespace_id="{namespace_id}'
+    header = f'##@{mode} namespace_id="{namespace_id}'
     if mode is ExecuteMode.thread:
         header += ",thread_name=My thread 1324"
 
@@ -496,3 +497,39 @@ test()
         assert any(inst for inst in Caller._instances if inst.name == "My thread 1324")
         assert Caller.list_threads() == ["My thread 1324"]
         Caller.get_instance(thread_name="My thread 1324").close()
+
+
+@pytest.mark.parametrize(
+    ("code", "silent", "expected"),
+    [
+        ("##@task", False, ExecuteSettings(execute_mode=ExecuteMode.task)),
+        ("print(1)", False, ExecuteSettings(execute_mode=ExecuteMode.queue)),
+        ("", True, ExecuteSettings(execute_mode=ExecuteMode.task)),
+        (
+            "##@thread, namespace_id= My namespace_id \nprint('hello')",
+            False,
+            ExecuteSettings(execute_mode=ExecuteMode.thread, namespace_id="My namespace_id"),
+        ),
+        (
+            "##@thread, namespace_id= My namespace_id,thread_name=My thread \nprint('hello')",
+            False,
+            ExecuteSettings(execute_mode=ExecuteMode.thread, namespace_id="My namespace_id", thread_name="My thread"),
+        ),
+        (
+            "##@namespace_id=1 @!%n🌋 \nprint(None)",
+            False,
+            ExecuteSettings(execute_mode=ExecuteMode.queue, namespace_id="1 @!%n🌋"),
+        ),
+    ],
+)
+def test_get_execute_info(code: str, silent: bool, expected: dict):
+    content = ExecuteContent(
+        code=code,
+        silent=silent,
+        store_history=True,
+        user_expressions={},
+        allow_stdin=False,
+        stop_on_error=True,
+    )
+    execute_info = async_kernel.Kernel._get_execute_settings(content)
+    assert execute_info == expected
