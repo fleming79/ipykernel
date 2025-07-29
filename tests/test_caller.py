@@ -156,7 +156,8 @@ class TestCaller:
             with pytest.raises(RuntimeError):
                 pending.wait_sync()
 
-    async def test_as_completed(self, anyio_backend, mocker):
+    @pytest.mark.parametrize("mode", ["restricted", "surge"])
+    async def test_as_completed(self, anyio_backend, mode: Literal["restricted", "surge"], mocker):
         mocker.patch.object(Caller, "MAX_IDLE_EVENT_THREADS", new=2)
 
         async def func():
@@ -177,14 +178,18 @@ class TestCaller:
             assert pending_.done()
         # work directly with iterator
         n_ = 0
-        async for pending in Caller.as_completed(Caller.to_thread(func) for _ in range(n)):
+        max_pending = Caller.MAX_IDLE_EVENT_THREADS if mode == "restricted" else n / 2
+        async for pending in Caller.as_completed((Caller.to_thread(func) for _ in range(n)), max_pending=max_pending):
             assert pending.done()
             n_ += 1
             thread = await pending.wait()
             threads.add(thread)
         assert n_ == n
-        assert len(threads) == Caller.MAX_IDLE_EVENT_THREADS
-        assert {caller.thread for caller in Caller._to_thread_pool} == threads
+        if mode == "restricted":
+            assert len(threads) == 2
+        else:
+            assert len(threads) > 2
+        assert len(Caller._to_thread_pool) == 2
 
     async def test_as_completed_error(self, anyio_backend):
         def func():
@@ -260,7 +265,7 @@ class TestCaller:
         with pytest.raises(CancelledError):
             await pr.wait()
         assert pr.done()
-        assert caller._closed
+        assert caller.closed
         with pytest.raises(anyio.ClosedResourceError):
             caller.call_soon(time.sleep, 0)
         with pytest.raises(CancelledError):
