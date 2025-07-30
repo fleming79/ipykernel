@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from io import TextIOBase
+from threading import Lock
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -14,6 +15,8 @@ if TYPE_CHECKING:
 
 class OutStream(TextIOBase):
     """A file like object that calls flusher with the string output when flush is called."""
+
+    _write_lock = Lock()
 
     def __init__(self, flusher: Callable[[str], None]):
         """
@@ -54,8 +57,9 @@ class OutStream(TextIOBase):
             number of items from input parameter written to stream.
 
         """
-        self._out = string
-        self.flush()
+        with self._write_lock:
+            self._out = string
+            self.flush()
         return len(string)
 
     def writelines(self, sequence):
