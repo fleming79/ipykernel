@@ -14,14 +14,88 @@ import anyio
 import anyio.to_thread
 import pytest
 import sniffio
+import zmq
 from anyio.abc import TaskStatus
 
-from async_kernel.caller import Caller, CancelledError
+from async_kernel.caller import Caller, CancelledError, Future
 
 
 @pytest.fixture(scope="module", params=["asyncio", "trio"])
 def anyio_backend(request):
     return request.param
+
+
+@pytest.fixture(scope="module", params=["tcp", "ipc"] if zmq.has("ipc") else ["tcp"])
+def transport(request):
+    return request.param
+
+
+@pytest.mark.anyio
+class TestFuture:
+    async def test_set_and_wait_result(self):
+        pr = Future()
+        done_called = False
+
+        def callback(obj):
+            nonlocal done_called
+            assert obj is pr
+            done_called = True
+
+        pr.add_done_callback(callback)
+        pr.set_result(42)
+        result = await pr.result()
+        assert result == 42
+        assert done_called
+
+    async def test_set_and_wait_exception(self):
+        pr = Future()
+        done_called = False
+
+        def callback(obj):
+            nonlocal done_called
+            assert obj is pr
+            done_called = True
+
+        pr.add_done_callback(callback)
+        assert not pr.done()
+        exc = ValueError("fail")
+        pr.set_exception(exc)
+        with pytest.raises(ValueError, match="fail") as e:
+            await pr.result()
+        assert e.value is exc
+        assert pr.done()
+        assert done_called
+        assert pr.remove_done_callback(callback) == 1
+
+    async def test_set_result_twice_raises(self):
+        pr = Future()
+        pr.set_result(1)
+        with pytest.raises(RuntimeError):
+            pr.set_result(2)
+
+    async def test_set_exception_twice_raises(self):
+        pr = Future()
+        pr.set_exception(ValueError())
+        with pytest.raises(RuntimeError):
+            pr.set_exception(ValueError())
+
+    async def test_set_result_after_exception_raises(self):
+        pr = Future()
+        assert pr.exception() is None
+        pr.set_exception(ValueError())
+        assert isinstance(pr.exception(), ValueError)
+        with pytest.raises(RuntimeError):
+            pr.set_result(1)
+
+    async def test_set_exception_after_result_raises(self):
+        pr = Future()
+        pr.set_result(1)
+        with pytest.raises(RuntimeError):
+            pr.set_exception(ValueError())
+
+    def test_cancel(self):
+        pr = Future()
+        assert pr.cancel()
 
 
 @pytest.mark.anyio
@@ -53,7 +127,7 @@ class TestCaller:
             pr = caller.call_later(my_func, 0.2, is_called, *args_kwargs[0], **args_kwargs[1])
             await is_called.wait()
             assert val == args_kwargs
-            assert (await pr.wait()) == args_kwargs
+            assert (await pr.result()) == args_kwargs
 
     async def test_anyio_to_thread(self):
         # Test the call works from another thread
@@ -65,7 +139,7 @@ class TestCaller:
 
                 async def runner():
                     pr = caller.call_soon(my_func, 1, 2, 3, a=10)
-                    result = await pr.wait()
+                    result = await pr.result()
                     assert result == ((1, 2, 3), {"a": 10})
 
                 anyio.run(runner)
@@ -123,10 +197,10 @@ class TestCaller:
         with context:
             match check_mode:
                 case "main":
-                    assert (await pending.wait()) == 10
+                    assert (await pending.result()) == 10
                 case "local":
-                    pending_local = caller.call_soon(pending.wait)
-                    result = await pending_local.wait()
+                    pending_local = caller.call_soon(pending.result)
+                    result = await pending_local.result()
                     assert result == 10
                 case "wait_sync":
                     assert pending.wait_sync() == 10
@@ -134,7 +208,7 @@ class TestCaller:
 
                     def another_thread():
                         async def waiter():
-                            result = await pending.wait()
+                            result = await pending.result()
                             assert result == 10
                             return result
 
@@ -172,7 +246,7 @@ class TestCaller:
         threads = set()
         n = 40
         pending = Caller.to_thread(time.sleep, 0)
-        await pending.wait()
+        await pending.result()
         # check can handle completed pending okay first
         async for pending_ in Caller.as_completed([pending]):
             assert pending_.done()
@@ -182,7 +256,7 @@ class TestCaller:
         async for pending in Caller.as_completed((Caller.to_thread(func) for _ in range(n)), max_pending=max_pending):
             assert pending.done()
             n_ += 1
-            thread = await pending.wait()
+            thread = await pending.result()
             threads.add(thread)
         assert n_ == n
         if mode == "restricted":
@@ -197,7 +271,7 @@ class TestCaller:
 
         async for pending in Caller.as_completed((Caller.to_thread(func) for _ in range(6)), max_pending=4):
             with pytest.raises(RuntimeError):
-                await pending.wait()
+                await pending.result()
 
     async def test_as_completed_cancelled(self, anyio_backend):
         items = {Caller.to_thread(anyio.sleep, 100) for _ in range(4)}
@@ -213,7 +287,7 @@ class TestCaller:
             tg.cancel_scope.cancel()
         for item in items:
             with pytest.raises(CancelledError):
-                await item.wait()
+                await item.result()
 
     async def test_call_early(self, anyio_backend):
         caller = Caller()
@@ -223,7 +297,7 @@ class TestCaller:
         await anyio.sleep(0.1)
         assert not pr.done()
         async with caller:
-            await pr.wait()
+            await pr.result()
 
     async def test_call_coroutine(self, anyio_backend):
         # Test we can await a coroutine, note that it is not permitted with the type hints,
@@ -239,11 +313,11 @@ class TestCaller:
 
         # Discouraged
         pr = Caller.to_thread(my_func())  # type: ignore[call-arg]
-        val = await pr.wait()
+        val = await pr.result()
         assert val is True
         # This the preferred way of calling.
         pr = Caller.to_thread(my_func)
-        val = await pr.wait()
+        val = await pr.result()
         assert val is True
 
     async def test_closed_in_call_soon(self, anyio_backend):
@@ -263,13 +337,13 @@ class TestCaller:
         never_called_pending = caller.call_later(str, 10)
         proceed.set()
         with pytest.raises(CancelledError):
-            await pr.wait()
+            await pr.result()
         assert pr.done()
         assert caller.closed
         with pytest.raises(anyio.ClosedResourceError):
             caller.call_soon(time.sleep, 0)
         with pytest.raises(CancelledError):
-            await never_called_pending.wait()
+            await never_called_pending.result()
 
     @pytest.mark.parametrize("mode", ["async", "blocking"])
     @pytest.mark.parametrize("cancel_mode", ["local", "thread"])
@@ -300,7 +374,7 @@ class TestCaller:
                 caller.to_thread(pr.cancel)
 
             with pytest.raises(anyio.ClosedResourceError):
-                await pr.wait()
+                await pr.result()
 
     async def test_cancelled_waiter(self, anyio_backend):
         # Cancelling the waiter should also cancel call soon operation.
@@ -311,7 +385,7 @@ class TestCaller:
         async with Caller() as caller:
             async with anyio.create_task_group() as tg:
                 pr = caller.call_soon(async_func)
-                tg.start_soon(pr.wait)
+                tg.start_soon(pr.result)
                 await anyio.sleep(0)
                 tg.cancel_scope.cancel()
             await anyio.sleep(0)

@@ -16,8 +16,7 @@ import anyio.abc
 from IPython.core.inputtransformer2 import leading_empty_lines
 from traitlets import Bool, Dict, HasTraits, Instance, Set, default
 
-from async_kernel import utils
-from async_kernel.pending_result import PendingResult
+from async_kernel import Future, utils
 
 if TYPE_CHECKING:
     from anyio.abc import TaskGroup
@@ -118,7 +117,7 @@ class DebugpyClient(HasTraits):
     SEPARATOR = b"\r\n\r\n"
     SEPARATOR_LENGTH = 4
     tcp_buffer = b""
-    _pending_responses: Dict[int, PendingResult] = Dict()
+    _pending_responses: Dict[int, Future] = Dict()
     capabilities = Dict()
     kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
     _socketstream: anyio.abc.SocketStream | None = None
@@ -134,10 +133,10 @@ class DebugpyClient(HasTraits):
     def connected(self):
         return bool(self._socketstream)
 
-    async def _send_request(self, request: dict) -> PendingResult:
+    async def _send_request(self, request: dict) -> Future:
         if not (socketstream := self._socketstream):
             raise RuntimeError
-        self._pending_responses[request["seq"]] = pending = PendingResult()
+        self._pending_responses[request["seq"]] = pending = Future()
         content = self._pack(request)
         content_length = str(len(content)).encode()
         buf = self.HEADER + content_length + self.SEPARATOR
@@ -158,8 +157,8 @@ class DebugpyClient(HasTraits):
                 self.log.debug("_put_message :%s %s", msg["type"], msg)
                 if msg["type"] == "event":
                     self.event_callback(msg)
-                elif pending_result := self._pending_responses.pop(msg["request_seq"], None):
-                    pending_result.set_result(msg)
+                elif future := self._pending_responses.pop(msg["request_seq"], None):
+                    future.set_result(msg)
             self.tcp_buffer = b""
 
     def get_host_port(self):
@@ -197,7 +196,7 @@ class DebugpyClient(HasTraits):
     async def send_dap_request(self, msg):
         """Send a dap request and return the response."""
         pending = await self._send_request(msg)
-        return await pending.wait()
+        return await pending.result()
 
 
 class Debugger(HasTraits):
@@ -552,7 +551,7 @@ class Debugger(HasTraits):
                 "command": "configurationDone",
             }
         )
-        return await pending_response.wait()
+        return await pending_response.result()
 
     async def do_configuration_done(self, message):
         """Handle a configuration done message."""

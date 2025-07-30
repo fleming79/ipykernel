@@ -99,7 +99,7 @@ def do_not_debug_this_thread(name=""):
 
 
 async def wait_thread_event(event: threading.Event):
-    """Wait for the threading event in a separate thread.
+    """Wait for the threading event using an anyio worker thread.
 
     The event will be set event if the coroutine is cancelled to ensure the thread is cleared.
     """

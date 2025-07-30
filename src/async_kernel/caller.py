@@ -13,13 +13,12 @@ import time
 import weakref
 from collections import deque
 from collections.abc import AsyncGenerator, Callable
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, Self, cast
 
 import anyio
 import sniffio
 from zmq import Context, Socket, SocketType
 
-from async_kernel.pending_result import PendingResult
 from async_kernel.typing import NoValue, T
 from async_kernel.utils import wait_thread_event
 
@@ -30,47 +29,140 @@ if TYPE_CHECKING:
 
     from async_kernel.typing import P
 
-__all__ = ["Caller", "CancelledError"]
+__all__ = ["Caller", "CancelledError", "Future"]
 
 
 class CancelledError(anyio.ClosedResourceError):
     "Used to indicate a pending result is cancelled"
 
 
-class CallerPendingResult(PendingResult[T], Generic[T]):
-    """A pending result for use with Caller.
+class InvalidStateError(RuntimeError):
+    pass
 
-    This class adds a cancel method which provides the mechanism to cancel the scope
-    in which the pending result execution is taking place. Note that blocking calls
-    and sync function may not cancel until the function is complete.
+
+class Future(Generic[T]):
+    """An anyio style Future for an eventual result.
+
+    It works like an asyncio Future and works in combination with Caller to enable
+    futures to be awaited from threads started by caller.
+
+    thread: The thread where the result must be set. Defaults to the current thread.
     """
 
-    _cancel_scope: anyio.CancelScope | None = None
-    _cancel = False
+    __slots__ = [
+        "_anyio_event_done",
+        "_cancel_scope",
+        "_cancelled",
+        "_done_callbacks",
+        "_event_done",
+        "_exception",
+        "_result",
+        "thread",
+    ]
+    _result: T
 
-    def cancel(self):
-        "Cancel the function call associated with this pending result."
+    def __init__(self, thread: threading.Thread | None = None) -> None:
+        self._event_done = threading.Event()
+        self._exception = None
+        self._anyio_event_done = None
+        self.thread = thread or threading.current_thread()
+        self._done_callbacks = []
+        self._cancelled = False
+        self._cancel_scope: anyio.CancelScope | None = None
+
+    async def result(self) -> T:
+        "Wait for the result (thread-safe)."
+        try:
+            if not self._event_done.is_set():
+                if threading.current_thread() is self.thread:
+                    if not self._anyio_event_done:
+                        self._anyio_event_done = anyio.Event()
+                    await self._anyio_event_done.wait()
+                else:
+                    await wait_thread_event(self._event_done)
+        except anyio.get_cancelled_exc_class():
+            self.cancel()
+            raise
+        if self._exception:
+            raise self._exception
+        return self._result
+
+    def wait_sync(self) -> T:
+        "Synchronously wait for the result."
+        if threading.current_thread() is self.thread:
+            raise InvalidStateError
+        self._event_done.wait()
+        if self._exception:
+            raise self._exception
+        return self._result
+
+    def set_result(self, value: T):
+        self._set_value("result", value)
+
+    def set_exception(self, exception: BaseException):
+        self._set_value("exception", exception)
+
+    def _set_value(self, mode: Literal["result", "exception"], value):
+        if self._event_done.is_set() or threading.current_thread() is not self.thread:
+            raise InvalidStateError
+        if mode == "exception":
+            self._exception = value
+        else:
+            self._result = value
+        self._event_done.set()
+        if self._anyio_event_done:
+            self._anyio_event_done.set()
+        for cb in reversed(self._done_callbacks):
+            try:
+                cb(self)
+            except Exception:
+                pass
+
+    def done(self):
+        """Return True if the Future is done.
+
+        Done means either that a result / exception are available."""
+        return self._event_done.is_set()
+
+    def add_done_callback(self, fn: Callable[[Self], object]):
+        self._done_callbacks.append(fn)
+
+    def cancel(self) -> bool:
+        """Cancel the Future and schedule callbacks.
+
+        Returns if it has been cancelled.
+        """
         if not self.done():
-            self._cancel = True
+            self._cancelled = True
             if scope := self._cancel_scope:
                 if threading.current_thread() is self.thread:
                     scope.cancel()
                 else:
                     Caller(self.thread).call_no_context(self.cancel)
+        return self.cancelled()
 
-    def _set_cancel_scope(self, scope: anyio.CancelScope):
-        if self._cancel:
+    def cancelled(self) -> bool:
+        return self._cancelled
+
+    def exception(self) -> BaseException | None:
+        "Return the exception that was set on this Future."
+        return self._exception
+
+    def remove_done_callback(self, fn: Callable[[Self], object], /) -> int:
+        """Remove all instances of a callback from the callbacks list.
+
+        Returns the number of callbacks removed.
+        """
+        n = 0
+        while fn in self._done_callbacks:
+            n += 1
+            self._done_callbacks.remove(fn)
+        return n
+
+    def set_cancel_scope(self, scope: anyio.CancelScope):
+        if self._cancelled:
             scope.cancel()
         self._cancel_scope = scope
-
-    @override
-    async def wait(self) -> T:
-        "Wait for the pending result to complete."
-        try:
-            return await super().wait()
-        except anyio.get_cancelled_exc_class():
-            self.cancel()
-            raise
 
 
 class Caller:
@@ -98,9 +190,7 @@ class Caller:
     _pool_instances: ClassVar[weakref.WeakSet[Self]] = weakref.WeakSet()
     MAX_IDLE_EVENT_THREADS = 10
     _taskgroup: TaskGroup | None = None
-    _jobs: deque[
-        tuple[contextvars.Context, tuple[CallerPendingResult, float, float, Callable, tuple, dict]] | Callable[[], Any]
-    ]
+    _jobs: deque[tuple[contextvars.Context, tuple[Future, float, float, Callable, tuple, dict]] | Callable[[], Any]]
     _jobs_added: threading.Event
     _closed = False
     iopub_sockets: ClassVar[weakref.WeakKeyDictionary[threading.Thread, Socket]] = weakref.WeakKeyDictionary()
@@ -164,7 +254,7 @@ class Caller:
 
     async def _wrap_call(
         self,
-        pending: CallerPendingResult[T],
+        pending: Future[T],
         starttime: float,
         delay: float,
         func: Callable[..., T | Awaitable[T]],
@@ -173,14 +263,14 @@ class Caller:
     ):
         try:
             with anyio.CancelScope() as scope:
-                pending._set_cancel_scope(scope)
+                pending.set_cancel_scope(scope)
                 try:
                     if (delay_ := delay - time.monotonic() + starttime) > 0:
                         await anyio.sleep(float(delay_))
                     result = func(*args, **kwargs) if callable(func) else func
                     while inspect.isawaitable(result):
                         result = await result
-                    if pending._cancel and not scope.cancel_called:
+                    if pending._cancelled and not scope.cancel_called:
                         scope.cancel()
                     if scope.cancel_called:
                         # await here to allow the cancel scope to be raised/caught.
@@ -228,9 +318,7 @@ class Caller:
         raise RuntimeError(msg)
 
     @classmethod
-    def to_thread(
-        cls, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs
-    ) -> CallerPendingResult[T]:
+    def to_thread(cls, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
         """Call func in a separate thread.
 
         A pool of 'workers' is are used to provide an event loop
@@ -240,7 +328,7 @@ class Caller:
     @classmethod
     def to_thread_by_thread_name(
         cls, thread_name: str | None, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs
-    ) -> CallerPendingResult[T]:
+    ) -> Future[T]:
         """Call the function in the Caller thread by name.
 
         If a caller thread is not found a new one is created with the specified name."""
@@ -280,11 +368,11 @@ class Caller:
     @classmethod
     async def as_completed(
         cls,
-        items: Iterable[PendingResult[T]] | AsyncGenerator[PendingResult[T]],
+        items: Iterable[Future[T]] | AsyncGenerator[Future[T]],
         *,
         max_pending: NoValue | int = NoValue,
     ):
-        """An iterator to get PendingResults as they complete.
+        """An iterator to get Futures as they complete.
 
         Pass a generator should you wish to limit the number pending jobs when calling to_thread/to_task etc.
         Pass a set/list/tuple to ensure all get monitored at once.
@@ -293,10 +381,9 @@ class Caller:
             The maximum number of pending results to maintain. This may be useful when passing a generator
             and you wish to limit the number pending tasks.
         """
-
         event_pending_done = threading.Event()
-        has_result: deque[PendingResult[T]] = deque()
-        pending_results: set[PendingResult[T]] = set()
+        has_result: deque[Future[T]] = deque()
+        futures: set[Future[T]] = set()
         done = False
         resume: anyio.Event | None = None
 
@@ -316,13 +403,13 @@ class Caller:
             try:
                 while True:
                     pr = await anext(gen) if isinstance(gen, AsyncGenerator) else next(gen)
-                    pending_results.add(pr)
+                    futures.add(pr)
                     if pr.done():
                         has_result.append(pr)
                         event_pending_done.set()
                     else:
                         pr.add_done_callback(_on_done)
-                    if max_pending_ and len(pending_results) == max_pending_:
+                    if max_pending_ and len(futures) == max_pending_:
                         resume = anyio.Event()
                         await resume.wait()
             except (StopAsyncIteration, StopIteration):
@@ -334,11 +421,11 @@ class Caller:
         try:
             async with anyio.create_task_group() as tg:
                 await tg.start(iter_items)
-                while pending_results or not done:
+                while futures or not done:
                     if has_result:
                         event_pending_done.clear()
                         pr = has_result.popleft()
-                        pending_results.discard(pr)
+                        futures.discard(pr)
                         yield pr
                         if resume:
                             resume.set()
@@ -346,8 +433,8 @@ class Caller:
                     if not has_result:
                         await wait_thread_event(event_pending_done)
         finally:
-            for pending in pending_results:
-                if isinstance(pending, CallerPendingResult):
+            for pending in futures:
+                if isinstance(pending, Future):
                     pending.cancel()
 
     @classmethod
@@ -377,7 +464,7 @@ class Caller:
 
     def call_later(
         self, func: Callable[P, T | Awaitable[T]], delay=0.0, /, *args: P.args, **kwargs: P.kwargs
-    ) -> CallerPendingResult[T]:
+    ) -> Future[T]:
         """Schedules a function or coroutine for execution.
 
         If the instance is not open in an async context, the function will be queued and
@@ -387,7 +474,7 @@ class Caller:
         """
         if self._closed:
             raise anyio.ClosedResourceError
-        pending = CallerPendingResult(thread=self.thread)
+        pending = Future(thread=self.thread)
         if threading.current_thread() is self.thread and (tg := self._taskgroup):
             tg.start_soon(self._wrap_call, pending, time.monotonic(), delay, func, args, kwargs)
         else:
@@ -396,9 +483,7 @@ class Caller:
         self._outstanding += 1
         return pending
 
-    def call_soon(
-        self, func: Callable[P, T | Awaitable[T]], *args: P.args, **kwargs: P.kwargs
-    ) -> CallerPendingResult[T]:
+    def call_soon(self, func: Callable[P, T | Awaitable[T]], *args: P.args, **kwargs: P.kwargs) -> Future[T]:
         "Calls call_later with delay=0.0."
         return self.call_later(func, 0.0, *args, **kwargs)
 

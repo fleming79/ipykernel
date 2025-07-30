@@ -82,7 +82,7 @@ class Kernel(ConnectionFileMixin):
     _last_interrupt_frame = None
     _stop_event = Instance(threading.Event, ())
     _stop_on_error_time: float = 0
-    _interrupts: Container[set[Callable[[], None]]] = Set()
+    _interrupts: Container[set[Callable[[], object]]] = Set()
     _sockets: Dict[SocketID, zmq.Socket] = Dict()
     _shell_handlers = Dict()
     _control_handlers = Dict()
@@ -672,7 +672,7 @@ class Kernel(ConnectionFileMixin):
                 self._interrupts.add(pr.cancel)
                 pr.add_done_callback(lambda pr: self._interrupts.discard(pr.cancel))
             try:
-                result = await pr.wait()
+                result = await pr.result()
             except CancelledError:
                 result = None
             err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError()
