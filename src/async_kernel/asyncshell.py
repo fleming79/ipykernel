@@ -205,8 +205,9 @@ class AsyncInteractiveShell(InteractiveShell):
     @property
     def user_ns(self):
         if (namespace_id := self.namespace_id) not in self.namespaces:
-            self.namespaces[namespace_id] = self._user_ns_builtin.copy()
+            self.namespaces[namespace_id] = ns = self._user_ns_builtin.copy()
             self.init_user_ns()
+            self.user_ns_hidden.update(ns)
         return self.namespaces[namespace_id]
 
     @user_ns.setter
