@@ -658,9 +658,9 @@ class Kernel(ConnectionFileMixin):
                 cell_id=None if silent else job["msg"].get("metadata", {}).get("cellId"),
             )
             if info["execute_mode"] == ExecuteMode.thread:
-                pr = Caller.to_thread_by_thread_name(info.get("thread_name"), f)
+                fut = Caller.to_thread_by_thread_name(info.get("thread_name"), f)
             else:
-                pr = Caller().call_soon(f)
+                fut = Caller().call_soon(f)
             if not silent:
                 self.iopub_send(
                     msg_or_type="execute_input",
@@ -669,10 +669,10 @@ class Kernel(ConnectionFileMixin):
                     ident=self._topic("execute_input"),
                 )
             if not silent:
-                self._interrupts.add(pr.cancel)
-                pr.add_done_callback(lambda pr: self._interrupts.discard(pr.cancel))
+                self._interrupts.add(fut.cancel)
+                fut.add_done_callback(lambda fut: self._interrupts.discard(fut.cancel))
             try:
-                result = await pr.result()
+                result = await fut
             except CancelledError:
                 result = None
             err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError()

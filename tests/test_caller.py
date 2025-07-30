@@ -4,6 +4,7 @@
 # Distributed under the terms of the Modified BSD License.
 
 import contextlib
+import inspect
 import threading
 import time
 from contextvars import ContextVar
@@ -33,69 +34,70 @@ def transport(request):
 @pytest.mark.anyio
 class TestFuture:
     async def test_set_and_wait_result(self):
-        pr = Future()
+        fut = Future[int]()
+        assert inspect.isawaitable(fut)
         done_called = False
 
         def callback(obj):
             nonlocal done_called
-            assert obj is pr
+            assert obj is fut
             done_called = True
 
-        pr.add_done_callback(callback)
-        pr.set_result(42)
-        result = await pr.result()
+        fut.add_done_callback(callback)
+        fut.set_result(42)
+        result = await fut
         assert result == 42
         assert done_called
 
     async def test_set_and_wait_exception(self):
-        pr = Future()
+        fut = Future()
         done_called = False
 
         def callback(obj):
             nonlocal done_called
-            assert obj is pr
+            assert obj is fut
             done_called = True
 
-        pr.add_done_callback(callback)
-        assert not pr.done()
+        fut.add_done_callback(callback)
+        assert not fut.done()
         exc = ValueError("fail")
-        pr.set_exception(exc)
+        fut.set_exception(exc)
         with pytest.raises(ValueError, match="fail") as e:
-            await pr.result()
+            await fut
         assert e.value is exc
-        assert pr.done()
+        assert fut.done()
         assert done_called
-        assert pr.remove_done_callback(callback) == 1
+        assert fut.remove_done_callback(callback) == 1
 
     async def test_set_result_twice_raises(self):
-        pr = Future()
-        pr.set_result(1)
+        fut = Future()
+        fut.set_result(1)
         with pytest.raises(RuntimeError):
-            pr.set_result(2)
+            fut.set_result(2)
 
     async def test_set_exception_twice_raises(self):
-        pr = Future()
-        pr.set_exception(ValueError())
+        fut = Future()
+        fut.set_exception(ValueError())
         with pytest.raises(RuntimeError):
-            pr.set_exception(ValueError())
+            fut.set_exception(ValueError())
 
     async def test_set_result_after_exception_raises(self):
-        pr = Future()
-        assert pr.exception() is None
-        pr.set_exception(ValueError())
-        assert isinstance(pr.exception(), ValueError)
+        fut = Future()
+        assert fut.exception() is None
+        fut.set_exception(ValueError())
+        assert isinstance(fut.exception(), ValueError)
         with pytest.raises(RuntimeError):
-            pr.set_result(1)
+            fut.set_result(1)
 
     async def test_set_exception_after_result_raises(self):
-        pr = Future()
-        pr.set_result(1)
+        fut = Future()
+        fut.set_result(1)
         with pytest.raises(RuntimeError):
-            pr.set_exception(ValueError())
+            fut.set_exception(ValueError())
 
     def test_cancel(self):
-        pr = Future()
-        assert pr.cancel()
+        fut = Future()
+        assert fut.cancel()
 
 
 @pytest.mark.anyio
@@ -124,10 +126,10 @@ class TestCaller:
 
         async with Caller() as caller:
             is_called = anyio.Event()
-            pr = caller.call_later(my_func, 0.2, is_called, *args_kwargs[0], **args_kwargs[1])
+            fut = caller.call_later(my_func, 0.2, is_called, *args_kwargs[0], **args_kwargs[1])
             await is_called.wait()
             assert val == args_kwargs
-            assert (await pr.result()) == args_kwargs
+            assert (await fut) == args_kwargs
 
     async def test_anyio_to_thread(self):
         # Test the call works from another thread
@@ -138,8 +140,8 @@ class TestCaller:
                     return args, kwargs
 
                 async def runner():
-                    pr = caller.call_soon(my_func, 1, 2, 3, a=10)
-                    result = await pr.result()
+                    fut = caller.call_soon(my_func, 1, 2, 3, a=10)
+                    result = await fut
                     assert result == ((1, 2, 3), {"a": 10})
 
                 anyio.run(runner)
@@ -193,22 +195,22 @@ class TestCaller:
         else:
             expr = "invalid call"
             context = pytest.raises(SyntaxError)
-        pending = caller.call_later(eval, 0.2, expr)
+        fut = caller.call_later(eval, 0.2, expr)
         with context:
             match check_mode:
                 case "main":
-                    assert (await pending.result()) == 10
+                    assert (await fut) == 10
                 case "local":
-                    pending_local = caller.call_soon(pending.result)
-                    result = await pending_local.result()
+                    fut_local = caller.call_soon(fut.result)
+                    result = await fut_local
                     assert result == 10
                 case "wait_sync":
-                    assert pending.wait_sync() == 10
+                    assert fut.wait_sync() == 10
                 case "asyncio" | "trio":
 
                     def another_thread():
                         async def waiter():
-                            result = await pending.result()
+                            result = await fut
                             assert result == 10
                             return result
 
@@ -226,9 +228,9 @@ class TestCaller:
 
     async def test_error_wait_sync(self):
         async with Caller() as caller:
-            pending = caller.call_later(anyio.sleep, 0.1, 0.1)
+            fut = caller.call_later(anyio.sleep, 0.1, 0.1)
             with pytest.raises(RuntimeError):
-                pending.wait_sync()
+                fut.wait_sync()
 
     @pytest.mark.parametrize("mode", ["restricted", "surge"])
     async def test_as_completed(self, anyio_backend, mode: Literal["restricted", "surge"], mocker):
@@ -243,20 +245,20 @@ class TestCaller:
                 await anyio.sleep(n / 10)
             return threading.current_thread()
 
-        threads = set()
+        threads = set[threading.Thread]()
         n = 40
-        pending = Caller.to_thread(time.sleep, 0)
-        await pending.result()
-        # check can handle completed pending okay first
-        async for pending_ in Caller.as_completed([pending]):
-            assert pending_.done()
+        fut = Caller.to_thread(time.sleep, 0)
+        await fut
+        # check can handle completed future okay first
+        async for fut_ in Caller.as_completed([fut]):
+            assert fut_.done()
         # work directly with iterator
         n_ = 0
-        max_pending = Caller.MAX_IDLE_EVENT_THREADS if mode == "restricted" else n / 2
-        async for pending in Caller.as_completed((Caller.to_thread(func) for _ in range(n)), max_pending=max_pending):
-            assert pending.done()
+        max_concurrent = Caller.MAX_IDLE_EVENT_THREADS if mode == "restricted" else n / 2
+        async for fut in Caller.as_completed((Caller.to_thread(func) for _ in range(n)), max_concurrent=max_concurrent):
+            assert fut.done()
             n_ += 1
-            thread = await pending.result()
+            thread = await fut
             threads.add(thread)
         assert n_ == n
         if mode == "restricted":
@@ -269,9 +271,9 @@ class TestCaller:
         def func():
             raise RuntimeError()
 
-        async for pending in Caller.as_completed((Caller.to_thread(func) for _ in range(6)), max_pending=4):
+        async for fut in Caller.as_completed((Caller.to_thread(func) for _ in range(6)), max_concurrent=4):
             with pytest.raises(RuntimeError):
-                await pending.result()
+                await fut
 
     async def test_as_completed_cancelled(self, anyio_backend):
         items = {Caller.to_thread(anyio.sleep, 100) for _ in range(4)}
@@ -287,17 +289,17 @@ class TestCaller:
             tg.cancel_scope.cancel()
         for item in items:
             with pytest.raises(CancelledError):
-                await item.result()
+                await item
 
     async def test_call_early(self, anyio_backend):
         caller = Caller()
         with pytest.raises(RuntimeError, match=".*not currently open in an async context"):
             caller.taskgroup  # noqa: B018
-        pr = caller.call_soon(time.sleep, 0.1)
+        fut = caller.call_soon(time.sleep, 0.1)
         await anyio.sleep(0.1)
-        assert not pr.done()
+        assert not fut.done()
         async with caller:
-            await pr.result()
+            await fut
 
     async def test_call_coroutine(self, anyio_backend):
         # Test we can await a coroutine, note that it is not permitted with the type hints,
@@ -312,12 +314,12 @@ class TestCaller:
             return True
 
         # Discouraged
-        pr = Caller.to_thread(my_func())  # type: ignore[call-arg]
-        val = await pr.result()
+        fut = Caller.to_thread(my_func())  # type: ignore[call-arg]
+        val = await fut
         assert val is True
         # This the preferred way of calling.
-        pr = Caller.to_thread(my_func)
-        val = await pr.result()
+        fut = Caller.to_thread(my_func)
+        val = await fut
         assert val is True
 
     async def test_closed_in_call_soon(self, anyio_backend):
@@ -331,19 +333,19 @@ class TestCaller:
             caller.close()
             await anyio.sleep_forever()
 
-        pr = Caller.to_thread(close_tsc)
-        caller = Caller.get_instance(pr.thread.name)
+        fut = Caller.to_thread(close_tsc)
+        caller = Caller.get_instance(fut.thread.name)
         ready.wait()
-        never_called_pending = caller.call_later(str, 10)
+        never_called_future = caller.call_later(str, 10)
         proceed.set()
         with pytest.raises(CancelledError):
-            await pr.result()
-        assert pr.done()
+            await fut
+        assert fut.done()
         assert caller.closed
         with pytest.raises(anyio.ClosedResourceError):
             caller.call_soon(time.sleep, 0)
         with pytest.raises(CancelledError):
-            await never_called_pending.result()
+            await never_called_future
 
     @pytest.mark.parametrize("mode", ["async", "blocking"])
     @pytest.mark.parametrize("cancel_mode", ["local", "thread"])
@@ -367,14 +369,14 @@ class TestCaller:
                 my_func = blocking_func
 
         async with Caller() as caller:
-            pr = caller.call_soon(my_func)
+            fut = caller.call_soon(my_func)
             if cancel_mode == "local":
-                pr.cancel()
+                fut.cancel()
             else:
-                caller.to_thread(pr.cancel)
+                caller.to_thread(fut.cancel)
 
             with pytest.raises(anyio.ClosedResourceError):
-                await pr.result()
+                await fut
 
     async def test_cancelled_waiter(self, anyio_backend):
         # Cancelling the waiter should also cancel call soon operation.
@@ -384,9 +386,9 @@ class TestCaller:
 
         async with Caller() as caller:
             async with anyio.create_task_group() as tg:
-                pr = caller.call_soon(async_func)
-                tg.start_soon(pr.result)
+                fut = caller.call_soon(async_func)
+                tg.start_soon(fut.result)
                 await anyio.sleep(0)
                 tg.cancel_scope.cancel()
             await anyio.sleep(0)
-            assert isinstance(pr._exception, CancelledError)
+            assert isinstance(fut.exception(), CancelledError)
