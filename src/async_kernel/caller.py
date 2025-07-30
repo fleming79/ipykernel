@@ -93,7 +93,7 @@ class Future(Awaitable[T]):
     def wait_sync(self) -> T:
         "Synchronously wait for the result."
         if threading.current_thread() is self.thread:
-            raise InvalidStateError
+            raise RuntimeError
         self._event_done.wait()
         if self._exception:
             raise self._exception
