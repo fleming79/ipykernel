@@ -668,15 +668,13 @@ class Kernel(ConnectionFileMixin):
                     parent=job["msg"],
                     ident=self._topic("execute_input"),
                 )
-            if cb := pr.cancel if not silent else None:
-                self._interrupts.add(cb)
+            if not silent:
+                self._interrupts.add(pr.cancel)
+                pr.add_done_callback(lambda pr: self._interrupts.discard(pr.cancel))
             try:
                 result = await pr.wait()
             except CancelledError:
                 result = None
-            finally:
-                if cb:
-                    self._interrupts.discard(cb)
             err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError()
             reply_content = {
                 "status": "error" if err else "ok",
