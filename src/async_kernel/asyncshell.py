@@ -20,7 +20,7 @@ from IPython.core.interactiveshell import ExecutionResult, InteractiveShell, Int
 from IPython.core.magic import Magics, line_magic, magics_class
 from jupyter_client.jsonutil import json_default
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import CBool, Dict, Instance, Type, default, observe
+from traitlets import CBool, Dict, Instance, Integer, Type, default, observe
 from typing_extensions import override
 
 import async_kernel
@@ -137,6 +137,7 @@ class AsyncInteractiveShell(InteractiveShell):
     namespaces: Dict[str, dict] = Dict()
     user_ns_hidden = Dict()
     _main_mod_cache = Dict()
+    execution_count = Integer(0)
 
     @default("banner1")
     def _default_banner1(self):

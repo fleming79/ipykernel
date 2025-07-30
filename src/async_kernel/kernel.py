@@ -8,6 +8,7 @@ import atexit
 import builtins
 import contextlib
 import contextvars
+import functools
 import getpass
 import logging
 import os
@@ -645,9 +646,9 @@ class Kernel(ConnectionFileMixin):
             self._publish_status("idle", job)
             return
 
-        async def _do_execute():
-            self.shell.namespace_id = info.get("namespace_id", "")  # set the ContextVar
-            pr = Caller().call_soon(
+        async def execute_request_handler(job):
+            self.shell.namespace_id = info.get("namespace_id", "")  # namespace_id is a ContextVar
+            f = functools.partial(
                 self.shell.run_cell_async,
                 raw_cell=content["code"],
                 store_history=content.get("store_history", False),
@@ -656,32 +657,10 @@ class Kernel(ConnectionFileMixin):
                 shell_futures=True,
                 cell_id=None if silent else job["msg"].get("metadata", {}).get("cellId"),
             )
-            if interrupt := pr.cancel if not silent else None:
-                self._interrupts.add(interrupt)
-            try:
-                result = await pr.wait()
-            except CancelledError:
-                result = None
-            finally:
-                if interrupt:
-                    self._interrupts.discard(interrupt)
-            err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError()
-            ue = info.get("user_expressions") or content.get("user_expressions", {})
-            user_expressions = self.shell.user_expressions(ue) if ue else {}
-            reply_content = {
-                "status": "ok" if not err else "error",
-                "execution_count": self.shell.execution_count - 1,
-                "user_expressions": user_expressions,
-            }
-            if err:
-                reply_content.update({
-                    "traceback": getattr(result, "formatted_traceback", None) or [],
-                    "ename": type(err).__name__,
-                    "evalue": str(err),
-                })
-            return reply_content
-
-        async def execute_request_handler(job):
+            if info["execute_mode"] == ExecuteMode.thread:
+                pr = Caller.to_thread_by_thread_name(info.get("thread_name"), f)
+            else:
+                pr = Caller().call_soon(f)
             if not silent:
                 self.iopub_send(
                     msg_or_type="execute_input",
@@ -689,15 +668,30 @@ class Kernel(ConnectionFileMixin):
                     parent=job["msg"],
                     ident=self._topic("execute_input"),
                 )
-            stop_on_error = content.pop("stop_on_error", True)
-            if info["execute_mode"] == ExecuteMode.thread:
-                coro = Caller.to_thread_by_thread_name(info.get("thread_name"), _do_execute).wait()
-            else:
-                coro = _do_execute()
-            reply_content = await coro
-            if not silent and stop_on_error and reply_content.get("status") == "error":
-                self._stop_on_error_time = time.monotonic()
-                self.log.info("An error occurred in a non-silent execution request")
+            if cb := pr.cancel if not silent else None:
+                self._interrupts.add(cb)
+            try:
+                result = await pr.wait()
+            except CancelledError:
+                result = None
+            finally:
+                if cb:
+                    self._interrupts.discard(cb)
+            err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError()
+            reply_content = {
+                "status": "error" if err else "ok",
+                "execution_count": self.shell.execution_count,
+                "user_expressions": self.shell.user_expressions(content.get("user_expressions", {})),
+            }
+            if err:
+                reply_content |= {
+                    "traceback": getattr(result, "formatted_traceback", None) or [],
+                    "ename": type(err).__name__,
+                    "evalue": str(err),
+                }
+                if not silent and content.get("stop_on_error"):
+                    self._stop_on_error_time = time.monotonic()
+                    self.log.info("An error occurred in a non-silent execution request")
             self.send_reply(job, reply_content)
 
         await self._run_handler(execute_request_handler, job)
