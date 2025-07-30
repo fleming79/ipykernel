@@ -614,10 +614,7 @@ class Kernel(ConnectionFileMixin):
         while not (socket.poll(100) & PollEvent.POLLIN):
             if self._last_interrupt_frame:
                 raise KernelInterruptError
-        _, reply = self.session.recv(socket)
-        if reply:
-            return reply["content"]["value"]
-        raise ValueError
+        return self.session.recv(socket)[1]["content"]["value"]  # type: ignore[index]
 
     async def kernel_info_request(self, job: Job):
         """Handle a kernel info request."""
