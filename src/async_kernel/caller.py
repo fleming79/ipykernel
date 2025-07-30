@@ -335,8 +335,6 @@ class Caller:
             async with anyio.create_task_group() as tg:
                 await tg.start(iter_items)
                 while pending_results or not done:
-                    if tg.cancel_scope.cancel_called:
-                        await anyio.sleep(0)
                     if has_result:
                         event_pending_done.clear()
                         pr = has_result.popleft()
