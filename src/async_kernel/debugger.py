@@ -196,10 +196,6 @@ class DebugpyClient(HasTraits):
         finally:
             self._socketstream = None
 
-    async def send_dap_request(self, msg):
-        """Send a dap request and return the response."""
-        return await (await self._send_request(msg))
-
 
 class Debugger(HasTraits):
     """The debugger class."""
@@ -243,8 +239,8 @@ class Debugger(HasTraits):
         }
         self._forbidden_names = tuple(self.kernel.shell.user_ns_hidden)
 
-    async def _forward_message(self, msg):
-        return await self.debugpy_client.send_dap_request(msg)
+    async def send_dap_request(self, msg):
+        return await (await self.debugpy_client._send_request(msg))
 
     def next_seq(self):
         "A monotonically decreasing negative number so as not to clash with the frontend seq."
@@ -257,7 +253,7 @@ class Debugger(HasTraits):
 
                 async def _handle_stopped_event():
                     req = {"seq": self.next_seq(), "type": "request", "command": "threads"}
-                    rep = await self._forward_message(req)
+                    rep = await self.send_dap_request(req)
                     for thread in rep["body"]["threads"]:
                         if thread["name"] not in ["IPythonHistorySavingThread"]:
                             self.stopped_threads.add(thread["id"])
@@ -273,7 +269,6 @@ class Debugger(HasTraits):
                 self.stopped_threads.remove(event["body"]["threadId"])
         elif event["event"] == "initialized":
             self.init_event.set()
-
         self._publish_event(event)
 
     def _publish_event(self, event: dict):
@@ -314,7 +309,7 @@ class Debugger(HasTraits):
         if handler := self.started_debug_handlers.get(command):
             return await handler(message)
 
-        return await self._forward_message(message)
+        return await self.send_dap_request(message)
 
     ## Static handlers
 
@@ -329,7 +324,7 @@ class Debugger(HasTraits):
             if leading_empty_lines in cleanup_transforms:
                 index = cleanup_transforms.index(leading_empty_lines)
                 self._removed_cleanup[index] = cleanup_transforms.pop(index)
-        return await self._forward_message(message)
+        return await self.send_dap_request(message)
 
     async def do_debug_info(self, message):
         """Handle a debug info message."""
@@ -398,7 +393,7 @@ class Debugger(HasTraits):
             # request to get the rich representation of the variable
             code = f"get_ipython().display_formatter.format({var_name})"
             frame_id = message["arguments"]["frameId"]
-            reply = await self._forward_message(
+            reply = await self.send_dap_request(
                 {
                     "type": "request",
                     "command": "evaluate",
@@ -451,7 +446,7 @@ class Debugger(HasTraits):
         src_var_name = message["arguments"]["srcVariableName"]
         src_frame_id = message["arguments"]["srcFrameId"]
         # Copy the variable to the user_ns
-        await self._forward_message(
+        await self.send_dap_request(
             {
                 "type": "request",
                 "command": "evaluate",
@@ -463,7 +458,7 @@ class Debugger(HasTraits):
                 },
             }
         )
-        return await self._forward_message(
+        return await self.send_dap_request(
             {
                 "type": "request",
                 "command": "evaluate",
@@ -480,7 +475,7 @@ class Debugger(HasTraits):
         """Handle a set breakpoints message."""
         source = message["arguments"]["source"]["path"]
         self.breakpoint_list[source] = message["arguments"]["breakpoints"]
-        message_response = await self._forward_message(message)
+        message_response = await self.send_dap_request(message)
         # debugpy can set breakpoints on different lines than the ones requested,
         # so we want to record the breakpoints that were actually added
         if message_response.get("success"):
@@ -505,7 +500,7 @@ class Debugger(HasTraits):
 
     async def do_stack_trace(self, message):
         """Handle a stack trace message."""
-        reply = await self._forward_message(message)
+        reply = await self.send_dap_request(message)
         # The stackFrames array can have the following content:
         # { frames from the notebook}
         # ...
@@ -532,7 +527,7 @@ class Debugger(HasTraits):
             variables = self.variable_explorer.get_children_variables(message["arguments"]["variablesReference"])
             return self._build_variables_response(message, variables)
 
-        reply = await self._forward_message(message)
+        reply = await self.send_dap_request(message)
         # TODO : check start and count arguments work as expected in debugpy
         if "body" in reply:
             variables = [var for var in reply["body"]["variables"] if self._accept_variable(var["name"])]
@@ -546,7 +541,7 @@ class Debugger(HasTraits):
             message["arguments"]["debugOptions"] = ["justMyCode"]
         reply = await self.debugpy_client._send_request(message)
         await self.init_event.wait()
-        await self._forward_message(
+        await self.send_dap_request(
             {
                 "type": "request",
                 "seq": self.next_seq(),
@@ -568,7 +563,7 @@ class Debugger(HasTraits):
         }
 
     async def do_disconnect(self, message):
-        response = await self._forward_message(message)
+        response = await self.send_dap_request(message)
         # Restore the leading whitespace remove transform.
         cleanup_transforms = self.kernel.shell.input_transformer_manager.cleanup_transforms
         for index in sorted(self._removed_cleanup):
@@ -580,7 +575,7 @@ class Debugger(HasTraits):
 
     async def disconnect(self):
         if self.debugpy_client.connected:
-            await self._forward_message(
+            await self.send_dap_request(
                 {
                     "type": "request",
                     "command": "disconnect",
