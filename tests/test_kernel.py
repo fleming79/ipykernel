@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import pathlib
 import threading
 import time
 import uuid
@@ -416,7 +417,8 @@ async def test_matplotlib_inline_on_import(kernel, client):
 
 
 @pytest.mark.parametrize("code", ["%connect_info", "%matplotlib --list", "%threads"])
-async def test_magic(client, code: str):
+async def test_magic(client, code: str, kernel, monkeypatch):
+    monkeypatch.setenv("JUPYTER_RUNTIME_DIR", str(pathlib.Path(kernel.connection_file).parent))
     assert code
     _, reply = await utils.execute(client, code, clear_pub=False)
     assert reply["status"] == "ok"
