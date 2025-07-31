@@ -18,6 +18,9 @@ from jupyter_client.kernelspec import KernelSpec, _is_valid_kernel_name
 RESOURCES = Path(__file__).parent.joinpath("resources")
 
 
+__all__ = ["KernelName", "make_argv", "write_all_kernelspec", "write_all_kernelspec"]
+
+
 class KernelName(enum.StrEnum):
     asyncio = "async"
     trio = "async-trio"

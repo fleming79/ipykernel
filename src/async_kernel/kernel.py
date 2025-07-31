@@ -58,7 +58,8 @@ __all__ = ["Kernel", "KernelInterruptError"]
 class KernelInterruptError(InterruptedError):
     "Raised to interrupt the kernel."
 
-    # We subclass from InterruptedError so the async event loop can catch the exception.
+    # We subclass from InterruptedError so if the backend is a SelectorEventLoop it can catch the exception.
+    # Other event loops don't appear to have this issue.
 
 
 class Kernel(ConnectionFileMixin):
@@ -299,7 +300,6 @@ class Kernel(ConnectionFileMixin):
             if self._last_interrupt_frame is frame:
                 # A blocking call that is not an execute_request
                 raise KernelInterruptError
-
             self._last_interrupt_frame = frame
         else:
             signal.default_int_handler(signum, frame)
@@ -336,7 +336,6 @@ class Kernel(ConnectionFileMixin):
             # We use an internal proxy to collect pub messages for distribution.
             # Each thread needs to open its own socket to publish to the internal proxy.
             # When thread-safe sockets become available, this could be changed...
-            # which could come from any thread in this process.
             # Ref: https://zguide.zeromq.org/docs/chapter2/#Working-with-Messages (fig 14)
             frontend: zmq.Socket = Context.instance().socket(zmq.XSUB)
             frontend.bind(Caller.iopub_url)
@@ -557,7 +556,7 @@ class Kernel(ConnectionFileMixin):
             ident=self._topic("status"),
         )
 
-    def send_reply(self, job: Job, content: dict | None = None):
+    def _send_reply(self, job: Job, content: dict | None = None):
         content = content or {}
         if "status" not in content:
             content["status"] = "ok"
@@ -582,7 +581,7 @@ class Kernel(ConnectionFileMixin):
             "evalue": evalue,
             "traceback": traceback or [],
         }
-        self.send_reply(job, content)
+        self._send_reply(job, content)
 
     async def _shell_execute_request_loop(self, *, task_status: TaskStatus):
         self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[
@@ -624,8 +623,7 @@ class Kernel(ConnectionFileMixin):
 
     async def kernel_info_request(self, job: Job):
         """Handle a kernel info request."""
-
-        self.send_reply(job, self.kernel_info)
+        self._send_reply(job, self.kernel_info)
 
     async def comm_info_request(self, job: Job):
         """Handle a comm info request."""
@@ -636,7 +634,7 @@ class Kernel(ConnectionFileMixin):
             for (k, v) in tuple(self.comm_manager.comms.items())
             if v.target_name == target_name or target_name is None
         }
-        self.send_reply(job, {"comms": comms})
+        self._send_reply(job, {"comms": comms})
 
     async def execute_request(self, received_time: float, job: Job[ExecuteContent], info: ExecuteSettings):
         """Perform the actual execute_request."""
@@ -693,7 +691,7 @@ class Kernel(ConnectionFileMixin):
                 if not silent and content.get("stop_on_error"):
                     self._stop_on_error_time = time.monotonic()
                     self.log.info("An error occurred in a non-silent execution request")
-            self.send_reply(job, reply_content)
+            self._send_reply(job, reply_content)
 
         await self._run_handler(execute_request_handler, job)
 
@@ -707,18 +705,18 @@ class Kernel(ConnectionFileMixin):
             os.kill(os.getpid(), signal.SIGINT)
         for interrupter in tuple(self._interrupts):
             interrupter()
-        self.send_reply(job)
+        self._send_reply(job)
 
     async def complete_request(self, job: Job):
         """Handle a completion request."""
         parent = job["msg"]
         matches = await self.do_complete(parent["content"]["code"], parent["content"]["cursor_pos"])
-        self.send_reply(job, matches)
+        self._send_reply(job, matches)
 
     async def is_complete_request(self, job: Job):
         """Handle an is_complete request."""
         reply_content = await self.do_is_complete(job["msg"]["content"]["code"])
-        self.send_reply(job, reply_content)
+        self._send_reply(job, reply_content)
 
     async def inspect_request(self, job: Job):
         """Handle an inspect request."""
@@ -729,12 +727,12 @@ class Kernel(ConnectionFileMixin):
             int(content.get("detail_level", 0)),
             set(content.get("omit_sections", [])),
         )
-        self.send_reply(job, reply_content)
+        self._send_reply(job, reply_content)
 
     async def history_request(self, job: Job):
         """Handle a history request."""
         reply_content = await self.do_history(**job["msg"]["content"])  # type: ignore[call-arg]
-        self.send_reply(job, reply_content)
+        self._send_reply(job, reply_content)
 
     async def comm_open(self, job: Job):
         self.comm_manager.comm_open(job["socket"], job["ident"], job["msg"])  # type: ignore[call-arg]
@@ -748,13 +746,13 @@ class Kernel(ConnectionFileMixin):
     async def control_shutdown_request(self, job: Job):
         """Handle a shutdown request."""
         await self.debugger.disconnect()
-        self.send_reply(job, {"status": "ok", "restart": job["msg"]["content"].get("restart", False)})
+        self._send_reply(job, {"status": "ok", "restart": job["msg"]["content"].get("restart", False)})
         self.stop()
 
     async def debug_request(self, job: Job):
         """Handle a debug request."""
         content = await self.debugger.process_request(job["msg"]["content"])
-        self.send_reply(job=job, content=content)
+        self._send_reply(job=job, content=content)
 
     async def do_complete(self, code, cursor_pos):
         """Completions from IPython, using Jedi."""
@@ -795,7 +793,6 @@ class Kernel(ConnectionFileMixin):
     async def do_inspect(self, code, cursor_pos, detail_level=0, omit_sections=()):
         """Handle code inspection."""
         name = token_at_cursor(code, cursor_pos)
-
         reply_content: dict[str, Any] = {"status": "ok"}
         reply_content["data"] = {}
         reply_content["metadata"] = {}
@@ -822,7 +819,6 @@ class Kernel(ConnectionFileMixin):
         unique=False,
     ):
         """Handle code history."""
-
         history_manager = self.shell.history_manager
         assert history_manager
         if hist_access_type == "tail":
