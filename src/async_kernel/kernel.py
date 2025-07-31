@@ -489,7 +489,9 @@ class Kernel(ConnectionFileMixin):
             self._publish_status("busy", job)
             await handler(job)
         except Exception as e:
-            self._send_error_reply(job, ename=str(type(e).__name__), evalue=str(e), traceback=traceback.format_stack())
+            self._send_error_reply(
+                job, ename=str(type(e).__name__), evalue=str(e), traceback=traceback.format_exception(e)
+            )
             self.log.exception("Exception in message handler:", exc_info=e)
         finally:
             self._publish_status("idle", job)
