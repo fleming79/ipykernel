@@ -489,9 +489,7 @@ class Kernel(ConnectionFileMixin):
             self._publish_status("busy", job)
             await handler(job)
         except Exception as e:
-            self._send_error_reply(
-                job, ename=str(type(e).__name__), evalue=str(e), traceback=traceback.format_exception(e)
-            )
+            self._send_reply(job, utils.error_to_dict(e))
             self.log.exception("Exception in message handler:", exc_info=e)
         finally:
             self._publish_status("idle", job)
@@ -563,6 +561,7 @@ class Kernel(ConnectionFileMixin):
         )
 
     def _send_reply(self, job: Job, content: dict | None = None):
+        "Send the content as in the reply to the job."
         content = content or {}
         if "status" not in content:
             content["status"] = "ok"
@@ -577,17 +576,6 @@ class Kernel(ConnectionFileMixin):
             self.log.debug(
                 "send_reply: '%s' msg_id: %s %s", msg["msg_type"], job["msg"]["header"]["msg_id"], msg["content"]
             )
-
-    def _send_error_reply(self, job: Job, *, ename="RuntimeError", evalue="", traceback: list[str] | None = None):
-        "Send a reply to the request"
-        content = {
-            "status": "error",
-            "execution_count": self.shell.execution_count,
-            "ename": ename,
-            "evalue": evalue,
-            "traceback": traceback or [],
-        }
-        self._send_reply(job, content)
 
     async def _shell_execute_request_loop(self, *, task_status: TaskStatus):
         self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[
@@ -649,7 +637,9 @@ class Kernel(ConnectionFileMixin):
         if not silent and received_time < self._stop_on_error_time:
             self.log.info("Aborting execute_request: %s", job)
             self._publish_status("busy", job)
-            self._send_error_reply(job, evalue="Aborting due to prior exception")
+            content = utils.error_to_dict(RuntimeError("Aborting due to prior exception"))
+            content["execution_count"] = self.shell.execution_count
+            self._send_reply(job, content)
             self._publish_status("idle", job)
             return
 
@@ -689,11 +679,7 @@ class Kernel(ConnectionFileMixin):
                 "user_expressions": self.shell.user_expressions(content.get("user_expressions", {})),
             }
             if err:
-                reply_content |= {
-                    "traceback": getattr(result, "formatted_traceback", None) or [],
-                    "ename": type(err).__name__,
-                    "evalue": str(err),
-                }
+                reply_content.update(utils.error_to_dict(err))
                 if not silent and content.get("stop_on_error"):
                     self._stop_on_error_time = time.monotonic()
                     self.log.info("An error occurred in a non-silent execution request")

@@ -119,7 +119,6 @@ class AsyncInteractiveShell(InteractiveShell):
     """A subclass of InteractiveShell for ZMQ."""
 
     _namespace_var: ClassVar[ContextVar[str]] = ContextVar("namespace_id", default="")
-    _traceback_var: ClassVar[ContextVar[list | None]] = ContextVar("last_traceback", default=None)
     displayhook_class = Type(AsyncDisplayHook)
     display_pub_class = Type(AsyncDisplayPublisher)
     displayhook: Instance[AsyncDisplayHook]
@@ -214,24 +213,19 @@ class AsyncInteractiveShell(InteractiveShell):
         preprocessing_exc_tuple: tuple | None = None,
         cell_id: str | None = None,
     ) -> ExecutionResult:
-        self._traceback_var.set(None)
-        result = None
-        try:
-            result = await super().run_cell_async(
-                raw_cell=raw_cell,
-                store_history=store_history,
-                silent=silent,
-                shell_futures=shell_futures,
-                transformed_cell=transformed_cell,
-                preprocessing_exc_tuple=preprocessing_exc_tuple,
-                cell_id=cell_id,
-            )
-            result.formatted_traceback = self._traceback_var.get()  # type: ignore[attr-defined]
-            return result
-        finally:
-            self.events.trigger("post_execute")
-            if not silent:
-                self.events.trigger("post_run_cell", result)
+        result = await super().run_cell_async(
+            raw_cell=raw_cell,
+            store_history=store_history,
+            silent=silent,
+            shell_futures=shell_futures,
+            transformed_cell=transformed_cell,
+            preprocessing_exc_tuple=preprocessing_exc_tuple,
+            cell_id=cell_id,
+        )
+        self.events.trigger("post_execute")
+        if not silent:
+            self.events.trigger("post_run_cell", result)
+        return result
 
     @override
     def _showtraceback(self, etype, evalue, stb):
@@ -239,8 +233,6 @@ class AsyncInteractiveShell(InteractiveShell):
             msg_or_type="error",
             content={"traceback": stb, "ename": str(etype.__name__), "evalue": str(evalue)},
         )
-        # store the formatted traceback
-        self._traceback_var.set(stb)
 
     def init_magics(self):
         """Initialize magics."""

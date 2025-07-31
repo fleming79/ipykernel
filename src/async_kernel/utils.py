@@ -8,6 +8,7 @@ import errno
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Literal
 
@@ -112,3 +113,16 @@ async def wait_thread_event(event: threading.Event):
         await anyio.to_thread.run_sync(_in_thread_call)
     finally:
         event.set()
+
+
+def error_to_dict(error: BaseException):
+    """Convert the error to a dict.
+
+    ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#request-reply
+    """
+    return {
+        "status": "error",
+        "ename": type(error).__name__,
+        "evalue": str(error),
+        "traceback": traceback.format_exception(error),
+    }
