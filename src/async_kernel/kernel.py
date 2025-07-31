@@ -773,12 +773,8 @@ class Kernel(ConnectionFileMixin):
             }
             for comp in completions
         ]
-        if completions:
-            s, e = completions[0].start, completions[0].end
-            matches = [c.text for c in completions]
-        else:
-            s = e = cursor_pos
-            matches = []
+        s, e = completions[0].start, completions[0].end if completions else (cursor_pos, cursor_pos)
+        matches = [c.text for c in completions]
         return {
             "matches": matches,
             "cursor_end": e,
