@@ -304,6 +304,7 @@ async def test_interrupt_request_blocking_task(subprocess_kernels_client):
     code = """
 async def test():
     import time
+    from async_kernel.kernel import KernelInterruptError
     started.set()
     await anyio.sleep(0.01)
     try:
@@ -313,7 +314,8 @@ async def test():
     print("Failed")
 import anyio
 started = anyio.Event()
-caller.call_soon(test)
+from async_kernel import Caller
+Caller().call_soon(test)
 await started.wait()
 """
     client = subprocess_kernels_client
@@ -425,7 +427,7 @@ async def test_shell_required_properites(kernel):
 
 async def test_shell_can_set_namespace(kernel):
     kernel.shell.user_ns = {}
-    assert set(kernel.shell.user_ns).intersection(kernel.shell._user_ns_builtin)
+    assert set(kernel.shell.user_ns) == {"Out", "_oh", "In", "exit", "_dh", "open", "get_ipython", "_ih", "quit"}
 
 
 @pytest.mark.parametrize("mode", ExecuteMode)
@@ -448,8 +450,8 @@ print("{mode.name}")
 @pytest.mark.parametrize(
     "code",
     [
-        "caller.call_later(str, 0, 123)",
-        "caller.call_soon(print, 'hello')",
+        "from async_kernel import Caller; Caller().call_later(str, 0, 123)",
+        "from async_kernel import Caller; Caller().call_soon(print, 'hello')",
     ],
 )
 async def test_namespace_default(client, code: str):

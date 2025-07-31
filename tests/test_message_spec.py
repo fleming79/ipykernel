@@ -72,6 +72,7 @@ async def test_execute_stop_on_error(client):
         [
             # sleep to ensure subsequent message is waiting in the queue to be aborted
             # async sleep to ensure coroutines are processing while this happens
+            "import anyio",
             "await anyio.sleep(0.1)",
             "raise ValueError()",
         ]

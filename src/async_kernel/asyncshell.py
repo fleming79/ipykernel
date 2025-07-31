@@ -12,7 +12,6 @@ import threading
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar
 
-import anyio
 import IPython.core.release
 from IPython.core.displayhook import DisplayHook
 from IPython.core.displaypub import DisplayPublisher
@@ -192,29 +191,16 @@ class AsyncInteractiveShell(InteractiveShell):
         self._namespace_var.set(value)
 
     @property
-    def _user_ns_builtin(self):
-        return {
-            "anyio": anyio,
-            "caller": self.kernel.main_thread_caller,
-            "KernelInterruptError": KernelInterruptError,
-            "CancelledError": self.kernel.CancelledError,
-            "Caller": Caller,
-            "shell": self,
-        }
-
-    @property
     def user_ns(self):
         if (namespace_id := self.namespace_id) not in self.namespaces:
-            self.namespaces[namespace_id] = ns = self._user_ns_builtin.copy()
+            self.namespaces[namespace_id] = {}
             self.init_user_ns()
-            self.user_ns_hidden.update(ns)
         return self.namespaces[namespace_id]
 
     @user_ns.setter
     def user_ns(self, ns: dict):
         assert hasattr(ns, "clear")
         assert isinstance(ns, dict)
-        ns.update(self._user_ns_builtin)
         self.namespaces[self.namespace_id] = ns
         self.init_user_ns()
 
