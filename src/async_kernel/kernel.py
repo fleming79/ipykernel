@@ -36,7 +36,7 @@ from traitlets import Bool, Container, Dict, DottedObjectName, Enum, Instance, S
 from zmq import Context, Flag, PollEvent, Socket, SocketOption, SocketType
 
 from async_kernel import _version, utils
-from async_kernel.asyncshell import AsyncInteractiveShell, KernelInterruptError
+from async_kernel.asyncshell import AsyncInteractiveShell
 from async_kernel.caller import Caller, CancelledError
 from async_kernel.debugger import Debugger
 from async_kernel.kernelspec import KernelName
@@ -52,7 +52,13 @@ if TYPE_CHECKING:
     from async_kernel.iostream import OutStream
 
 
-__all__ = ["Kernel"]
+__all__ = ["Kernel", "KernelInterruptError"]
+
+
+class KernelInterruptError(InterruptedError):
+    "Raised to interrupt the kernel."
+
+    # We subclass from InterruptedError so the async event loop can catch the exception.
 
 
 class Kernel(ConnectionFileMixin):
