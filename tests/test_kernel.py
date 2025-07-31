@@ -374,6 +374,11 @@ async def test_debug_static(kernel, client, command: str, mocker):
         assert reply["content"]["body"] == {"content": code}
 
 
+async def test_debug_raises_no_socket(kernel):
+    with pytest.raises(RuntimeError):
+        await kernel.debugger.debugpy_client._send_request({})
+
+
 async def test_debug_not_connected(kernel, client):
     reply = await utils.send_control_message(
         client, "debug_request", {"type": "request", "seq": 1, "command": "disconnect", "arguments": {}}

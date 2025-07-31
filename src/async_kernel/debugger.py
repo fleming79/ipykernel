@@ -106,7 +106,10 @@ class VariableExplorer(HasTraits):
         var_ref = variable_ref
         if not var_ref:
             var_ref = id(self.frame)
-        variables = self.suspended_frame_manager.get_variable(var_ref)
+        try:
+            variables = self.suspended_frame_manager.get_variable(var_ref)
+        except KeyError:
+            return []
         return [x.get_var_data() for x in variables.get_children_variables()]
 
 
