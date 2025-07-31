@@ -75,6 +75,13 @@ async def test_simple_print(kernel, client, quiet: bool):
         await utils.clear_iopub(client)
 
 
+@pytest.mark.parametrize("quiet", [True, False])
+async def test_bad_message(client, quiet: bool):
+    client.shell_channel.socket.send(b"")
+    client.control_channel.socket.send(b"")
+    await utils.execute(client, "")
+
+
 @pytest.mark.parametrize("test_mode", ["interrupt", "reply", "allow_stdin=False"])
 @pytest.mark.parametrize("mode", ["input", "password"])
 async def test_input(

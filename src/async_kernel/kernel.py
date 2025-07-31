@@ -425,12 +425,16 @@ class Kernel(ConnectionFileMixin):
                 task_status.started()
                 while True:
                     while socket.get(SocketOption.EVENTS) & PollEvent.POLLIN:  # type: ignore[call-arg]
-                        ident, msg = self.session.recv(socket, copy=False)
+                        try:
+                            ident, msg = self.session.recv(socket, copy=False)
+                            assert ident
+                            assert msg
+                        except Exception as e:
+                            self.log.debug("Bad message on %s: %s", socket_id, e)
+                            continue
                         if socket_id == SocketID.shell:
                             # Reset the frame to show the main thread is not blocked.
                             self._last_interrupt_frame = None
-                        if not ident or not msg:
-                            continue
                         msg_type = msg["header"]["msg_type"]
                         self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, msg)
                         job = Job(
