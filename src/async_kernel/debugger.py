@@ -8,7 +8,6 @@ import os
 import re
 import sys
 import threading
-import typing as t
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,6 +21,7 @@ if TYPE_CHECKING:
     from anyio.abc import TaskGroup
 
     from async_kernel import Kernel
+    from async_kernel.typing import DebugMessage
 
 try:
     if "PYDEVD_IPYTHON_COMPATIBLE_DEBUGGING" not in os.environ:
@@ -156,7 +156,7 @@ class DebugpyClient(HasTraits):
             for buf in data[1:]:
                 size, raw_msg = buf.split(self.SEPARATOR, maxsplit=1)
                 size = int(size)
-                msg: dict[str, t.Any] = self._unpack(raw_msg[:size])
+                msg: DebugMessage = self._unpack(raw_msg[:size])
                 self.log.debug("_put_message :%s %s", msg["type"], msg)
                 if msg["type"] == "event":
                     self.event_callback(msg)
@@ -230,7 +230,7 @@ class Debugger(HasTraits):
         }
         self._forbidden_names = tuple(self.kernel.shell.user_ns_hidden)
 
-    async def send_dap_request(self, msg):
+    async def send_dap_request(self, msg: DebugMessage, /):
         return await (await self.debugpy_client._send_request(msg))
 
     def next_seq(self):
@@ -279,22 +279,22 @@ class Debugger(HasTraits):
             and not variable_name.startswith("_i")
         )
 
-    async def process_request(self, message: dict[str, t.Any]):
+    async def process_request(self, msg: DebugMessage, /):
         """Process a request."""
-        command = message["command"]
+        command = msg["command"]
         if handler := self.static_debug_handlers.get(command):
-            return await handler(message)
+            return await handler(msg)
         if not self.debugpy_client.connected:
             self.log.debug("Not ready - ignoring command: '%s'", command)
             return {}
         if handler := self.started_debug_handlers.get(command):
-            return await handler(message)
+            return await handler(msg)
 
-        return await self.send_dap_request(message)
+        return await self.send_dap_request(msg)
 
     ## Static handlers
 
-    async def do_initialize(self, message):
+    async def do_initialize(self, msg: DebugMessage, /):
         "Initialize debugpy server starting as required."
         if not self.debugpy_client.connected:
             ready = anyio.Event()
@@ -305,9 +305,9 @@ class Debugger(HasTraits):
             if leading_empty_lines in cleanup_transforms:
                 index = cleanup_transforms.index(leading_empty_lines)
                 self._removed_cleanup[index] = cleanup_transforms.pop(index)
-        return await self.send_dap_request(message)
+        return await self.send_dap_request(msg)
 
-    async def do_debug_info(self, message):
+    async def do_debug_info(self, msg: DebugMessage, /):
         """Handle a debug info message."""
         if not _is_debugpy_available or utils.LAUNCHED_BY_DEBUGPY:
             return {}
@@ -317,9 +317,9 @@ class Debugger(HasTraits):
         compiler = self.kernel.shell.compile
         return {
             "type": "response",
-            "request_seq": message["seq"],
+            "request_seq": msg["seq"],
             "success": True,
-            "command": message["command"],
+            "command": msg["command"],
             "body": {
                 "isStarted": self.debugpy_client.connected,
                 "hashMethod": compiler.hash_method,
@@ -334,7 +334,7 @@ class Debugger(HasTraits):
             },
         }
 
-    async def do_inspect_variables(self, message):
+    async def do_inspect_variables(self, msg: DebugMessage, /):
         """Handle an inspect variables message."""
         self.variable_explorer.untrack_all()
         # looks like the implementation of untrack_all in ptvsd
@@ -343,17 +343,17 @@ class Debugger(HasTraits):
         self.variable_explorer = VariableExplorer()
         self.variable_explorer.track()
         variables = self.variable_explorer.get_children_variables()
-        return self._build_variables_response(message, variables)
+        return self._build_variables_response(msg, variables)
 
-    async def do_rich_inspect_variables(self, message):
+    async def do_rich_inspect_variables(self, msg: DebugMessage, /):
         """Handle a rich inspect variables message."""
         reply = {
             "type": "response",
-            "sequence_seq": message["seq"],
+            "sequence_seq": msg["seq"],
             "success": False,
-            "command": message["command"],
+            "command": msg["command"],
         }
-        var_name = message["arguments"].get("variableName", "")
+        var_name = msg["arguments"].get("variableName", "")
         valid_name = str.isidentifier(var_name)
         if not valid_name:
             reply["body"] = {"data": {}, "metadata": {}}
@@ -373,7 +373,7 @@ class Debugger(HasTraits):
             # The code has stopped on a breakpoint, we use the evaluate
             # request to get the rich representation of the variable
             code = f"get_ipython().display_formatter.format({var_name})"
-            frame_id = message["arguments"]["frameId"]
+            frame_id = msg["arguments"]["frameId"]
             reply = await self.send_dap_request(
                 {
                     "type": "request",
@@ -392,11 +392,11 @@ class Debugger(HasTraits):
         reply["success"] = True
         return reply
 
-    async def do_modules(self, message):
+    async def do_modules(self, msg: DebugMessage, /):
         """Handle a modules message."""
         modules = list(sys.modules.values())
-        startModule = message.get("startModule", 0)
-        moduleCount = message.get("moduleCount", len(modules))
+        startModule = msg.get("startModule", 0)
+        moduleCount = msg.get("moduleCount", len(modules))
         mods = []
         for i in range(startModule, moduleCount):
             module = modules[i]
@@ -405,27 +405,27 @@ class Debugger(HasTraits):
                 mods.append({"id": i, "name": module.__name__, "path": filename})
         return {"body": {"modules": mods, "totalModules": len(modules)}}
 
-    async def do_dump_cell(self, message):
+    async def do_dump_cell(self, msg: DebugMessage, /):
         """Handle a dump cell message."""
-        code = message["arguments"]["code"]
+        code = msg["arguments"]["code"]
         path = self.kernel.shell.compile.get_file_name(code)
         path.parent.mkdir(exist_ok=True)
         with path.open("w") as f:
             f.write(code)
         return {
             "type": "response",
-            "request_seq": message["seq"],
+            "request_seq": msg["seq"],
             "success": True,
-            "command": message["command"],
+            "command": msg["command"],
             "body": {"sourcePath": str(path)},
         }
 
     # Started handlers (requires debug_client connection)
 
-    async def do_copy_to_globals(self, message):
-        dst_var_name = message["arguments"]["dstVariableName"]
-        src_var_name = message["arguments"]["srcVariableName"]
-        src_frame_id = message["arguments"]["srcFrameId"]
+    async def do_copy_to_globals(self, msg: DebugMessage, /):
+        dst_var_name = msg["arguments"]["dstVariableName"]
+        src_var_name = msg["arguments"]["srcVariableName"]
+        src_frame_id = msg["arguments"]["srcFrameId"]
         # Copy the variable to the user_ns
         await self.send_dap_request(
             {
@@ -443,7 +443,7 @@ class Debugger(HasTraits):
             {
                 "type": "request",
                 "command": "evaluate",
-                "seq": message["seq"],
+                "seq": msg["seq"],
                 "arguments": {
                     "expression": f"globals()['{dst_var_name}'] = {src_var_name}",
                     "frameId": src_frame_id,
@@ -452,11 +452,11 @@ class Debugger(HasTraits):
             }
         )
 
-    async def do_set_breakpoints(self, message):
+    async def do_set_breakpoints(self, msg: DebugMessage, /):
         """Handle a set breakpoints message."""
-        source = message["arguments"]["source"]["path"]
-        self.breakpoint_list[source] = message["arguments"]["breakpoints"]
-        message_response = await self.send_dap_request(message)
+        source = msg["arguments"]["source"]["path"]
+        self.breakpoint_list[source] = msg["arguments"]["breakpoints"]
+        message_response = await self.send_dap_request(msg)
         # debugpy can set breakpoints on different lines than the ones requested,
         # so we want to record the breakpoints that were actually added
         if message_response.get("success"):
@@ -465,10 +465,10 @@ class Debugger(HasTraits):
             ]
         return message_response
 
-    async def do_source(self, message):
+    async def do_source(self, msg: DebugMessage, /):
         """Handle a source message."""
-        reply = {"type": "response", "request_seq": message["seq"], "command": message["command"]}
-        if (path := Path(message["arguments"].get("source", {}).get("path", "missing"))).is_file():
+        reply = {"type": "response", "request_seq": msg["seq"], "command": msg["command"]}
+        if (path := Path(msg["arguments"].get("source", {}).get("path", "missing"))).is_file():
             with path.open("r", encoding="utf-8") as f:
                 reply["success"] = True
                 reply["body"] = {"content": f.read()}
@@ -479,9 +479,9 @@ class Debugger(HasTraits):
 
         return reply
 
-    async def do_stack_trace(self, message):
+    async def do_stack_trace(self, msg: DebugMessage, /):
         """Handle a stack trace message."""
-        reply = await self.send_dap_request(message)
+        reply = await self.send_dap_request(msg)
         # The stackFrames array can have the following content:
         # { frames from the notebook}
         # ...
@@ -501,25 +501,25 @@ class Debugger(HasTraits):
             pass
         return reply
 
-    async def do_variables(self, message):
+    async def do_variables(self, msg: DebugMessage, /):
         """Handle a variables message."""
         reply = {}
         if not await self.get_stopped_threads():
-            variables = self.variable_explorer.get_children_variables(message["arguments"]["variablesReference"])
-            return self._build_variables_response(message, variables)
-        reply = await self.send_dap_request(message)
+            variables = self.variable_explorer.get_children_variables(msg["arguments"]["variablesReference"])
+            return self._build_variables_response(msg, variables)
+        reply = await self.send_dap_request(msg)
         if "body" in reply:
             variables = [var for var in reply["body"]["variables"] if self._accept_variable(var["name"])]
             reply["body"]["variables"] = variables
         return reply
 
-    async def do_attach(self, message):
+    async def do_attach(self, msg: DebugMessage, /):
         """Handle an attach message."""
         assert _HOST_PORT
-        message["arguments"]["connect"] = {"host": _HOST_PORT[0], "port": _HOST_PORT[1]}
+        msg["arguments"]["connect"] = {"host": _HOST_PORT[0], "port": _HOST_PORT[1]}
         if self.just_my_code:
-            message["arguments"]["debugOptions"] = ["justMyCode"]
-        reply = await self.debugpy_client._send_request(message)
+            msg["arguments"]["debugOptions"] = ["justMyCode"]
+        reply = await self.debugpy_client._send_request(msg)
         await self.init_event.wait()
         await self.send_dap_request(
             {
@@ -530,20 +530,20 @@ class Debugger(HasTraits):
         )
         return await reply
 
-    async def do_configuration_done(self, message):
+    async def do_configuration_done(self, msg: DebugMessage, /):
         """Handle a configuration done message."""
         # This is only supposed to be called during initialize but can come at anytime. Ref: https://microsoft.github.io/debug-adapter-protocol/specification#Events_Initialized
         # see : https://github.com/jupyterlab/jupyterlab/issues/17673
         return {
-            "seq": message["seq"],
+            "seq": msg["seq"],
             "type": "response",
-            "request_seq": message["seq"],
+            "request_seq": msg["seq"],
             "success": True,
-            "command": message["command"],
+            "command": msg["command"],
         }
 
-    async def do_disconnect(self, message):
-        response = await self.send_dap_request(message)
+    async def do_disconnect(self, msg: DebugMessage, /):
+        response = await self.send_dap_request(msg)
         # Restore the leading whitespace remove transform.
         cleanup_transforms = self.kernel.shell.input_transformer_manager.cleanup_transforms
         for index in sorted(self._removed_cleanup):

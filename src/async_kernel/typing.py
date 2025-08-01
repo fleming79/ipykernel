@@ -11,7 +11,7 @@ from typing_extensions import Sentinel
 if TYPE_CHECKING:
     import zmq
 
-__all__ = ["Job", "Message", "MsgHeader", "SocketID"]
+__all__ = ["DebugMessage", "Job", "Message", "MsgHeader", "SocketID"]
 
 
 NoValue = Sentinel("NoValue")
@@ -95,3 +95,6 @@ class ExecuteContent(TypedDict):
     user_expressions: dict[str, str]
     allow_stdin: bool
     stop_on_error: bool
+
+
+DebugMessage = dict[str, Any]
