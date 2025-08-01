@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 import anyio.abc
 from IPython.core.inputtransformer2 import leading_empty_lines
-from traitlets import Bool, Dict, HasTraits, Instance, Set, default
+from traitlets import Bool, Dict, HasTraits, Instance, default
 
 from async_kernel import Future, utils
 
@@ -149,7 +149,7 @@ class DebugpyClient(HasTraits):
         return fut
 
     def put_tcp_frame(self, frame: bytes):
-        """Put a tcp frame in the queue."""
+        """Buffer the frame and process the buffer."""
         self.tcp_buffer += frame
         data = self.tcp_buffer.split(self.HEADER)
         if len(data) > 1:
@@ -163,14 +163,6 @@ class DebugpyClient(HasTraits):
                 elif future := self._future_responses.pop(msg["request_seq"], None):
                     future.set_result(msg)
             self.tcp_buffer = b""
-
-    def get_host_port(self):
-        """Get the host debugpy port."""
-        if not _HOST_PORT:
-            msg = "host port not available until debugpy is listening!"
-            raise RuntimeError(msg)
-        host, port = _HOST_PORT
-        return {"host": host, "port": port}
 
     async def connect_tcp_socket(self, ready: anyio.Event):
         """Connect to the tcp socket."""
@@ -202,7 +194,6 @@ class Debugger(HasTraits):
 
     _seq = 0
     breakpoint_list = Dict()
-    stopped_threads = Set()
     _removed_cleanup = Dict()
     just_my_code = Bool(True)
     variable_explorer = Instance(VariableExplorer, ())
@@ -248,36 +239,26 @@ class Debugger(HasTraits):
         return self._seq
 
     def _handle_event(self, event):
-        if event["event"] == "stopped":
-            if event["body"]["allThreadsStopped"]:
-
-                async def _handle_stopped_event():
-                    req = {"seq": self.next_seq(), "type": "request", "command": "threads"}
-                    rep = await self.send_dap_request(req)
-                    for thread in rep["body"]["threads"]:
-                        if thread["name"] not in ["IPythonHistorySavingThread"]:
-                            self.stopped_threads.add(thread["id"])
-                    self._publish_event(event)
-
-                self.kernel.control_thread_caller.call_soon(_handle_stopped_event)
-                return
-            self.stopped_threads.add(event["body"]["threadId"])
-        elif event["event"] == "continued":
-            if event["body"]["allThreadsContinued"]:
-                self.stopped_threads = set()
-            else:
-                self.stopped_threads.remove(event["body"]["threadId"])
-        elif event["event"] == "initialized":
+        if event["event"] == "initialized":
             self.init_event.set()
-        self._publish_event(event)
-
-    def _publish_event(self, event: dict):
         self.kernel.iopub_send(
             msg_or_type="debug_event",
             content=event,
             ident=self.kernel._topic("debug_event"),
             parent=None,
         )
+
+    async def get_stopped_threads(self):
+        if not self.debugpy_client.connected:
+            return set()
+        rep = await self.send_dap_request(
+            {
+                "seq": self.next_seq(),
+                "type": "request",
+                "command": "threads",
+            }
+        )
+        return sorted(thread["id"] for thread in rep["body"]["threads"])
 
     def _build_variables_response(self, request, variables):
         var_list = [var for var in variables if self._accept_variable(var["name"])]
@@ -346,7 +327,7 @@ class Debugger(HasTraits):
                 "tmpFilePrefix": compiler.tmp_file_prefix,
                 "tmpFileSuffix": compiler.tmp_file_suffix,
                 "breakpoints": breakpoint_list,
-                "stoppedThreads": sorted(self.stopped_threads),
+                "stoppedThreads": await self.get_stopped_threads(),
                 "richRendering": True,
                 "exceptionPaths": ["Python Exceptions"],
                 "copyToGlobals": True,
@@ -381,7 +362,7 @@ class Debugger(HasTraits):
             return reply
         repr_data = {}
         repr_metadata = {}
-        if not self.stopped_threads:
+        if not await self.get_stopped_threads():
             # The code did not hit a breakpoint, we use the interpreter
             # to get the rich representation of the variable
             result = self.kernel.shell.user_expressions({var_name: var_name})[var_name]
@@ -523,12 +504,10 @@ class Debugger(HasTraits):
     async def do_variables(self, message):
         """Handle a variables message."""
         reply = {}
-        if not self.stopped_threads:
+        if not await self.get_stopped_threads():
             variables = self.variable_explorer.get_children_variables(message["arguments"]["variablesReference"])
             return self._build_variables_response(message, variables)
-
         reply = await self.send_dap_request(message)
-        # TODO : check start and count arguments work as expected in debugpy
         if "body" in reply:
             variables = [var for var in reply["body"]["variables"] if self._accept_variable(var["name"])]
             reply["body"]["variables"] = variables
@@ -536,7 +515,8 @@ class Debugger(HasTraits):
 
     async def do_attach(self, message):
         """Handle an attach message."""
-        message["arguments"]["connect"] = self.debugpy_client.get_host_port()
+        assert _HOST_PORT
+        message["arguments"]["connect"] = {"host": _HOST_PORT[0], "port": _HOST_PORT[1]}
         if self.just_my_code:
             message["arguments"]["debugOptions"] = ["justMyCode"]
         reply = await self.debugpy_client._send_request(message)

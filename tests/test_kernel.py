@@ -379,15 +379,6 @@ async def test_debug_raises_no_socket(kernel):
         await kernel.debugger.debugpy_client._send_request({})
 
 
-async def test_debug_not_connected(kernel, client):
-    reply = await utils.send_control_message(
-        client, "debug_request", {"type": "request", "seq": 1, "command": "disconnect", "arguments": {}}
-    )
-    assert reply["content"]["status"] == "ok"
-    with pytest.raises(RuntimeError, match=".*not available until debugpy is listening"):
-        kernel.debugger.debugpy_client.get_host_port()
-
-
 @pytest.mark.parametrize("variable_name", ["my_variable", "invalid variable name", "special variables"])
 async def test_debug_static_richInspectVariables(kernel, client, variable_name):
     # These are tests on the debugger that don't required the debugger to be connected.
