@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import anyio.abc
 from IPython.core.inputtransformer2 import leading_empty_lines
-from traitlets import Bool, Dict, HasTraits, Instance, default
+from traitlets import Bool, Dict, HasTraits, Instance, Set, default
 
 from async_kernel import Future, utils
 
@@ -172,6 +172,9 @@ class DebugpyClient(HasTraits):
 
             _HOST_PORT = debugpy.listen(0)
             utils.mark_thread_pydev_do_not_trace(threading.current_thread())
+            for thread in threading.enumerate():
+                if thread.name == "IPythonHistorySavingThread":
+                    thread.pydev_do_not_trace = True  # type: ignore[assignment]
             # This thread can't be stopped by the debugger when debugging
         try:
             self.log.debug("++ debugpy socketstream connecting ++")
@@ -194,6 +197,7 @@ class Debugger(HasTraits):
 
     _seq = 0
     breakpoint_list = Dict()
+    stopped_threads = Set()
     _removed_cleanup = Dict()
     just_my_code = Bool(True)
     variable_explorer = Instance(VariableExplorer, ())
@@ -239,26 +243,37 @@ class Debugger(HasTraits):
         return self._seq
 
     def _handle_event(self, event):
-        if event["event"] == "initialized":
+        if event["event"] == "stopped":
+            if event["body"]["allThreadsStopped"]:
+                names = {t.name for t in threading.enumerate() if not getattr(t, "pydev_do_not_trace", False)}
+
+                async def _handle_stopped_event():
+                    msg = {"seq": self.next_seq(), "type": "request", "command": "threads"}
+                    rep = await self.send_dap_request(msg)
+                    for thread in rep["body"]["threads"]:
+                        if thread["name"] in names:
+                            self.stopped_threads.add(thread["id"])
+                    self._publish_event(event)
+
+                self.kernel.control_thread_caller.call_soon(_handle_stopped_event)
+                return
+            self.stopped_threads.add(event["body"]["threadId"])
+        elif event["event"] == "continued":
+            if event["body"]["allThreadsContinued"]:
+                self.stopped_threads.clear()
+            else:
+                self.stopped_threads.remove(event["body"]["threadId"])
+        elif event["event"] == "initialized":
             self.init_event.set()
+        self._publish_event(event)
+
+    def _publish_event(self, event: dict):
         self.kernel.iopub_send(
             msg_or_type="debug_event",
             content=event,
             ident=self.kernel._topic("debug_event"),
             parent=None,
         )
-
-    async def get_stopped_threads(self):
-        if not self.debugpy_client.connected:
-            return set()
-        rep = await self.send_dap_request(
-            {
-                "seq": self.next_seq(),
-                "type": "request",
-                "command": "threads",
-            }
-        )
-        return sorted(thread["id"] for thread in rep["body"]["threads"])
 
     def _build_variables_response(self, request, variables):
         var_list = [var for var in variables if self._accept_variable(var["name"])]
@@ -327,7 +342,7 @@ class Debugger(HasTraits):
                 "tmpFilePrefix": compiler.tmp_file_prefix,
                 "tmpFileSuffix": compiler.tmp_file_suffix,
                 "breakpoints": breakpoint_list,
-                "stoppedThreads": await self.get_stopped_threads(),
+                "stoppedThreads": sorted(self.stopped_threads),
                 "richRendering": True,
                 "exceptionPaths": ["Python Exceptions"],
                 "copyToGlobals": True,
@@ -353,33 +368,31 @@ class Debugger(HasTraits):
             "success": False,
             "command": msg["command"],
         }
-        var_name = msg["arguments"].get("variableName", "")
-        valid_name = str.isidentifier(var_name)
-        if not valid_name:
+        variable_name = msg["arguments"].get("variableName", "")
+        if not str.isidentifier(variable_name):
             reply["body"] = {"data": {}, "metadata": {}}
-            if var_name in {"special variables", "function variables"}:
+            if variable_name in {"special variables", "function variables"}:
                 reply["success"] = True
             return reply
         repr_data = {}
         repr_metadata = {}
-        if not await self.get_stopped_threads():
+        if not self.stopped_threads:
             # The code did not hit a breakpoint, we use the interpreter
             # to get the rich representation of the variable
-            result = self.kernel.shell.user_expressions({var_name: var_name})[var_name]
+            result = self.kernel.shell.user_expressions({"var": variable_name})["var"]
             if result.get("status", "error") == "ok":
                 repr_data = result.get("data", {})
                 repr_metadata = result.get("metadata", {})
         else:
             # The code has stopped on a breakpoint, we use the evaluate
             # request to get the rich representation of the variable
-            code = f"get_ipython().display_formatter.format({var_name})"
-            frame_id = msg["arguments"]["frameId"]
+            code = f"get_ipython().display_formatter.format({variable_name})"
             reply = await self.send_dap_request(
                 {
                     "type": "request",
                     "command": "evaluate",
                     "seq": self.next_seq(),
-                    "arguments": {"expression": code, "frameId": frame_id, "context": "clipboard"},
+                    "arguments": {"expression": code, "context": "clipboard"} | msg["arguments"],
                 }
             )
             if reply["success"]:
@@ -504,7 +517,7 @@ class Debugger(HasTraits):
     async def do_variables(self, msg: DebugMessage, /):
         """Handle a variables message."""
         reply = {}
-        if not await self.get_stopped_threads():
+        if not self.stopped_threads:
             variables = self.variable_explorer.get_children_variables(msg["arguments"]["variablesReference"])
             return self._build_variables_response(msg, variables)
         reply = await self.send_dap_request(msg)

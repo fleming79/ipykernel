@@ -108,31 +108,37 @@ def f(a, b):
 
 f(2, 3)"""
 
+    # setBreakpoints
     reply = await send_debug_request(client, "dumpCell", {"code": code})
     source = reply["body"]["sourcePath"]
-    line = 4
     reply = await send_debug_request(
         client=client,
         command="setBreakpoints",
         arguments={
-            "breakpoints": [{"line": line}],
+            "breakpoints": [{"line": 2}, {"line": 8}],
             "source": {"path": source},
             "sourceModified": False,
         },
     )
     assert reply["success"]
-    assert len(reply["body"]["breakpoints"]) == 1
+    assert len(reply["body"]["breakpoints"]) == 2
     assert reply["body"]["breakpoints"][0]["verified"]
     assert reply["body"]["breakpoints"][0]["source"]["path"] == source
+
+    # debugInfo
     reply = await send_debug_request(client, "debugInfo")
     assert source in reply["body"]["breakpoints"][0]["source"]
-    assert reply["body"]["breakpoints"][0]["breakpoints"][0]["line"] == line
+    assert reply["body"]["breakpoints"][0]["breakpoints"] == [{"line": 2}, {"line": 8}]
     return code
 
 
 async def test_stop_on_breakpoint(client):
+    # Debugger needs to be stopped on a breakpoint
+
     code = await test_set_breakpoints(client)
+    # Executing code will run till a breakpoint is reached
     msg_id = client.execute(code)
+
     # Wait for stop on breakpoint
     msg: dict = {"msg_type": "", "content": {}}
     while msg.get("msg_id") != msg_id and msg["content"].get("event") != "stopped":
@@ -140,24 +146,53 @@ async def test_stop_on_breakpoint(client):
     assert msg["content"]["body"]["reason"] == "breakpoint"
     assert msg["content"]["body"]["allThreadsStopped"]
     thread_id = msg["content"]["body"]["threadId"]
+
+    reply = await send_debug_request(client, "debugInfo")
+    assert reply["body"]["stoppedThreads"] == [1]
+
+    # next
+    await utils.clear_iopub(client)
+    reply = await send_debug_request(client, "next", {"threadId": thread_id})
+    msg = await client.get_iopub_msg()
+    msg = await client.get_iopub_msg()
+    assert msg["content"]["event"] == "stopped"
+    assert msg["content"]["body"]["allThreadsStopped"]
+
     # stackTrace
     reply = await send_debug_request(client, "stackTrace", {"threadId": thread_id})
     stacks = reply["body"]["stackFrames"]
+    assert stacks
+
+    # source
+    reply = await send_debug_request(client, "source", {"source": stacks[0]["source"]})
+    assert reply["success"]
+    assert reply["body"]["content"] == code
+
     # scopes
     reply = await send_debug_request(client, "scopes", {"frameId": stacks[0]["id"]})
-    scopes = reply["body"]["scopes"]
+    assert reply["success"]
+
+    # variables
+    reply = await send_debug_request(
+        client=client,
+        command="variables",
+        arguments={"variablesReference": reply["body"]["scopes"][0]["variablesReference"]},
+    )
+    assert reply["success"]
+    assert reply["body"]["variables"]
+
     # evaluate
     reply = await send_debug_request(
         client=client,
         command="evaluate",
-        arguments={"expression": "print(my_variable)", "context": "repl", "frameId": stacks[0]["id"]},
+        arguments={
+            "expression": "a=10;b=20",
+            "context": "repl",
+            "frameId": stacks[0]["id"],
+        },
     )
     assert reply["success"]
-    reply = await send_debug_request(
-        client=client,
-        command="variables",
-        arguments={"variablesReference": reply["body"]["variablesReference"]},
-    )
+
     # copyToGlobals
     reply = await send_debug_request(
         client=client,
@@ -165,6 +200,7 @@ async def test_stop_on_breakpoint(client):
         arguments={"dstVariableName": "my_copy", "srcVariableName": "my_variable", "srcFrameId": stacks[0]["id"]},
     )
     assert reply["success"]
+
     # richInspectVariables
     reply = await send_debug_request(
         client=client,
@@ -174,14 +210,32 @@ async def test_stop_on_breakpoint(client):
     assert reply["success"]
     assert set(reply["body"]) == {"metadata", "data"}
 
-    await send_debug_request(client, "continue", {"threadId": thread_id})
+    # inspectVariables
+    reply = await send_debug_request(client=client, command="inspectVariables", arguments={"frameId": stacks[0]["id"]})
+    assert reply["success"]
 
-    reply = await utils.get_reply(client, msg_id)
-    assert reply["content"]["status"] == "ok"
-    # variables
+    # continue
+    await utils.clear_iopub(client)
+    reply = await send_debug_request(client, "continue", {"threadId": thread_id})
+    assert reply["success"]
+    assert reply["body"] == {"allThreadsContinued": True}
+    msg = await client.get_iopub_msg()
+    assert msg["content"]["event"] == "stopped"
+    assert msg["content"]["body"]["allThreadsStopped"]
+
+    reply = await send_debug_request(client, "continue", {"threadId": thread_id})
+    msg = await client.get_iopub_msg()
+    assert msg["content"]["event"] == "continued"
+    assert reply["body"]["allThreadsContinued"]
+
+    # debugInfo
+    reply = await send_debug_request(client, "debugInfo")
+    assert reply["body"]["stoppedThreads"] == []
+    # richInspectVariables (again whilst continued)
     reply = await send_debug_request(
         client=client,
         command="richInspectVariables",
-        arguments={"variableName": "my_variable", "frameId": stacks[0]["id"]},
+        arguments={"variableName": "my_variable"},
     )
     assert reply["success"]
+    assert reply["body"] == {"data": {"text/plain": "'has a value'"}, "metadata": {}}
