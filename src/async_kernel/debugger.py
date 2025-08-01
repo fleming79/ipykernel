@@ -197,6 +197,7 @@ class Debugger(HasTraits):
 
     _seq = 0
     breakpoint_list = Dict()
+    capabilities = Dict()
     stopped_threads = Set()
     _removed_cleanup = Dict()
     just_my_code = Bool(True)
@@ -320,7 +321,9 @@ class Debugger(HasTraits):
             if leading_empty_lines in cleanup_transforms:
                 index = cleanup_transforms.index(leading_empty_lines)
                 self._removed_cleanup[index] = cleanup_transforms.pop(index)
-        return await self.send_dap_request(msg)
+        reply = await self.send_dap_request(msg)
+        self.capabilities = reply["body"]
+        return reply
 
     async def do_debug_info(self, msg: DebugMessage, /):
         """Handle a debug info message."""
