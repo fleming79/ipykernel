@@ -171,12 +171,13 @@ async def test_stop_on_breakpoint(client):
     # scopes
     reply = await send_debug_request(client, "scopes", {"frameId": stacks[0]["id"]})
     assert reply["success"]
+    variables_reference = reply["body"]["scopes"][0]["variablesReference"]
 
     # variables
     reply = await send_debug_request(
         client=client,
         command="variables",
-        arguments={"variablesReference": reply["body"]["scopes"][0]["variablesReference"]},
+        arguments={"variablesReference": variables_reference},
     )
     assert reply["success"]
     assert reply["body"]["variables"]
@@ -228,10 +229,11 @@ async def test_stop_on_breakpoint(client):
     assert msg["content"]["event"] == "continued"
     assert reply["body"]["allThreadsContinued"]
 
-    # debugInfo
+    # debugInfo (ensure running)
     reply = await send_debug_request(client, "debugInfo")
     assert reply["body"]["stoppedThreads"] == []
-    # richInspectVariables (again whilst continued)
+
+    # richInspectVariables (whilst running)
     reply = await send_debug_request(
         client=client,
         command="richInspectVariables",
@@ -239,3 +241,11 @@ async def test_stop_on_breakpoint(client):
     )
     assert reply["success"]
     assert reply["body"] == {"data": {"text/plain": "'has a value'"}, "metadata": {}}
+
+    # variables (whilst running)
+    reply = await send_debug_request(
+        client=client,
+        command="variables",
+        arguments={"variablesReference": variables_reference},
+    )
+    assert reply["success"]
