@@ -114,6 +114,16 @@ class TestCaller:
             caller.call_later(is_called.set)
             await is_called.wait()
 
+    def test_caller_no_thread(self):
+        with pytest.raises(RuntimeError):
+            Caller()
+
+    def test_caller_protected(self):
+        caller = Caller(create=True, protected=True)
+        caller.stop()
+        assert not caller.stopped
+        caller.stop(force=True)
+
     @pytest.mark.parametrize("args_kwargs", [((), {}), ((1, 2, 3), {"a": 10})])
     async def test_async(self, args_kwargs: tuple[tuple, dict]):
         val = None
@@ -134,6 +144,8 @@ class TestCaller:
     async def test_anyio_to_thread(self):
         # Test the call works from another thread
         async with Caller(create=True) as caller:
+            assert caller.active
+            assert caller in Caller.all_callers()
 
             def _in_thread():
                 def my_func(*args, **kwargs):
@@ -147,6 +159,7 @@ class TestCaller:
                 anyio.run(runner)
 
             await anyio.to_thread.run_sync(_in_thread)
+        assert caller not in Caller.all_callers()
 
     async def test_cancels_on_exit(self):
         is_cancelled = False
@@ -341,7 +354,7 @@ class TestCaller:
         with pytest.raises(CancelledError):
             await fut
         assert fut.done()
-        assert caller.closed
+        assert caller.stopped
         with pytest.raises(anyio.ClosedResourceError):
             caller.call_soon(time.sleep, 0)
         with pytest.raises(CancelledError):

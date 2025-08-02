@@ -218,8 +218,8 @@ class Caller:
             Creates a new `Caller` instance or returns an existing one for the given thread.
         taskgroup (property):
             Returns the AnyIO task group associated with this `Caller` instance.
-        closed (property):
-            Returns True if the `Caller` is closed, False otherwise.
+        stopped (property):
+            Returns True if the `Caller` is stopped, False otherwise.
         stop(self, *, force=False):
             Stops the `Caller` instance, closing the event loop and releasing resources.
         call_later(self, func: Callable[P, T | Awaitable[T]], delay=0.0, /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
@@ -257,7 +257,7 @@ class Caller:
     _taskgroup: TaskGroup | None = None
     _jobs: deque[tuple[contextvars.Context, tuple[Future, float, float, Callable, tuple, dict]] | Callable[[], Any]]
     _jobs_added: threading.Event
-    _closed = False
+    _stopped = False
     _protected = False
     active = False
     iopub_sockets: ClassVar[weakref.WeakKeyDictionary[threading.Thread, Socket]] = weakref.WeakKeyDictionary()
@@ -310,7 +310,7 @@ class Caller:
         try:
             self.iopub_sockets[thread] = socket
             task_status.started()
-            while not self._closed:
+            while not self._stopped:
                 while len(self._jobs):
                     job = self._jobs.popleft()
                     if isinstance(job, Callable):
@@ -369,7 +369,7 @@ class Caller:
             pass
 
     def _to_thread_on_done(self, _):
-        if not self._closed:
+        if not self._stopped:
             if (len(self._to_thread_pool) < self.MAX_IDLE_POOL_INSTANCES) or self._outstanding:
                 self._to_thread_pool.append(self)
             else:
@@ -383,14 +383,14 @@ class Caller:
         raise RuntimeError(msg)
 
     @property
-    def closed(self):
-        return self._closed
+    def stopped(self):
+        return self._stopped
 
     def stop(self, *, force=False):
         "Once closed it can not be reopened."
         if self._protected and not force:
             return
-        self._closed = True
+        self._stopped = True
         self._jobs_added.set()
         self._instances.pop(self.thread, None)
         if self in self._to_thread_pool:
@@ -406,7 +406,7 @@ class Caller:
 
         The delay is calculated from the submission time.
         """
-        if self._closed:
+        if self._stopped:
             raise anyio.ClosedResourceError
         fut = Future(thread=self.thread)
         if threading.current_thread() is self.thread and (tg := self._taskgroup):
