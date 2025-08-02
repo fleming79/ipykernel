@@ -103,13 +103,13 @@ class TestFuture:
 @pytest.mark.anyio
 class TestCaller:
     def setup_method(self, test_method):
-        Caller._shutdown_all()
+        Caller.stop_all()
 
     def teardown_method(self, test_method):
-        Caller._shutdown_all()
+        Caller.stop_all()
 
     async def test_sync(self):
-        async with Caller() as caller:
+        async with Caller(create=True) as caller:
             is_called = anyio.Event()
             caller.call_later(is_called.set)
             await is_called.wait()
@@ -124,7 +124,7 @@ class TestCaller:
             is_called.set()
             return args, kwargs
 
-        async with Caller() as caller:
+        async with Caller(create=True) as caller:
             is_called = anyio.Event()
             fut = caller.call_later(my_func, 0.2, is_called, *args_kwargs[0], **args_kwargs[1])
             await is_called.wait()
@@ -133,7 +133,7 @@ class TestCaller:
 
     async def test_anyio_to_thread(self):
         # Test the call works from another thread
-        async with Caller() as caller:
+        async with Caller(create=True) as caller:
 
             def _in_thread():
                 def my_func(*args, **kwargs):
@@ -150,7 +150,7 @@ class TestCaller:
 
     async def test_cancels_on_exit(self):
         is_cancelled = False
-        async with Caller() as caller:
+        async with Caller(create=True) as caller:
 
             async def my_test():
                 nonlocal is_cancelled
@@ -178,7 +178,7 @@ class TestCaller:
             finished_event = anyio.Event()
 
             async def _run():
-                async with Caller():
+                async with Caller(create=True):
                     ready.set()
                     await finished_event.wait()
 
@@ -224,17 +224,17 @@ class TestCaller:
 
     async def test_get_instance_no_instance(self, anyio_backend):
         with pytest.raises(RuntimeError):
-            Caller.get_instance(None, allow_create=False)
+            Caller.get_instance(None, create=False)
 
     async def test_error_wait_sync(self):
-        async with Caller() as caller:
+        async with Caller(create=True) as caller:
             fut = caller.call_later(anyio.sleep, 0.1, 0.1)
             with pytest.raises(RuntimeError):
                 fut.wait_sync()
 
     @pytest.mark.parametrize("mode", ["restricted", "surge"])
     async def test_as_completed(self, anyio_backend, mode: Literal["restricted", "surge"], mocker):
-        mocker.patch.object(Caller, "MAX_IDLE_EVENT_THREADS", new=2)
+        mocker.patch.object(Caller, "MAX_IDLE_POOL_INSTANCES", new=2)
 
         async def func():
             assert sniffio.current_async_library() == anyio_backend
@@ -254,7 +254,7 @@ class TestCaller:
             assert fut_.done()
         # work directly with iterator
         n_ = 0
-        max_concurrent = Caller.MAX_IDLE_EVENT_THREADS if mode == "restricted" else n / 2
+        max_concurrent = Caller.MAX_IDLE_POOL_INSTANCES if mode == "restricted" else n / 2
         async for fut in Caller.as_completed((Caller.to_thread(func) for _ in range(n)), max_concurrent=max_concurrent):
             assert fut.done()
             n_ += 1
@@ -292,7 +292,7 @@ class TestCaller:
                 await item
 
     async def test_call_early(self, anyio_backend):
-        caller = Caller()
+        caller = Caller(create=True)
         with pytest.raises(RuntimeError, match=".*not currently open in an async context"):
             caller.taskgroup  # noqa: B018
         fut = caller.call_soon(time.sleep, 0.1)
@@ -327,10 +327,10 @@ class TestCaller:
         proceed = threading.Event()
 
         async def close_tsc():
-            caller = Caller()
+            caller = Caller(create=True)
             ready.set()
             proceed.wait()
-            caller.close()
+            caller.stop()
             await anyio.sleep_forever()
 
         fut = Caller.to_thread(close_tsc)
@@ -368,7 +368,7 @@ class TestCaller:
             case "blocking":
                 my_func = blocking_func
 
-        async with Caller() as caller:
+        async with Caller(create=True) as caller:
             fut = caller.call_soon(my_func)
             if cancel_mode == "local":
                 fut.cancel()
@@ -384,7 +384,7 @@ class TestCaller:
             await anyio.sleep(10)
             raise RuntimeError
 
-        async with Caller() as caller:
+        async with Caller(create=True) as caller:
             async with anyio.create_task_group() as tg:
                 fut = caller.call_soon(async_func)
                 tg.start_soon(fut.result)

@@ -192,31 +192,45 @@ class Caller:
     _outstanding = 0
     _to_thread_pool: ClassVar[deque[Self]] = deque()
     _pool_instances: ClassVar[weakref.WeakSet[Self]] = weakref.WeakSet()
-    MAX_IDLE_EVENT_THREADS = 10
+    MAX_IDLE_POOL_INSTANCES = 10
     _taskgroup: TaskGroup | None = None
     _jobs: deque[tuple[contextvars.Context, tuple[Future, float, float, Callable, tuple, dict]] | Callable[[], Any]]
     _jobs_added: threading.Event
     _closed = False
+    _protected = False
+    active = False
     iopub_sockets: ClassVar[weakref.WeakKeyDictionary[threading.Thread, Socket]] = weakref.WeakKeyDictionary()
     iopub_url: ClassVar = "inproc://iopub"
 
-    def __new__(cls, thread: threading.Thread | None = None, *, log: logging.LoggerAdapter | None = None) -> Self:
+    def __new__(
+        cls,
+        thread: threading.Thread | None = None,
+        *,
+        log: logging.LoggerAdapter | None = None,
+        create=False,
+        protected=False,
+    ) -> Self:
         thread = thread or threading.current_thread()
         if not (inst := cls._instances.get(thread)):
+            if not create:
+                msg = f"A caller is not provided for {thread=}"
+                raise RuntimeError(msg)
             inst = super().__new__(cls)
             inst.thread = thread
             inst.log = log or logging.LoggerAdapter(logging.getLogger())
             inst._jobs = deque()
             inst._jobs_added = threading.Event()
+            inst._protected = protected
             cls._instances[thread] = inst
         return inst
 
     def __repr__(self) -> str:
-        return f"Caller<{self.thread}>"
+        return f"Caller<{self.thread.name}>"
 
     async def __aenter__(self) -> Self:
         self._cancelled_exception_class = anyio.get_cancelled_exc_class()
         async with contextlib.AsyncExitStack() as stack:
+            self.active = True
             self._taskgroup = tg = await stack.enter_async_context(anyio.create_task_group())
             await tg.start(self._server_loop, tg)
             self.__stack = stack.pop_all()
@@ -224,7 +238,7 @@ class Caller:
 
     async def __aexit__(self, exc_type, exc_value, exc_tb):
         if self.__stack is not None:
-            self.close()
+            self.stop()
             await self.__stack.__aexit__(exc_type, exc_value, exc_tb)
 
     async def _server_loop(self, tg: TaskGroup, task_status: TaskStatus):
@@ -249,6 +263,7 @@ class Caller:
                     self._jobs_added.clear()
                 await wait_thread_event(self._jobs_added)
         finally:
+            self.active = False
             for job in self._jobs:
                 if not callable(job):
                     job[1][0].set_exception(CancelledError())
@@ -294,31 +309,84 @@ class Caller:
 
     def _to_thread_on_done(self, _):
         if not self._closed:
-            if (len(self._to_thread_pool) < self.MAX_IDLE_EVENT_THREADS) or self._outstanding:
+            if (len(self._to_thread_pool) < self.MAX_IDLE_POOL_INSTANCES) or self._outstanding:
                 self._to_thread_pool.append(self)
             else:
-                self.close()
+                self.stop()
+
+    @property
+    def taskgroup(self) -> TaskGroup:
+        if tg := self._taskgroup:
+            return tg
+        msg = f"{self}  is not currently open in an async context."
+        raise RuntimeError(msg)
+
+    @property
+    def closed(self):
+        return self._closed
+
+    def stop(self, *, force=False):
+        "Once closed it can not be reopened."
+        if self._protected and not force:
+            return
+        self._closed = True
+        self._jobs_added.set()
+        self._instances.pop(self.thread, None)
+        if self in self._to_thread_pool:
+            self._to_thread_pool.remove(self)
+
+    def call_later(
+        self, func: Callable[P, T | Awaitable[T]], delay=0.0, /, *args: P.args, **kwargs: P.kwargs
+    ) -> Future[T]:
+        """Schedules a function or coroutine for execution.
+
+        If the instance is not open in an async context, the function will be queued and
+        executed once the async context is open.
+
+        The delay is calculated from the submission time.
+        """
+        if self._closed:
+            raise anyio.ClosedResourceError
+        fut = Future(thread=self.thread)
+        if threading.current_thread() is self.thread and (tg := self._taskgroup):
+            tg.start_soon(self._wrap_call, fut, time.monotonic(), delay, func, args, kwargs)
+        else:
+            self._jobs.append((contextvars.copy_context(), (fut, time.monotonic(), delay, func, args, kwargs)))
+            self._jobs_added.set()
+        self._outstanding += 1
+        return fut
+
+    def call_soon(self, func: Callable[P, T | Awaitable[T]], *args: P.args, **kwargs: P.kwargs) -> Future[T]:
+        "Calls call_later with delay=0.0."
+        return self.call_later(func, 0.0, *args, **kwargs)
+
+    def call_no_context(self, func: Callable[P, Any], *args: P.args, **kwargs: P.kwargs) -> None:
+        """Call func in the thread event loop."""
+        self._jobs.append(functools.partial(func, *args, **kwargs))
+        self._jobs_added.set()
 
     @classmethod
-    def _shutdown_all(cls):
-        "Shutdown all instances."
-        for caller in set(cls._instances.values()):
-            caller.close()
+    def stop_all(cls, **kwgs):
+        "Stop all instances."
+        force = kwgs.get("_stop_protected", False)
+        for caller in tuple(reversed(cls._instances.values())):
+            caller.stop(force=force)
 
     @classmethod
-    def get_instance(cls, thread_name: str | None, *, allow_create=True) -> Self:
-        """Gets an instance of Caller for thread_name.
+    def get_instance(cls, name: str | None = "MainThread", *, create=False) -> Self:
+        """Gets an instance of Caller.
+        name: str | None
+        If the
 
-        allow_create: bool
-            If an instance does not exist that has a thread whose name is thread_name;
-            a new thread is started using start_new.
+        create: bool
+            If the Caller instance does not exist a new thread is created.
         """
         for thread in cls._instances:
-            if thread.name == thread_name:
+            if thread.name == name:
                 return cls._instances[thread]
-        if allow_create:
-            return cls.start_new(thread_name=thread_name)
-        msg = f"A Caller was not found for {thread_name=}."
+        if create:
+            return cls.start_new(name=name)
+        msg = f"A Caller was not found for {name=}."
         raise RuntimeError(msg)
 
     @classmethod
@@ -327,43 +395,78 @@ class Caller:
 
         A pool of 'workers' is are used to provide an event loop
         """
-        return cls.to_thread_by_thread_name(None, func, *args, **kwargs)
+        return cls.to_thread_by_name(None, func, *args, **kwargs)
 
     @classmethod
-    def to_thread_by_thread_name(
-        cls, thread_name: str | None, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs
+    def to_thread_by_name(
+        cls, name: str | None, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs
     ) -> Future[T]:
-        """Call the function in the Caller thread by name.
+        """Call the function in the Caller's thread.
+
+        name: name of the caller's thread. passing an empty string will provide a caller from the pool.
+
+        func:
+            The function (awaitables permitted, though discouraged).
+        *args, **kwargs: for func.
 
         If a caller thread is not found a new one is created with the specified name."""
-        if not thread_name and cls._to_thread_pool:
-            caller = cls._to_thread_pool.popleft()
-        else:
-            caller = cls.get_instance(thread_name=thread_name)
+        caller = (
+            cls._to_thread_pool.popleft()
+            if not name and cls._to_thread_pool
+            else cls.get_instance(name=name, create=True)
+        )
         fut = caller.call_soon(func, *args, **kwargs)
-        if not thread_name:
+        if not name:
             cls._pool_instances.add(caller)
             fut.add_done_callback(caller._to_thread_on_done)
         return fut
 
     @classmethod
-    def start_new(cls, *, backend="", log: logging.LoggerAdapter | None = None, thread_name: str | None = None):
-        "Start a new thread, open a Caller in a new event loop  returning the Caller instance."
+    def start_new(
+        cls,
+        *,
+        backend: Literal["asyncio", "trio"] | str = "",  # noqa: PYI051
+        log: logging.LoggerAdapter | None = None,
+        name: str | None = None,
+        protected=False,
+    ):
+        """Start a new caller in a separate thread.
+
+        The caller is run in a separate thread using AnyIO.  This is
+        necessary because the caller needs to run an event loop, and we
+        don't want to block the main thread.
+
+        Parameters
+        ----------
+        backend : Literal["asyncio", "trio", None], optional
+            The AnyIO backend to use.  If None, we use the current anyio backend.
+        log : logging.LoggerAdapter, optional
+            A logger to use for logging.  If None, a default logger will be
+            created.
+        name : str, optional
+            The name for the new thread.
+
+        Returns
+        -------
+        Caller
+            The new caller.
+        """
 
         def anyio_run_caller():
             async def caller_context():
                 nonlocal caller
-                async with cls(log=log) as caller:
+                async with cls(log=log, create=True, protected=protected) as caller:
                     ready_event.set()
                     with contextlib.suppress(anyio.get_cancelled_exc_class()):
                         await anyio.sleep_forever()
 
-            anyio.run(caller_context, backend=backend)
+            anyio.run(caller_context, backend=backend_)
 
-        backend = backend or sniffio.current_async_library()
+        assert name not in [t.name for t in cls._instances], f"{name=} already exists!"
+        backend_ = backend or sniffio.current_async_library()
         caller = cast("Self", None)
         ready_event = threading.Event()
-        thread = threading.Thread(target=anyio_run_caller, name=thread_name, daemon=True)
+        thread = threading.Thread(target=anyio_run_caller, name=name, daemon=True)
         thread.start()
         ready_event.wait()
         assert isinstance(caller, cls)
@@ -400,7 +503,7 @@ class Caller:
             if isinstance(items, set | list | tuple):
                 max_concurrent_ = 0
             else:
-                max_concurrent_ = cls.MAX_IDLE_EVENT_THREADS if max_concurrent is NoValue else int(max_concurrent)
+                max_concurrent_ = cls.MAX_IDLE_POOL_INSTANCES if max_concurrent is NoValue else int(max_concurrent)
 
             gen = items if isinstance(items, AsyncGenerator) else iter(items)
             task_status.started()
@@ -442,56 +545,6 @@ class Caller:
                     fut.cancel()
 
     @classmethod
-    def list_threads(cls) -> list[str]:
-        "List user created threads."
-        omit = ("Control", "MainThread")
-        return sorted(i.name for i in Caller._instances if i not in cls._pool_instances and i.name not in omit)
-
-    @property
-    def taskgroup(self) -> TaskGroup:
-        if tg := self._taskgroup:
-            return tg
-        msg = f"{self}  is not currently open in an async context."
-        raise RuntimeError(msg)
-
-    @property
-    def closed(self):
-        return self._closed
-
-    def close(self):
-        "Once closed it can not be reopened."
-        self._closed = True
-        self._jobs_added.set()
-        self._instances.pop(self.thread, None)
-        if self in self._to_thread_pool:
-            self._to_thread_pool.remove(self)
-
-    def call_later(
-        self, func: Callable[P, T | Awaitable[T]], delay=0.0, /, *args: P.args, **kwargs: P.kwargs
-    ) -> Future[T]:
-        """Schedules a function or coroutine for execution.
-
-        If the instance is not open in an async context, the function will be queued and
-        executed once the async context is open.
-
-        The delay is calculated from the submission time.
-        """
-        if self._closed:
-            raise anyio.ClosedResourceError
-        fut = Future(thread=self.thread)
-        if threading.current_thread() is self.thread and (tg := self._taskgroup):
-            tg.start_soon(self._wrap_call, fut, time.monotonic(), delay, func, args, kwargs)
-        else:
-            self._jobs.append((contextvars.copy_context(), (fut, time.monotonic(), delay, func, args, kwargs)))
-            self._jobs_added.set()
-        self._outstanding += 1
-        return fut
-
-    def call_soon(self, func: Callable[P, T | Awaitable[T]], *args: P.args, **kwargs: P.kwargs) -> Future[T]:
-        "Calls call_later with delay=0.0."
-        return self.call_later(func, 0.0, *args, **kwargs)
-
-    def call_no_context(self, func: Callable[P, Any], *args: P.args, **kwargs: P.kwargs) -> None:
-        """Call func in the thread event loop."""
-        self._jobs.append(functools.partial(func, *args, **kwargs))
-        self._jobs_added.set()
+    def list_active(cls) -> list[str]:
+        "List active callers."
+        return sorted(caller.thread.name for caller in Caller._instances.values() if caller.active)

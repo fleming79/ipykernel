@@ -38,7 +38,7 @@ def clear_kernel():
         kernel.stop()
     Kernel._instance = None
     AsyncInteractiveShell.clear_instance()
-    Caller._shutdown_all()
+    Caller.stop_all()
 
 
 async def get_reply(
@@ -100,6 +100,7 @@ async def execute(client: AsyncKernelClient, /, code="", clear_pub=True, **kwarg
             user_expressions={},
             allow_stdin=False,
             stop_on_error=True,
+            execute_mode=None,
         )
         | kwargs,
     )

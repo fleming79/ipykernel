@@ -5,11 +5,8 @@ from __future__ import annotations
 
 import builtins
 import json
-import os
 import pathlib
 import sys
-import threading
-from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import IPython.core.release
@@ -19,7 +16,7 @@ from IPython.core.interactiveshell import ExecutionResult, InteractiveShell, Int
 from IPython.core.magic import Magics, line_magic, magics_class
 from jupyter_client.jsonutil import json_default
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import CBool, Dict, Instance, Integer, Type, default, observe
+from traitlets import CBool, Dict, Instance, Type, default, observe
 from typing_extensions import override
 
 import async_kernel
@@ -40,6 +37,10 @@ class AsyncDisplayHook(DisplayHook):
 
     kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
     content: Dict[str, Any] = Dict()
+
+    @property
+    def prompt_count(self):
+        return self.kernel.execution_count
 
     def start_displayhook(self):
         """Start the display hook."""
@@ -118,7 +119,6 @@ class AsyncDisplayPublisher(DisplayPublisher):
 class AsyncInteractiveShell(InteractiveShell):
     """A subclass of InteractiveShell for ZMQ."""
 
-    _namespace_var: ClassVar[ContextVar[str]] = ContextVar("namespace_id", default="")
     displayhook_class = Type(AsyncDisplayHook)
     display_pub_class = Type(AsyncDisplayPublisher)
     displayhook: Instance[AsyncDisplayHook]
@@ -126,10 +126,8 @@ class AsyncInteractiveShell(InteractiveShell):
     kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
     compiler_class = Type(XCachingCompiler)
     compile: Instance[XCachingCompiler]
-    namespaces: Dict[str, dict] = Dict()
     user_ns_hidden = Dict()
     _main_mod_cache = Dict()
-    execution_count = Integer(0)
 
     @default("banner1")
     def _default_banner1(self):
@@ -170,32 +168,29 @@ class AsyncInteractiveShell(InteractiveShell):
         return
 
     @property
-    def user_global_ns(self):
-        return self.user_ns
+    def execution_count(self):
+        return self.kernel.execution_count
 
-    @property
-    def namespace_id(self) -> str:
-        # Allow for namespace_id to be defined in the context of the async function
-        # This only requires us to maintain a dict for each namespace_id (str).
-        return self._namespace_var.get()
-
-    @namespace_id.setter
-    def namespace_id(self, value: str):
-        self._namespace_var.set(value)
+    @execution_count.setter
+    def execution_count(self, value):
+        return
 
     @property
     def user_ns(self):
-        if (namespace_id := self.namespace_id) not in self.namespaces:
-            self.namespaces[namespace_id] = {}
-            self.init_user_ns()
-        return self.namespaces[namespace_id]
+        if not hasattr(self, "_user_ns"):
+            self.user_ns = {}
+        return self._user_ns
 
     @user_ns.setter
     def user_ns(self, ns: dict):
         assert hasattr(ns, "clear")
         assert isinstance(ns, dict)
-        self.namespaces[self.namespace_id] = ns
+        self._user_ns = ns
         self.init_user_ns()
+
+    @property
+    def user_global_ns(self):
+        return self.user_ns
 
     @property
     def ns_table(self):
@@ -272,11 +267,12 @@ class KernelMagics(Magics):
         )
 
     @line_magic
-    def threads(self, arg_s):
-        print(f"thread name: {threading.current_thread().name}")
-        print(f"pid: {os.getpid()}")
-        print(f"thread count: {threading.active_count()}")
-        print(f"thread list: {Caller.list_threads()}")
+    def callers(self, arg_s):
+        print("Active")
+        for caller in Caller._instances.values():
+            symbol = "   ✓" if caller.active else "   ✗"
+            current_thread = "← calling thread" if caller is Caller() else ""
+            print(symbol, caller, current_thread, sep="\t")
 
 
 InteractiveShellABC.register(AsyncInteractiveShell)

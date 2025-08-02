@@ -9,7 +9,6 @@ import logging
 import pathlib
 import threading
 import time
-import uuid
 from typing import Literal, cast
 
 import anyio
@@ -20,7 +19,7 @@ import async_kernel.utils
 from async_kernel.caller import Caller
 from async_kernel.comm import Comm
 from async_kernel.kernel import ExecuteMode, SocketID
-from async_kernel.typing import ExecuteContent, ExecuteSettings
+from async_kernel.typing import ExecuteContent, Job
 from tests import utils
 
 
@@ -419,7 +418,7 @@ async def test_matplotlib_inline_on_import(kernel, client):
     await utils.clear_iopub(client)
 
 
-@pytest.mark.parametrize("code", ["%connect_info", "%matplotlib --list", "%threads"])
+@pytest.mark.parametrize("code", ["%connect_info", "%matplotlib --list", "%callers"])
 async def test_magic(client, code: str, kernel, monkeypatch):
     monkeypatch.setenv("JUPYTER_RUNTIME_DIR", str(pathlib.Path(kernel.connection_file).parent))
     assert code
@@ -455,8 +454,8 @@ print("{mode.name}")
     stdout, _ = await utils.assemble_output(client)
     assert mode.name in stdout
     await utils.clear_iopub(client)
-    for thread_name in Caller.list_threads():
-        Caller.get_instance(thread_name=thread_name).close()
+    for name in Caller.list_active():
+        Caller.get_instance(name=name).stop()
 
 
 @pytest.mark.parametrize(
@@ -484,59 +483,18 @@ async def test_invalid_message(client, channel):
     await utils.clear_iopub(client)
 
 
-@pytest.mark.parametrize("namespace_id", ["", "my namespace_id"])
-@pytest.mark.parametrize("mode", ["", *ExecuteMode])
-async def test_run_thread_ns(client, kernel, namespace_id, mode: ExecuteMode):
-    symbol = str(uuid.uuid4())
-    kernel.shell.namespace_id = namespace_id
-    kernel.shell.user_ns["my_local_variable"] = symbol
-    header = f'##@{mode} namespace_id="{namespace_id}'
-    if mode is ExecuteMode.thread:
-        header += ",thread_name=My thread 1324"
-
-    code = f"""{header}"\n
-def test():
-    assert anyio
-    import threading
-    assert my_local_variable == "{symbol}"
-    assert threading.current_thread() is {"not" if mode is ExecuteMode.thread else ""} threading.main_thread()
-    return True
-test()
-    """
-    _, reply = await utils.execute(client, code, user_expressions={"symbol": "my_local_variable"})
-    assert reply["user_expressions"]["symbol"]["status"] == "ok"
-    symbol_ = eval(reply["user_expressions"]["symbol"]["data"]["text/plain"])
-    assert symbol_ == symbol
-    if mode is ExecuteMode.thread:
-        assert any(inst for inst in Caller._instances if inst.name == "My thread 1324")
-        assert Caller.list_threads() == ["My thread 1324"]
-        Caller.get_instance(thread_name="My thread 1324").close()
-
-
 @pytest.mark.parametrize(
-    ("code", "silent", "expected"),
+    ("code", "silent", "socket_id", "expected"),
     [
-        ("##@task", False, ExecuteSettings(execute_mode=ExecuteMode.task)),
-        ("print(1)", False, ExecuteSettings(execute_mode=ExecuteMode.queue)),
-        ("", True, ExecuteSettings(execute_mode=ExecuteMode.task)),
-        (
-            "##@thread, namespace_id= My namespace_id \nprint('hello')",
-            False,
-            ExecuteSettings(execute_mode=ExecuteMode.thread, namespace_id="My namespace_id"),
-        ),
-        (
-            "##@thread, namespace_id= My namespace_id,thread_name=My thread \nprint('hello')",
-            False,
-            ExecuteSettings(execute_mode=ExecuteMode.thread, namespace_id="My namespace_id", thread_name="My thread"),
-        ),
-        (
-            "##@namespace_id=1 @!%n🌋 \nprint(None)",
-            False,
-            ExecuteSettings(execute_mode=ExecuteMode.queue, namespace_id="1 @!%n🌋"),
-        ),
+        ("#@ task", False, SocketID.shell, ExecuteMode.task),
+        ("#@ Thread", True, SocketID.shell, ExecuteMode.thread),
+        ("print(1)", False, SocketID.shell, ExecuteMode.queue),
+        ("", True, SocketID.shell, ExecuteMode.task),
+        ("#@ thread\nprint('hello')", False, SocketID.shell, ExecuteMode.thread),
+        ("", False, SocketID.control, ExecuteMode.task),
     ],
 )
-def test_get_execute_info(code: str, silent: bool, expected: dict):
+def test_get_execute_mode(code: str, silent: bool, socket_id, expected: ExecuteMode):
     content = ExecuteContent(
         code=code,
         silent=silent,
@@ -544,6 +502,9 @@ def test_get_execute_info(code: str, silent: bool, expected: dict):
         user_expressions={},
         allow_stdin=False,
         stop_on_error=True,
+        execute_mode=cast("ExecuteMode", None),
     )
-    execute_info = async_kernel.Kernel._get_execute_settings(content)
-    assert execute_info == expected
+    job = Job(msg={"content": content}, socket_id=socket_id)  # type: ignore[assignment]
+    execute_mode = async_kernel.Kernel.get_execute_mode(job)
+    assert execute_mode is expected
+    assert job["msg"]["content"]["execute_mode"] is expected

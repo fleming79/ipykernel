@@ -8,7 +8,6 @@ import atexit
 import builtins
 import contextlib
 import contextvars
-import functools
 import getpass
 import logging
 import os
@@ -24,6 +23,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self
 
 import anyio
 import sniffio
+import traitlets
 import zmq
 from IPython.core.completer import provisionalcompleter as _provisionalcompleter
 from IPython.core.completer import rectify_completions as _rectify_completions
@@ -32,7 +32,7 @@ from IPython.utils.tokenutil import token_at_cursor
 from jupyter_client.connect import ConnectionFileMixin
 from jupyter_client.session import Session
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import Bool, Container, Dict, DottedObjectName, Enum, Instance, Set, Tuple, Type, default, import_item
+from traitlets import Bool, Container, Dict, DottedObjectName, Enum, Instance, Int, Set, Tuple, Type, default
 from zmq import Context, Flag, PollEvent, Socket, SocketOption, SocketType
 
 from async_kernel import _version, utils
@@ -40,7 +40,7 @@ from async_kernel.asyncshell import AsyncInteractiveShell
 from async_kernel.caller import Caller, CancelledError
 from async_kernel.debugger import Debugger
 from async_kernel.kernelspec import KernelName
-from async_kernel.typing import ExecuteContent, ExecuteMode, ExecuteSettings, Job, MsgType, NoValue, SocketID
+from async_kernel.typing import ExecuteContent, ExecuteMode, Job, MsgType, NoValue, SocketID
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -84,6 +84,7 @@ class Kernel(ConnectionFileMixin):
     """
 
     _job_var: ClassVar[contextvars.ContextVar[Job]] = contextvars.ContextVar("job")
+    _execution_count_var: ClassVar[contextvars.ContextVar[int]] = contextvars.ContextVar("execution_count")
     _instance: Self | None = None
     _interrupt_requested = False
     _last_interrupt_frame = None
@@ -95,6 +96,7 @@ class Kernel(ConnectionFileMixin):
     _control_handlers = Dict()
     debugger = Instance(Debugger, ())
     anyio_backend = Enum(anyio.get_all_backends())
+    _execution_count = Int(0)
 
     quiet = Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
     outstream_class = DottedObjectName(
@@ -160,6 +162,10 @@ class Kernel(ConnectionFileMixin):
             return self._job_var.get()
         except LookupError:
             return {}
+
+    @property
+    def execution_count(self):
+        return self._execution_count_var.get(self._execution_count)
 
     @property
     def kernel_info(self):
@@ -268,7 +274,7 @@ class Kernel(ConnectionFileMixin):
         if self.connection_file and Path(self.connection_file).exists():
             self.load_connection_file()
         try:
-            async with Caller(log=self.log) as tc:
+            async with Caller(log=self.log, create=True, protected=True) as tc:
                 self.main_thread_caller, tg = tc, tc.taskgroup
                 try:
                     await tg.start(self._start_heartbeat)
@@ -355,19 +361,21 @@ class Kernel(ConnectionFileMixin):
 
     async def _start_control_loop(self, task_status: TaskStatus):
         async def run_in_control_event_loop():
-            await tsc.taskgroup.start(self._receive_msg_loop, SocketID.control)
+            await caller.taskgroup.start(self._receive_msg_loop, SocketID.control)
             ready_event.set()
 
-        self.control_thread_caller = tsc = Caller.start_new(backend=self.anyio_backend, thread_name="Control")
+        self.control_thread_caller = caller = Caller.start_new(
+            backend=self.anyio_backend, name="ControlThread", protected=True
+        )
         ready_event = threading.Event()
-        tsc.call_soon(run_in_control_event_loop)
+        caller.call_soon(run_in_control_event_loop)
         ready_event.wait(10)
         task_status.started()
 
     async def _start_iopub(self, task_status: TaskStatus):
         # Save IO
         self._original_io = sys.stdout, sys.stderr, sys.displayhook, builtins.input, self.getpass
-        cls: type[OutStream] = import_item(self.outstream_class)
+        cls: type[OutStream] = traitlets.import_item(self.outstream_class)
         if self.outstream_class:
             builtins.input = self.raw_input
             getpass.getpass = self.getpass
@@ -403,9 +411,7 @@ class Kernel(ConnectionFileMixin):
             await utils.wait_thread_event(self._stop_event)
         except BaseException:
             pass
-        self.control_thread_caller.close()
-        self.main_thread_caller.close()
-        Caller._shutdown_all()
+        Caller.stop_all(_stop_protected=True)
 
     async def _receive_msg_loop(self, socket_id: Literal[SocketID.control, SocketID.shell], *, task_status: TaskStatus):
         """Receive messages from the socket, unpack them and pass them to be processed with process_message."""
@@ -445,11 +451,10 @@ class Kernel(ConnectionFileMixin):
                             msg_type=msg_type,
                         )
                         if msg_type == MsgType.execute_request:
-                            info = self._get_execute_settings(msg["content"])
-                            if socket_id != SocketID.shell or info["execute_mode"] != ExecuteMode.queue:
-                                Caller().call_soon(self.execute_request, time.monotonic(), job, info)
+                            if self.get_execute_mode(job) is not ExecuteMode.queue:
+                                Caller().call_soon(self.execute_request, time.monotonic(), job)
                             else:
-                                await self._exec_send_stream.send((time.monotonic(), job, info))
+                                await self._exec_send_stream.send((time.monotonic(), job))
                         else:
                             hdlrs = self._shell_handlers if socket_id == SocketID.shell else self._control_handlers
                             await self._run_handler(hdlrs.get(msg_type), job)
@@ -459,26 +464,20 @@ class Kernel(ConnectionFileMixin):
                 return
 
     @staticmethod
-    def _get_execute_settings(content: ExecuteContent) -> ExecuteSettings:
-        """Extract ExecuteSettings from the content."""
-        execute_mode = ExecuteMode.task if content.get("silent", True) else ExecuteMode.queue
-        info = ExecuteSettings(execute_mode=execute_mode)
-        if (code := content["code"].strip()).startswith("##@") and (header := code.split("\n", maxsplit=1)[0]):
-
-            def extract_value(key: Literal["namespace_id", "thread_name"]):
-                "Extracts the value from the header"
-                if len(s := header.split(f"{key}=", maxsplit=1)) == 2:
-                    info[key] = s[1].split(",")[0].strip().strip("'\"")
-
-            extract_value("namespace_id")
-            mode = header.removeprefix("##@").lower().strip().split(" ")[0].strip(",")
-            match mode:
-                case "task":
-                    info["execute_mode"] = ExecuteMode.task
-                case "thread":
-                    info["execute_mode"] = ExecuteMode.thread
-                    extract_value("thread_name")
-        return info
+    def get_execute_mode(job: Job[ExecuteContent]) -> ExecuteMode:
+        """Get job["msg"]["content"]["execute_mode"] adding it if it has't been set."""
+        if m := job["msg"]["content"].get("execute_mode"):
+            # Respect an existing mode
+            return ExecuteMode(m)
+        mode = ExecuteMode.queue
+        if (code := job["msg"]["content"]["code"].strip()).startswith("#@"):
+            mode = ExecuteMode(code.removeprefix("#@").split(maxsplit=1)[0].lower())
+        if (
+            job["msg"]["content"].get("silent", True) or (job["socket_id"] is SocketID.control)
+        ) and mode is ExecuteMode.queue:
+            mode = ExecuteMode.task
+        job["msg"]["content"]["execute_mode"] = mode
+        return mode
 
     async def _run_handler(self, handler: Callable[[Job], CoroutineType] | None, job: Job):
         self._job_var.set(job)
@@ -578,14 +577,14 @@ class Kernel(ConnectionFileMixin):
             )
 
     async def _shell_execute_request_loop(self, *, task_status: TaskStatus):
-        self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[
-            tuple[float, Job, ExecuteSettings]
-        ](max_buffer_size=1000)
+        self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[tuple[float, Job]](
+            max_buffer_size=1000
+        )
         with contextlib.suppress(self.CancelledError):
             async with self._exec_receive_stream as receive_stream:
                 task_status.started()
-                async for job, received_time, info in receive_stream:
-                    await self.execute_request(job, received_time, info)
+                async for job, received_time in receive_stream:
+                    await self.execute_request(job, received_time)
 
     def _topic(self, topic):
         """prefixed topic for IOPub messages"""
@@ -630,62 +629,57 @@ class Kernel(ConnectionFileMixin):
         }
         self._send_reply(job, {"comms": comms})
 
-    async def execute_request(self, received_time: float, job: Job[ExecuteContent], info: ExecuteSettings):
-        """Perform the actual execute_request."""
-        content = job["msg"]["content"].copy()
-        silent = content["silent"]
-        if not silent and received_time < self._stop_on_error_time:
+    async def execute_request(self, received_time: float, job: Job[ExecuteContent]):
+        """Process the execute request."""
+        if (received_time < self._stop_on_error_time) and not job["msg"]["content"]["silent"]:
             self.log.info("Aborting execute_request: %s", job)
             self._publish_status("busy", job)
             content = utils.error_to_dict(RuntimeError("Aborting due to prior exception"))
-            content["execution_count"] = self.shell.execution_count
+            content["execution_count"] = self.execution_count
             self._send_reply(job, content)
             self._publish_status("idle", job)
             return
+        await self._run_handler(self._execute_request_handler, job)
 
-        async def execute_request_handler(job):
-            self.shell.namespace_id = info.get("namespace_id", "")  # namespace_id is a ContextVar
-            f = functools.partial(
-                self.shell.run_cell_async,
-                raw_cell=content["code"],
-                store_history=content.get("store_history", False),
-                silent=silent,
-                transformed_cell=self.shell.transform_cell(content["code"]),
-                shell_futures=True,
-                cell_id=None if silent else job["msg"].get("metadata", {}).get("cellId"),
+    async def _execute_request_handler(self, job: Job[ExecuteContent]):
+        """Perform the actual execute_request."""
+        content = job["msg"]["content"]
+        if not (silent := content["silent"]):
+            self._execution_count += 1
+            self.iopub_send(
+                msg_or_type="execute_input",
+                content={"code": content["code"], "execution_count": self.execution_count},
+                parent=job["msg"],
+                ident=self._topic("execute_input"),
             )
-            if info["execute_mode"] == ExecuteMode.thread:
-                fut = Caller.to_thread_by_thread_name(info.get("thread_name"), f)
-            else:
-                fut = Caller().call_soon(f)
-            if not silent:
-                self.iopub_send(
-                    msg_or_type="execute_input",
-                    content={"code": content["code"], "execution_count": self.shell.execution_count},
-                    parent=job["msg"],
-                    ident=self._topic("execute_input"),
-                )
-            if not silent:
-                self._interrupts.add(fut.cancel)
-                fut.add_done_callback(lambda fut: self._interrupts.discard(fut.cancel))
-            try:
-                result = await fut
-            except CancelledError:
-                result = None
-            err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError()
-            reply_content = {
-                "status": "error" if err else "ok",
-                "execution_count": self.shell.execution_count,
-                "user_expressions": self.shell.user_expressions(content.get("user_expressions", {})),
-            }
-            if err:
-                reply_content.update(utils.error_to_dict(err))
-                if not silent and content.get("stop_on_error"):
-                    self._stop_on_error_time = time.monotonic()
-                    self.log.info("An error occurred in a non-silent execution request")
-            self._send_reply(job, reply_content)
-
-        await self._run_handler(execute_request_handler, job)
+        fut = (Caller.to_thread if self.get_execute_mode(job) is ExecuteMode.thread else Caller().call_soon)(
+            self.shell.run_cell_async,
+            raw_cell=content["code"],
+            store_history=content.get("store_history", False),
+            silent=silent,
+            transformed_cell=self.shell.transform_cell(content["code"]),
+            shell_futures=True,
+            cell_id=None if silent else job["msg"].get("metadata", {}).get("cellId"),
+        )
+        if not silent:
+            self._interrupts.add(fut.cancel)
+            fut.add_done_callback(lambda fut: self._interrupts.discard(fut.cancel))
+        try:
+            result = await fut
+        except CancelledError:
+            result = None
+        err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError()
+        reply_content = {
+            "status": "error" if err else "ok",
+            "execution_count": self.execution_count,
+            "user_expressions": self.shell.user_expressions(content.get("user_expressions", {})),
+        }
+        if err:
+            reply_content.update(utils.error_to_dict(err))
+            if not silent and content.get("stop_on_error"):
+                self._stop_on_error_time = time.monotonic()
+                self.log.info("An error occurred in a non-silent execution request")
+        self._send_reply(job, reply_content)
 
     async def interrupt_request(self, job: Job):
         """Handle an interrupt request."""

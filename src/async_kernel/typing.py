@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import enum
-from typing import TYPE_CHECKING, Any, Generic, Literal, NotRequired, ParamSpec, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, ParamSpec, TypedDict, TypeVar
 
 from typing_extensions import Sentinel
 
@@ -81,12 +81,6 @@ class Job(TypedDict, Generic[T]):
     msg_type: MsgType
 
 
-class ExecuteSettings(TypedDict):
-    execute_mode: ExecuteMode
-    namespace_id: NotRequired[str]
-    thread_name: NotRequired[str]
-
-
 class ExecuteContent(TypedDict):
     # ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute
     code: str
@@ -95,6 +89,7 @@ class ExecuteContent(TypedDict):
     user_expressions: dict[str, str]
     allow_stdin: bool
     stop_on_error: bool
+    execute_mode: ExecuteMode | None  # Added by the kernel when the message is received
 
 
 DebugMessage = dict[str, Any]

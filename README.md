@@ -7,57 +7,37 @@ Async-kernel is a python implementation of a [Jupyter kernel](https://docs.jupyt
 
 ## Features
 
-- [Execute-requests](#kerneljob) are run inside tasks.
-- Multiple namespaces are supported.
-- Uses [ContextVars](#contextvars) for better concurrent execution and to enable multiple namespaces.
-- A [kernel directive](#kernel-directive) inserted in the code enables the user to modify how the code is executed (in a task or thread) and what namespace to use.
-- The `Caller` class provides methods to executed code in threads with different event loops and awaiting the result.
+- [Execute-requests](#kerneljob) by default are run in a task (sequentially) without blocking shell messages.
+- `stdout`(including print), `stderr` and `stdin`(input) map correctly to the execute request (see: [ContextVars](#contextvars)).
+- Cell code can be run in threads or tasks by adding `#@ thread` or `#@ task` respectively as the first line in a cell (see [Execute mode](#execute-mode)).
+- Provides a `Caller` class to execute code in tasks/threads with a thread safe Future providing access to the result.
 - Uses the anyio function [`wait_readable`](https://anyio.readthedocs.io/en/stable/api.html#anyio.wait_readable) to await ZMQ socket messages.
 
-### Kernel directive
+### Execute mode
 
-Async-kernel adds the concept of a kernel directive `#@<execute-mode>, <options>`. Code passed in *execute requests* that start with symbols `#@` in the first non-blank line will be
-interpreted as a kernel directive.
+If you add `#@ <execute-mode>` to the top of cell, the kernel will modify how the cell is run. The following execute modes are supported.
 
-The directive can be used to modify how the code is executed and the `namespace_id` to use.
-
-### Execute Modes
-
-Execute modes provided are:
-
-- `thread`: The code is run in a thread.
-- `task`: The code is run as a task.
-- `queue` (default execute mode): The code is added to a queue and executed sequentially.
-
-### Execute Options
-
-- `namespace_id`: Specify the namespace where the code is executed. `shell.namespaces` is where the `namespace_id` is mapped to a namespace.
+- `#@ thread` - The code is run in a thread.
+- `#@ task` - The code is run as a task.
+- `#@ queue` (default behaviour) - The code is added to a queue and executed sequentially in a task.
 
 ### ContextVars
 
-Async-kernel uses [ContextVars](https://docs.python.org/3/library/contextvars.html#module-contextvars) to enable concurrent execution of code and mapping that execution back the request. For async-kernel this means the same kernel and shell can be used to perform concurrent execution in multiple contexts (tasks/and threads) while providing a mapping back to the intended request. This is used for `stdio` and `stderr` output (including print) and `stdin`.
+Execute request jobs are stored as a [ContextVar](https://docs.python.org/3/library/contextvars.html#module-contextvars) which is accessible on the kernel as the property `kernel.job`. Using a context variable makes it possible to perform concurrent execution enabling `stdio`, `stderr` and `stdin` to map back to the initial job (execute request).
 
-#### `kernel.job`
+#### Example: run a cell in a thread
 
-[Execute](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute) requests store the request in a `Job` which is accessible via the kernel property `kernel.job`.
-
-#### `shell.namespace_id`
-
-In async-kernel the `kernel.shell` maintains a mapping of `namespace_id`'s to dicts. The shell namespace_id is a ContextVar.
-
-### Example
-
-This code will run in a `Caller` thread 'My thread' in the shell namespace 'My Namespace'.
+This code will run the code in a thread.
 
 ```python
-###@thread, namespace=My namespace, thread_name=My thread
+# @ thread
 
 import time
 
 time.sleep(100)
 ```
 
-Irrespective of the kernel directive, any code run in a cell will respect cancellation, though in the example above, the cancellation will only occur after the `time.sleep` call has returned. Should this have been run in the `MainThread` the time.sleep would have been cancelled immediately by means of a signal.
+Irrespective of the Execute mode, any code run in a cell will respect cancellation, though in this example the cancellation will only occur after the `time.sleep` call has returned. Should this have been run in the `MainThread` the time.sleep would have been cancelled immediately by means of a signal.
 
 ## Kernel variants
 
