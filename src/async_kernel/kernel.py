@@ -62,7 +62,7 @@ class KernelInterruptError(InterruptedError):
 
 
 class Kernel(ConnectionFileMixin):
-    """An async kernel with an anyio backend providing an IPython InteractiveShell with zmq.
+    """An async kernel with an anyio backend providing an IPython AsyncInteractiveShell with zmq sockets.
 
     To start the kernel.
 
