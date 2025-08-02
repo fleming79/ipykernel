@@ -144,7 +144,6 @@ async def test_stop_on_breakpoint(client):
     while msg.get("msg_id") != msg_id and msg["content"].get("event") != "stopped":
         msg = await client.get_iopub_msg(timeout=5)
     assert msg["content"]["body"]["reason"] == "breakpoint"
-    assert msg["content"]["body"]["allThreadsStopped"]
     thread_id = msg["content"]["body"]["threadId"]
 
     reply = await send_debug_request(client, "debugInfo")
@@ -154,7 +153,6 @@ async def test_stop_on_breakpoint(client):
     reply = await send_debug_request(client, "next", {"threadId": thread_id})
     while (msg := await client.get_iopub_msg()) and msg["content"]["event"] != "stopped":
         pass
-    assert msg["content"]["body"]["allThreadsStopped"]
 
     # stackTrace
     reply = await send_debug_request(client, "stackTrace", {"threadId": thread_id})
@@ -221,7 +219,6 @@ async def test_stop_on_breakpoint(client):
     assert reply["body"] == {"allThreadsContinued": True}
     while (msg := await client.get_iopub_msg()) and msg["content"]["event"] != "stopped":
         pass
-    assert msg["content"]["body"]["allThreadsStopped"]
 
     reply = await send_debug_request(client, "continue", {"threadId": thread_id})
     msg = await client.get_iopub_msg()

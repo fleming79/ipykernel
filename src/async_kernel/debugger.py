@@ -245,25 +245,21 @@ class Debugger(HasTraits):
 
     def _handle_event(self, event):
         if event["event"] == "stopped":
-            if event["body"]["allThreadsStopped"]:
+
+            async def _handle_stopped_event():
                 names = {t.name for t in threading.enumerate() if not getattr(t, "pydev_do_not_trace", False)}
+                msg = {"seq": self.next_seq(), "type": "request", "command": "threads"}
+                rep = await self.send_dap_request(msg)
+                for thread in rep["body"]["threads"]:
+                    if thread["name"] in names:
+                        self.stopped_threads.add(thread["id"])
+                self._publish_event(event)
 
-                async def _handle_stopped_event():
-                    msg = {"seq": self.next_seq(), "type": "request", "command": "threads"}
-                    rep = await self.send_dap_request(msg)
-                    for thread in rep["body"]["threads"]:
-                        if thread["name"] in names:
-                            self.stopped_threads.add(thread["id"])
-                    self._publish_event(event)
+            self.kernel.control_thread_caller.call_soon(_handle_stopped_event)
+            return
 
-                self.kernel.control_thread_caller.call_soon(_handle_stopped_event)
-                return
-            self.stopped_threads.add(event["body"]["threadId"])
-        elif event["event"] == "continued":
-            if event["body"]["allThreadsContinued"]:
-                self.stopped_threads.clear()
-            else:
-                self.stopped_threads.remove(event["body"]["threadId"])
+        if event["event"] == "continued":
+            self.stopped_threads.clear()
         elif event["event"] == "initialized":
             self.init_event.set()
         self._publish_event(event)
