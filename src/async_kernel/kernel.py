@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self
 
 import anyio
 import sniffio
-import traitlets
 import zmq
 from IPython.core.completer import provisionalcompleter as _provisionalcompleter
 from IPython.core.completer import rectify_completions as _rectify_completions
@@ -32,13 +31,14 @@ from IPython.utils.tokenutil import token_at_cursor
 from jupyter_client.connect import ConnectionFileMixin
 from jupyter_client.session import Session
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import Bool, Container, Dict, DottedObjectName, Enum, Instance, Int, Set, Tuple, Type, default
+from traitlets import Bool, Container, Dict, Enum, Instance, Int, Set, Tuple, Type, default
 from zmq import Context, Flag, PollEvent, Socket, SocketOption, SocketType
 
 from async_kernel import _version, utils
 from async_kernel.asyncshell import AsyncInteractiveShell
 from async_kernel.caller import Caller, CancelledError
 from async_kernel.debugger import Debugger
+from async_kernel.iostream import OutStream
 from async_kernel.kernelspec import KernelName
 from async_kernel.typing import ExecuteContent, ExecuteMode, Job, MsgType, NoValue, SocketID
 
@@ -49,7 +49,6 @@ if TYPE_CHECKING:
     from anyio.abc import TaskStatus
 
     from async_kernel.comm import CommManager
-    from async_kernel.iostream import OutStream
 
 
 __all__ = ["Kernel", "KernelInterruptError"]
@@ -94,29 +93,15 @@ class Kernel(ConnectionFileMixin):
     _sockets: Dict[SocketID, zmq.Socket] = Dict()
     _shell_handlers = Dict()
     _control_handlers = Dict()
-    debugger = Instance(Debugger, ())
-    anyio_backend = Enum(anyio.get_all_backends())
     _execution_count = Int(0)
-
-    quiet = Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
-    outstream_class = DottedObjectName(
-        "async_kernel.iostream.OutStream",
-        help="The importstring for the OutStream factory",
-        allow_none=True,
-    ).tag(
-        config=True,
-    )
-    displayhook_class = DottedObjectName(
-        "async_kernel.displayhook.ZMQDisplayHook", help="The importstring for the DisplayHook factory"
-    ).tag(config=True)
-
-    session = Instance(Session)
-
-    log = Instance(logging.LoggerAdapter)
-
-    shell = Instance(AsyncInteractiveShell)
-    shell_class = Type(AsyncInteractiveShell)
+    anyio_backend = Enum(anyio.get_all_backends())
     help_links = Tuple()
+    quiet = Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
+    shell_class = Type(AsyncInteractiveShell)
+    shell = Instance(AsyncInteractiveShell)
+    session = Instance(Session)
+    log = Instance(logging.LoggerAdapter)
+    debugger = Instance(Debugger, ())
     comm_manager: Instance[CommManager] = Instance("async_kernel.comm.CommManager")
 
     def __new__(cls, *, connection_file="", kernel_name: KernelName | None = None, **kwargs) -> Self:  # noqa: ARG004
@@ -375,25 +360,24 @@ class Kernel(ConnectionFileMixin):
     async def _start_iopub(self, task_status: TaskStatus):
         # Save IO
         self._original_io = sys.stdout, sys.stderr, sys.displayhook, builtins.input, self.getpass
-        cls: type[OutStream] = traitlets.import_item(self.outstream_class)
-        if self.outstream_class:
-            builtins.input = self.raw_input
-            getpass.getpass = self.getpass
-            for name in ["stdout", "stderr"]:
 
-                def flusher(string: str, name=name):
-                    "Publish stdio or stderr when flush is called"
-                    self.iopub_send(
-                        msg_or_type="stream",
-                        content={"name": name, "text": string},
-                        ident=f"stream.{name}".encode(),
-                    )
-                    if not self.quiet and (echo := (sys.__stdout__ if name == "stdout" else sys.__stderr__)):
-                        echo.write(string)
-                        echo.flush()
+        builtins.input = self.raw_input
+        getpass.getpass = self.getpass
+        for name in ["stdout", "stderr"]:
 
-                wrapper = cls(flusher=flusher)
-                setattr(sys, name, wrapper)
+            def flusher(string: str, name=name):
+                "Publish stdio or stderr when flush is called"
+                self.iopub_send(
+                    msg_or_type="stream",
+                    content={"name": name, "text": string},
+                    ident=f"stream.{name}".encode(),
+                )
+                if not self.quiet and (echo := (sys.__stdout__ if name == "stdout" else sys.__stderr__)):
+                    echo.write(string)
+                    echo.flush()
+
+            wrapper = OutStream(flusher=flusher)
+            setattr(sys, name, wrapper)
         task_status.started()
         self.comm_manager.kernel = self
         try:
