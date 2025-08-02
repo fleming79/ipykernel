@@ -96,7 +96,7 @@ class Kernel(ConnectionFileMixin):
     _execution_count = Int(0)
     anyio_backend = Enum(anyio.get_all_backends())
     help_links = Tuple()
-    quiet = Bool(True, help="Only send stdout/stderr to output stream").tag(config=True)
+    quiet = Bool(True, help="Only send stdout/stderr to output stream")
     shell_class = Type(AsyncInteractiveShell)
     shell = Instance(AsyncInteractiveShell)
     session = Instance(Session)
