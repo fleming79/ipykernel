@@ -41,14 +41,32 @@ class InvalidStateError(RuntimeError):
 
 
 class Future(Awaitable[T]):
-    """An anyio style Future to represent an eventual result.
-
-    It is designed to act like an asyncio Future.  It is designed to be compatible with `Caller`
-    providing the capability to await and cancel code running in a separate thread running managed by Caller.
-
-    thread: The thread where set_result/set_exception is called. Defaults to the current thread.
     """
+    A class representing a future result of an asynchronous operation.
 
+    This class provides a way to wait for the result of a computation
+    that may be running in another thread. It supports setting a result
+    or an exception, adding callbacks to be executed when the future is
+    done, and canceling the future.
+
+    The set_result/set_exception methods must be called from inside the thread
+    specified when the instance was created.
+
+    Attributes:
+        thread (threading.Thread | None): The thread associated with the future.
+
+    Methods:
+        result(): Wait for the result (thread-safe).
+        wait_sync(): Synchronously wait for the result.
+        set_result(value): Set the result of the future.
+        set_exception(exception): Set the exception for the future.
+        done(): Return True if the Future is done.
+        add_done_callback(fn): Add a callback to be called when the future is done (not thread-safe).
+        cancel(): Cancel the Future and schedule callbacks (thread-safe).
+        cancelled(): Return True if the future has been cancelled.
+        exception(): Return the exception that was set on this Future.
+        remove_done_callback(fn): Remove all instances of a callback from the callbacks list.
+    """
     __slots__ = [
         "_anyio_event_done",
         "_cancel_scope",
