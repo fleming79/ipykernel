@@ -454,8 +454,7 @@ print("{mode.name}")
     stdout, _ = await utils.assemble_output(client)
     assert mode.name in stdout
     await utils.clear_iopub(client)
-    for name in Caller.list_active():
-        Caller.get_instance(name=name).stop()
+    Caller.stop_all()
 
 
 @pytest.mark.parametrize(

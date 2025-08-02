@@ -606,6 +606,6 @@ class Caller:
                     fut.cancel()
 
     @classmethod
-    def list_active(cls) -> list[str]:
-        "List active callers."
-        return sorted(caller.thread.name for caller in Caller._instances.values() if caller.active)
+    def all_callers(cls, active_only=True):
+        "Get a list of the callers."
+        return [caller for caller in Caller._instances.values() if caller.active or not active_only]
