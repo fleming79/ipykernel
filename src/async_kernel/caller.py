@@ -67,6 +67,7 @@ class Future(Awaitable[T]):
         exception(): Return the exception that was set on this Future.
         remove_done_callback(fn): Remove all instances of a callback from the callbacks list.
     """
+
     __slots__ = [
         "_anyio_event_done",
         "_cancel_scope",
@@ -189,17 +190,59 @@ class Future(Awaitable[T]):
 
 class Caller:
     """
-    Caller provides a mechanism to safely schedule and execute functions
-    or coroutines in its original thread within an async context.
+    A class to manage calls to functions and coroutines in a separate thread,
+    utilizing AnyIO for asynchronous operations.
 
-    This class manages a queue of jobs that can be submitted from any thread,
-    ensuring that all scheduled calls are executed in the context of a dedicated
-    thread and async task group. It is particularly useful for integrating
-    synchronous and asynchronous code, or for safely invoking async operations
-    from non-async threads.
+    The `Caller` class provides a mechanism to execute functions and coroutines
+    in a dedicated thread, leveraging AnyIO for asynchronous task management.
+    It supports scheduling calls with delays, executing them immediately,
+    and running them without a context.  It also provides a means to manage
+    a pool of threads for general purpose offloading of tasks.
 
-    Only one instance per thread will be created and the instance must be open
-    within an async context for call_soon and call_later to be processed.
+    The class maintains a registry of instances, associating each with a specific
+    thread. It uses a task group to manage the execution of scheduled tasks and
+    provides methods to start, stop, and query the status of the caller.
+
+    Attributes:
+        thread (threading.Thread): The thread associated with this `Caller` instance.
+        backend (str): The AnyIO backend used by this `Caller` instance.
+        log (logging.LoggerAdapter): A logger adapter for logging messages.
+        active (bool): A flag indicating whether the `Caller` is active.
+        iopub_sockets (weakref.WeakKeyDictionary[threading.Thread, Socket]): A class-level
+            weak key dictionary mapping threads to ZeroMQ sockets for inter-process
+            communication.
+        iopub_url (str): The URL for the ZeroMQ IOPub socket.
+
+    Methods:
+        __new__(cls, thread: threading.Thread | None = None, *, log: logging.LoggerAdapter | None = None, create=False, protected=False) -> Self:
+            Creates a new `Caller` instance or returns an existing one for the given thread.
+        taskgroup (property):
+            Returns the AnyIO task group associated with this `Caller` instance.
+        closed (property):
+            Returns True if the `Caller` is closed, False otherwise.
+        stop(self, *, force=False):
+            Stops the `Caller` instance, closing the event loop and releasing resources.
+        call_later(self, func: Callable[P, T | Awaitable[T]], delay=0.0, /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
+            Schedules a function or coroutine for execution after a delay.
+        call_soon(self, func: Callable[P, T | Awaitable[T]], *args: P.args, **kwargs: P.kwargs) -> Future[T]:
+            Schedules a function or coroutine for immediate execution.
+        call_no_context(self, func: Callable[P, Any], *args: P.args, **kwargs: P.kwargs) -> None:
+            Schedules a function for execution without a context.
+    Classmethods:
+        stop_all(cls, **kwgs):
+            Stops all active `Caller` instances.
+        get_instance(cls, name: str | None = "MainThread", *, create=False) -> Self:
+            Gets an instance of `Caller` for the given thread name.
+        to_thread(cls, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
+            Calls a function in a separate thread using a thread pool.
+        to_thread_by_name(cls, name: str | None, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
+            Calls a function in a separate thread, creating a new thread if necessary.
+        start_new(cls, *, backend: Literal["asyncio", "trio"] | str = "", log: logging.LoggerAdapter | None = None, name: str | None = None, protected=False):
+            Starts a new `Caller` in a separate thread.
+        as_completed(cls, items: Iterable[Future[T]] | AsyncGenerator[Future[T]], *, max_concurrent: NoValue | int = NoValue):
+            An asynchronous iterator that yields futures as they complete.
+        list_active(cls) -> list[str]:
+            Lists the names of all active callers.
     """
 
     _instances: ClassVar[dict[threading.Thread, Self]] = {}
