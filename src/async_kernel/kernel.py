@@ -40,7 +40,7 @@ from async_kernel.caller import Caller, CancelledError
 from async_kernel.debugger import Debugger
 from async_kernel.iostream import OutStream
 from async_kernel.kernelspec import KernelName
-from async_kernel.typing import ExecuteContent, ExecuteMode, Job, MsgType, NoValue, SocketID
+from async_kernel.typing import EXECUTE_MODE_PREFIX, ExecuteContent, ExecuteMode, Job, MsgType, NoValue, SocketID
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -454,8 +454,12 @@ class Kernel(ConnectionFileMixin):
             # Respect an existing mode
             return ExecuteMode(m)
         mode = ExecuteMode.queue
-        if (code := job["msg"]["content"]["code"].strip()).startswith("#@"):
-            mode = ExecuteMode(code.removeprefix("#@").split(maxsplit=1)[0].lower())
+        if (code := job["msg"]["content"]["code"].strip()).startswith(EXECUTE_MODE_PREFIX):
+            try:
+                mode = ExecuteMode(code.removeprefix(EXECUTE_MODE_PREFIX).split(maxsplit=1)[0])
+            except Exception as e:
+                e.add_note(f"Valid modes are {list(ExecuteMode)}")
+                raise
         if (
             job["msg"]["content"].get("silent", True) or (job["socket_id"] is SocketID.control)
         ) and mode is ExecuteMode.queue:

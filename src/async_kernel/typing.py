@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import enum
-from typing import TYPE_CHECKING, Any, Generic, Literal, ParamSpec, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, ParamSpec, TypedDict, TypeVar
 
 from typing_extensions import Sentinel
 
@@ -34,6 +34,9 @@ class ExecuteMode(enum.StrEnum):
     task = "task"
     thread = "thread"
     queue = "queue"
+
+
+EXECUTE_MODE_PREFIX: Final = "# @"
 
 
 class MsgType(enum.StrEnum):

@@ -19,7 +19,7 @@ import async_kernel.utils
 from async_kernel.caller import Caller
 from async_kernel.comm import Comm
 from async_kernel.kernel import ExecuteMode, SocketID
-from async_kernel.typing import ExecuteContent, Job
+from async_kernel.typing import EXECUTE_MODE_PREFIX, ExecuteContent, Job
 from tests import utils
 
 
@@ -444,7 +444,7 @@ async def test_shell_can_set_namespace(kernel):
 @pytest.mark.parametrize("mode", ExecuteMode)
 async def test_header_mode(client, mode: ExecuteMode):
     code = f"""
-#@{mode.name}
+{EXECUTE_MODE_PREFIX}{mode.name}
 import time
 time.sleep(0.1)
 print("{mode.name}")
@@ -485,11 +485,11 @@ async def test_invalid_message(client, channel):
 @pytest.mark.parametrize(
     ("code", "silent", "socket_id", "expected"),
     [
-        ("#@ task", False, SocketID.shell, ExecuteMode.task),
-        ("#@ Thread", True, SocketID.shell, ExecuteMode.thread),
+        (f"{EXECUTE_MODE_PREFIX}{ExecuteMode.task}", False, SocketID.shell, ExecuteMode.task),
+        (f"{EXECUTE_MODE_PREFIX} {ExecuteMode.task}", False, SocketID.shell, ExecuteMode.task),
         ("print(1)", False, SocketID.shell, ExecuteMode.queue),
         ("", True, SocketID.shell, ExecuteMode.task),
-        ("#@ thread\nprint('hello')", False, SocketID.shell, ExecuteMode.thread),
+        (f"{EXECUTE_MODE_PREFIX}{ExecuteMode.thread}\nprint('hello')", False, SocketID.shell, ExecuteMode.thread),
         ("", False, SocketID.control, ExecuteMode.task),
     ],
 )
@@ -501,9 +501,31 @@ def test_get_execute_mode(code: str, silent: bool, socket_id, expected: ExecuteM
         user_expressions={},
         allow_stdin=False,
         stop_on_error=True,
-        execute_mode=cast("ExecuteMode", None),
+        execute_mode=None,
     )
     job = Job(msg={"content": content}, socket_id=socket_id)  # type: ignore[assignment]
     execute_mode = async_kernel.Kernel.get_execute_mode(job)
     assert execute_mode is expected
     assert job["msg"]["content"]["execute_mode"] is expected
+
+
+@pytest.mark.parametrize(
+    ("code", "socket_id", "error_type"),
+    [
+        (f"{EXECUTE_MODE_PREFIX}Task", SocketID.shell, ValueError),
+        (f"{EXECUTE_MODE_PREFIX}threads", SocketID.shell, ValueError),
+    ],
+)
+def test_get_execute_mode_raises(code: str, socket_id, error_type):
+    content = ExecuteContent(
+        code=code,
+        silent=False,
+        store_history=True,
+        user_expressions={},
+        allow_stdin=False,
+        stop_on_error=True,
+        execute_mode=None,
+    )
+    job = Job(msg={"content": content}, socket_id=socket_id)  # type: ignore[assignment]
+    with pytest.raises(error_type):
+        async_kernel.Kernel.get_execute_mode(job)
