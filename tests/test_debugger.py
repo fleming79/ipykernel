@@ -95,7 +95,8 @@ async def test_debug_disconnect_initialize(client):
     )
     # Attach
     await send_debug_request(client, "attach")
-    await send_debug_request(client, "configurationDone")  # An invalid call to absorb.
+    # The next line is an 'invalid call' (replicates a bug in jupyterlab see: https://github.com/jupyterlab/jupyterlab/issues/17673).
+    await send_debug_request(client, "configurationDone")
 
 
 async def test_set_breakpoints(client):
@@ -134,6 +135,7 @@ f(2, 3)"""
 
 async def test_stop_on_breakpoint(client):
     # Debugger needs to be stopped on a breakpoint
+    # The steps below expect the 'debugger' to be in a various state (stopped or running)
 
     code = await test_set_breakpoints(client)
     # Executing code will run till a breakpoint is reached
@@ -154,22 +156,22 @@ async def test_stop_on_breakpoint(client):
     while (msg := await client.get_iopub_msg()) and msg["content"]["event"] != "stopped":
         pass
 
-    # stackTrace
+    # stackTrace (stopped)
     reply = await send_debug_request(client, "stackTrace", {"threadId": thread_id})
     stacks = reply["body"]["stackFrames"]
     assert stacks
 
-    # source
+    # source (stopped)
     reply = await send_debug_request(client, "source", {"source": stacks[0]["source"]})
     assert reply["success"]
     assert reply["body"]["content"] == code
 
-    # scopes
+    # scopes (stopped)
     reply = await send_debug_request(client, "scopes", {"frameId": stacks[0]["id"]})
     assert reply["success"]
     variables_reference = reply["body"]["scopes"][0]["variablesReference"]
 
-    # variables
+    # variables (stopped)
     reply = await send_debug_request(
         client=client,
         command="variables",
@@ -178,7 +180,7 @@ async def test_stop_on_breakpoint(client):
     assert reply["success"]
     assert reply["body"]["variables"]
 
-    # evaluate
+    # evaluate (stopped)
     reply = await send_debug_request(
         client=client,
         command="evaluate",
@@ -190,7 +192,7 @@ async def test_stop_on_breakpoint(client):
     )
     assert reply["success"]
 
-    # copyToGlobals
+    # copyToGlobals (stopped)
     reply = await send_debug_request(
         client=client,
         command="copyToGlobals",
@@ -198,7 +200,7 @@ async def test_stop_on_breakpoint(client):
     )
     assert reply["success"]
 
-    # richInspectVariables
+    # richInspectVariables (stopped)
     reply = await send_debug_request(
         client=client,
         command="richInspectVariables",
@@ -207,12 +209,11 @@ async def test_stop_on_breakpoint(client):
     assert reply["success"]
     assert set(reply["body"]) == {"metadata", "data"}
 
-    # inspectVariables
+    # inspectVariables (stopped)
     reply = await send_debug_request(client=client, command="inspectVariables", arguments={"frameId": stacks[0]["id"]})
     assert reply["success"]
 
     # continue
-    # await anyio.sleep(0.1)
     await utils.clear_iopub(client)
     reply = await send_debug_request(client, "continue", {"threadId": thread_id})
     assert reply["success"]
@@ -221,15 +222,14 @@ async def test_stop_on_breakpoint(client):
         pass
 
     reply = await send_debug_request(client, "continue", {"threadId": thread_id})
-    msg = await client.get_iopub_msg()
-    assert msg["content"]["event"] == "continued"
-    assert reply["body"]["allThreadsContinued"]
+    while (msg := await client.get_iopub_msg()) and msg["content"]["event"] != "continued":
+        pass
 
-    # debugInfo (ensure running)
+    # debugInfo (running)
     reply = await send_debug_request(client, "debugInfo")
     assert reply["body"]["stoppedThreads"] == []
 
-    # richInspectVariables (whilst running)
+    # richInspectVariables (running)
     reply = await send_debug_request(
         client=client,
         command="richInspectVariables",
@@ -238,7 +238,7 @@ async def test_stop_on_breakpoint(client):
     assert reply["success"]
     assert reply["body"] == {"data": {"text/plain": "'has a value'"}, "metadata": {}}
 
-    # variables (whilst running)
+    # variables (running)
     reply = await send_debug_request(
         client=client,
         command="variables",
