@@ -110,7 +110,6 @@ class Kernel(ConnectionFileMixin):
         return instance
 
     def __init__(self, **kwargs):
-        """Initialize the kernel."""
         if self._shell_handlers:
             return  # Only initialize once
         super().__init__(**kwargs)
@@ -146,6 +145,7 @@ class Kernel(ConnectionFileMixin):
 
     @property
     def execution_count(self):
+        "The execution count in context of the current coroutine, else the current value if there isn't one in context."
         return self._execution_count_var.get(self._execution_count)
 
     @property
@@ -379,7 +379,7 @@ class Kernel(ConnectionFileMixin):
         Caller.stop_all(_stop_protected=True)
 
     async def _receive_msg_loop(self, socket_id: Literal[SocketID.control, SocketID.shell], *, task_status: TaskStatus):
-        """Receive messages from the socket, unpack them and pass them to be processed with process_message."""
+        """Receive messages from the socket, unpack them and call the relevent request handler."""
         if (
             sys.platform == "win32"
             and sniffio.current_async_library() == "asyncio"
