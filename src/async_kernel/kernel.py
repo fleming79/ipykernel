@@ -613,6 +613,7 @@ class Kernel(ConnectionFileMixin):
         content = job["msg"]["content"]
         if not (silent := content["silent"]):
             self._execution_count += 1
+            self._execution_count_var.set(self._execution_count)
             self.iopub_send(
                 msg_or_type="execute_input",
                 content={"code": content["code"], "execution_count": self.execution_count},
