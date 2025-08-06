@@ -17,6 +17,6 @@ class CustomHook(BuildHookInterface):
         here = Path(__file__).parent.resolve()
 
         sys.path.insert(0, str(here / "src" / "async_kernel"))
-        from kernelspec import KernelName, write_all_kernelspec  # type: ignore  # noqa: PGH003, PLC0415
+        from kernelspec import KernelName, write_kernel_spec  # type: ignore  # noqa: PGH003, PLC0415
 
-        write_all_kernelspec(base=Path(here) / "data_kernelspec", kernel_names=[KernelName.asyncio])
+        write_kernel_spec(base=Path(here) / "data_kernelspec", kernel_name=KernelName.asyncio)

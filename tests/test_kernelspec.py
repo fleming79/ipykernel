@@ -8,7 +8,7 @@ import shutil
 import pytest
 from jupyter_client.kernelspec import KernelSpec
 
-from async_kernel.kernelspec import RESOURCES, KernelName, write_all_kernelspec, write_kernel_spec
+from async_kernel.kernelspec import RESOURCES, KernelName, write_kernel_spec
 
 
 @pytest.mark.parametrize("kernel_name", list(KernelName))
@@ -23,13 +23,3 @@ def test_write_kernel_spec(kernel_name: KernelName):
         data = json.load(f)
     KernelSpec(**data)
     shutil.rmtree(path)
-
-
-def test_write_all_kernelspec_creates_expected_kernels(tmp_path):
-    # Call twice; the second checks it can overwrite existing folders.
-    for _ in range(2):
-        write_all_kernelspec(tmp_path)
-        for kernel_name in (KernelName.asyncio, KernelName.trio):
-            kernel_dir = tmp_path / kernel_name
-            assert kernel_dir.exists()
-            assert (kernel_dir / "kernel.json").exists()

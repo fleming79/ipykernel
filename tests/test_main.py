@@ -2,7 +2,6 @@
 # Distributed under the terms of the Modified BSD License.
 from __future__ import annotations
 
-import inspect
 import shutil
 import signal
 import sys
@@ -13,8 +12,8 @@ import anyio
 import pytest
 
 import async_kernel.__main__ as main
-from async_kernel import Kernel
-from async_kernel.kernelspec import KernelName, make_argv
+from async_kernel.kernelspec import Backend, make_argv
+from tests import utils
 
 
 @pytest.fixture
@@ -34,12 +33,12 @@ def test_prints_help_when_no_args(monkeypatch, capsys):
 
 def test_add_kernel(monkeypatch, fake_kernel_dir, capsys):
     monkeypatch.setattr(sys, "argv", ["prog", "-a", "async-trio"])
-    monkeypatch.setattr(main, "write_all_kernelspec", mock.Mock())
+    monkeypatch.setattr(main, "write_kernel_spec", mock.Mock())
     monkeypatch.setattr(main, "KernelName", main.KernelName)
     main.main()
     out = capsys.readouterr().out
     assert "Added kernel spec async-trio" in out
-    main.write_all_kernelspec.assert_called()  # type: ignore[attr-defined]
+    main.write_kernel_spec.assert_called()  # type: ignore[attr-defined]
 
 
 def test_remove_existing_kernel(monkeypatch, fake_kernel_dir, capsys):
@@ -65,58 +64,56 @@ def test_remove_nonexistent_kernel(monkeypatch, fake_kernel_dir, capsys):
 
 
 def test_start_kernel_success(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["prog", "-f", ".", "--kernel_name", "async"])
-    start_mock = mock.Mock()
-    monkeypatch.setattr(main.Kernel, "start", start_mock)
+    monkeypatch.setattr(sys, "argv", ["prog", "-f", ".", "--kernel_name", "async", "--backend=asyncio"])
+    started = False
+
+    async def wait_exit():
+        nonlocal started
+        started = True
+
     with pytest.raises(SystemExit) as e:
-        main.main()
+        main.main(wait_exit)
     assert e.value.code == 0
+    assert started
     out = capsys.readouterr().out
     assert "Starting kernel" in out
-    start_mock.assert_called()
+    utils.clear_kernel()
 
 
 def test_start_kernel_failure(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["prog", "-f", ".", "--kernel_name", "async"])
+    # Replace cleanup_connection_file with None to cause an exception
+    monkeypatch.setattr(sys, "argv", ["prog", "-f", ".", "--cleanup_connection_file", "None"])
 
-    def fail_start(*a, **kw):
-        msg = "fail!"
-        raise RuntimeError(msg)
-
-    monkeypatch.setattr(main.Kernel, "start", fail_start)
     with pytest.raises(SystemExit) as e:
         main.main()
     assert e.value.code == 1
     out = capsys.readouterr().out
-    assert "fail!" in out
+    assert "the first argument must be callable" in out
 
 
-@pytest.mark.parametrize("kernel_name", list(KernelName))
-def test_kernel_start(kernel_name: KernelName):
-    anyio_run = anyio.run
-    anyio_sleep_forever = anyio.sleep_forever
-    _start = None
-
-    def _patch_run(coro, backend):
-        nonlocal _start
-        _start = coro
-        if kernel_name.startswith("async"):
-            assert backend == "asyncio"
-        else:
-            assert backend == "trio"
-
-    anyio.run = _patch_run
-    try:
-        Kernel.start(connection_file="test.json", kernel_name=kernel_name)
-        assert inspect.iscoroutinefunction(_start)
-    finally:
-        anyio.run = anyio_run
-        anyio.sleep_forever = anyio_sleep_forever
-
-
-async def test_subprocess_kernels_client(subprocess_kernels_client):
+async def test_subprocess_kernels_client(subprocess_kernels_client, kernel_name):
     # Start & Stop a kernel
-    return
+    backend = Backend.trio if "trio" in kernel_name.lower() else Backend.asyncio
+    _, reply = await utils.execute(
+        subprocess_kernels_client,
+        "kernel = get_ipython().kernel",
+        user_expressions={"kernel_name": "kernel.kernel_name", "backend": "kernel.anyio_backend"},
+    )
+    assert kernel_name in reply["user_expressions"]["kernel_name"]["data"]["text/plain"]
+    assert backend in reply["user_expressions"]["backend"]["data"]["text/plain"]
+
+
+def test_main(monkeypatch, anyio_backend, kernel_name):
+    # Start & Stop a kernel
+    monkeypatch.setattr(sys, "argv", ["prog", "-f", ".", "--quiet", "False"])
+    started = False
+
+    async def wait_exit():
+        nonlocal started
+        started = True
+
+    with pytest.raises(SystemExit):
+        main.main(wait_exit)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Can't simulate keyboard interrupt on windows.")

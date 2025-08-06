@@ -31,7 +31,7 @@ from IPython.utils.tokenutil import token_at_cursor
 from jupyter_client.connect import ConnectionFileMixin
 from jupyter_client.session import Session
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import Bool, Container, Dict, Enum, Instance, Int, Set, Tuple, Type, default
+from traitlets import CBool, Container, Dict, Instance, Int, Set, Tuple, UseEnum, default
 from zmq import Context, Flag, PollEvent, Socket, SocketOption, SocketType
 
 from async_kernel import _version, utils
@@ -39,7 +39,7 @@ from async_kernel.asyncshell import AsyncInteractiveShell
 from async_kernel.caller import Caller, CancelledError
 from async_kernel.debugger import Debugger
 from async_kernel.iostream import OutStream
-from async_kernel.kernelspec import KernelName
+from async_kernel.kernelspec import Backend, KernelName
 from async_kernel.typing import EXECUTE_MODE_PREFIX, ExecuteContent, ExecuteMode, Job, MsgType, NoValue, SocketID
 
 if TYPE_CHECKING:
@@ -94,29 +94,25 @@ class Kernel(ConnectionFileMixin):
     _shell_handlers = Dict()
     _control_handlers = Dict()
     _execution_count = Int(0)
-    anyio_backend = Enum(anyio.get_all_backends())
+    anyio_backend = UseEnum(Backend)
     help_links = Tuple()
-    quiet = Bool(True, help="Only send stdout/stderr to output stream")
-    shell_class = Type(AsyncInteractiveShell)
+    quiet = CBool(True, help="Only send stdout/stderr to output stream")
     shell = Instance(AsyncInteractiveShell)
     session = Instance(Session)
     log = Instance(logging.LoggerAdapter)
     debugger = Instance(Debugger, ())
     comm_manager: Instance[CommManager] = Instance("async_kernel.comm.CommManager")
 
-    def __new__(cls, *, connection_file="", kernel_name: KernelName | None = None, **kwargs) -> Self:  # noqa: ARG004
+    def __new__(cls, **kwargs) -> Self:  # noqa: ARG004
         #  There is only one instance.
         if not (instance := cls._instance):
             cls._instance = instance = super().__new__(cls)
         return instance
 
-    def __init__(self, *, connection_file="", kernel_name: KernelName | None = None, **kwargs):
+    def __init__(self, **kwargs):
         """Initialize the kernel."""
         if self._shell_handlers:
             return  # Only initialize once
-        if kernel_name:
-            self.kernel_name = kernel_name
-        self.connection_file = str(connection_file)
         super().__init__(**kwargs)
         self._shell_handlers = {
             MsgType.kernel_info_request: self.kernel_info_request,
@@ -196,10 +192,16 @@ class Kernel(ConnectionFileMixin):
 
     @default("kernel_name")
     def _default_kernel_name(self):
-        if sniffio.current_async_library() == "trio":
-            return KernelName.trio
-        if sys.version_info >= (3, 12) and asyncio.get_running_loop().get_task_factory() is asyncio.eager_task_factory:
-            return KernelName.asyncio_eager
+        try:
+            if sniffio.current_async_library() == "trio":
+                return KernelName.trio
+            if (
+                sys.version_info >= (3, 12)
+                and asyncio.get_running_loop().get_task_factory() is asyncio.eager_task_factory
+            ):
+                return KernelName.asyncio_eager
+        except Exception:
+            pass
         return KernelName.asyncio
 
     @default("comm_manager")
@@ -215,28 +217,7 @@ class Kernel(ConnectionFileMixin):
 
     @default("shell")
     def _default_shell(self):
-        return self.shell_class.instance(parent=self, kernel=self)
-
-    @classmethod
-    def start(cls, connection_file="", kernel_name=KernelName.asyncio) -> int:
-        """Start the kernel."""
-
-        async def _start() -> None:
-            async with kernel.start_in_context():
-                with contextlib.suppress(kernel.CancelledError):
-                    await anyio.sleep_forever()
-
-        kernel = cls(kernel_name=kernel_name, connection_file=connection_file)
-        try:
-            anyio.run(_start, backend="trio" if kernel.kernel_name is KernelName.trio else "asyncio")
-        except KeyboardInterrupt:
-            print("\nKernel stopped")
-        except kernel.CancelledError as e:
-            if not kernel._stop_event.is_set():
-                e.add_note("Unexpected cancellation caused shutdown")
-                raise
-            return 0
-        return 0
+        return AsyncInteractiveShell.instance(parent=self, kernel=self)
 
     @classmethod
     def stop(cls):
@@ -261,6 +242,7 @@ class Kernel(ConnectionFileMixin):
         try:
             async with Caller(log=self.log, create=True, protected=True) as tc:
                 self.main_thread_caller, tg = tc, tc.taskgroup
+                await tg.start(self._wait_stopped)
                 try:
                     await tg.start(self._start_heartbeat)
                     await tg.start(self._start_stdin)
@@ -273,7 +255,6 @@ class Kernel(ConnectionFileMixin):
                         self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{uuid.uuid4()}.json"))
                     self.write_connection_file()
                     atexit.register(self.cleanup_connection_file)
-                    await tg.start(self._wait_stopped)
                     print(f"""Kernel started. To connect a client use: --existing "{self.connection_file}" """)
                     await tg.start(self._start_iopub)
                     yield self

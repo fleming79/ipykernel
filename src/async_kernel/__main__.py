@@ -4,18 +4,24 @@
 """The cli entry point for async_kernel."""
 
 import argparse
+import contextlib
 import pathlib
 import shutil
 import sys
+import traceback
+from itertools import pairwise
+
+import anyio
+import traitlets
 
 from async_kernel.kernel import Kernel
-from async_kernel.kernelspec import KernelName, write_all_kernelspec
+from async_kernel.kernelspec import Backend, KernelName, write_kernel_spec
 
 
-def main():
+def main(wait_exit_context=anyio.sleep_forever):
     "Main entry point to launch kernel or add/remove installed kerenel specs."
     kernel_dir = pathlib.Path(sys.prefix) / "share/jupyter/kernels"
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Kernel interface to start a kernel or add/remove a kernel spec.")
     parser.add_argument(
         "-f",
         "--file",
@@ -27,15 +33,17 @@ def main():
         "-a",
         "--add",
         dest="add",
-        default="",
-        help=f"Add a kernel spec. Options: {list(map(str, KernelName))}",
+        help=f"Add a kernel spec. Default kernels: {list(map(str, KernelName))}."
+        " Pass key/value pairs to configure the kernel. "
+        f"Built in options include: \n--kernel_name <{list(KernelName)}>: The name to use for the kernel as configured.\n"
+        "\n--klass <module.ClassName>: The import path for a custom kernel.\n"
+        "Other properties on the kernel can also be specified using --<attribute name> <value> pairs.",
     )
     parser.add_argument(
         "-r",
         "--remove",
         dest="remove",
-        default="",
-        help=f"remove an existing kernel. Installed kernels: {[item.name for item in kernel_dir.iterdir() if item.is_dir()]}",
+        help=f"remove existing kernel specs. Installed kernels: {[item.name for item in kernel_dir.iterdir() if item.is_dir()]}",
     )
     parser.add_argument(
         "--kernel_name",
@@ -43,10 +51,12 @@ def main():
         default=KernelName.asyncio,
         help=f"options: {list(map(str, KernelName))}",
     )
-    args = parser.parse_args()
+    args, unknownargs = parser.parse_known_args()
+    for k, v in pairwise(unknownargs):
+        if k.startswith("--"):
+            setattr(args, k.removeprefix("--"), v)
     if args.add:
-        kernel_names = tuple(KernelName(n.strip("'\"")) for n in args.add.split(","))
-        write_all_kernelspec(kernel_dir, kernel_names=kernel_names)
+        write_kernel_spec(kernel_dir, **vars(args))
         print(f"Added kernel spec {args.add}")
     elif args.remove:
         for kernel_name in args.remove.split(","):
@@ -59,16 +69,32 @@ def main():
     elif not args.connection_file:
         parser.print_help()
     else:
-        print("Starting kernel")
+        klass = getattr(args, "klass", None)
+        cls: type[Kernel] = traitlets.import_item(klass) if klass else Kernel
+        kernel = cls(kernel_name=args.kernel_name)
+        for k, v in vars(args).items():
+            if hasattr(kernel, k):
+                if k == "connection_file" and v == ".":
+                    continue
+                try:
+                    setattr(kernel, k, v)
+                except Exception:
+                    v = eval(v)  # noqa: PLW2901
+                setattr(kernel, k, v)
+
+        async def _start() -> None:
+            print("Starting kernel")
+            async with kernel.start_in_context():
+                with contextlib.suppress(kernel.CancelledError):
+                    await wait_exit_context()
+
         try:
-            Kernel.start(
-                connection_file=""
-                if args.connection_file == "."
-                else str(pathlib.Path(args.connection_file).resolve()),
-                kernel_name=KernelName(args.kernel_name),
-            )
-        except Exception as e:
-            print(e)
+            anyio.run(_start, backend=Backend.trio if "trio" in args.kernel_name.lower() else Backend.asyncio)
+        except KeyboardInterrupt:
+            print("\nKernel stopped")
+
+        except BaseException as e:
+            print(traceback.format_exception(e))
             sys.exit(1)
         else:
             sys.exit(0)
