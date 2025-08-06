@@ -296,7 +296,6 @@ class Kernel(ConnectionFileMixin):
 
     async def _start_stdin(self, task_status: TaskStatus):
         socket = Context.instance().socket(SocketType.ROUTER)
-        socket.linger = 0
         with self._bind_socket(SocketID.stdin, socket), contextlib.suppress(self.CancelledError):
             task_status.started()
             await anyio.sleep_forever()
