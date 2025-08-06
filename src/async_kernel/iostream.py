@@ -1,5 +1,3 @@
-"""Wrappers for forwarding stdout/stderr over zmq"""
-
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
 
@@ -14,18 +12,16 @@ if TYPE_CHECKING:
 
 
 class OutStream(TextIOBase):
-    """A file like object that calls flusher with the string output when flush is called."""
+    """A file like object that calls the flusher with the string output when flush is called."""
 
     _write_lock = Lock()
 
     def __init__(self, flusher: Callable[[str], None]):
         """
-        Parameters
-        ----------
-        flusher: Callable
-            A callback responsible for sending the output.
+        Args:
+            flusher: A callback responsible for sending the output.
 
-        ref: https://docs.python.org/3/library/io.html#io.IOBase
+        [reference for IOBase](https://docs.python.org/3/library/io.html#io.IOBase)
         """
         super().__init__()
         self._flusher = flusher
@@ -51,11 +47,7 @@ class OutStream(TextIOBase):
     def write(self, string: str) -> int:
         """Write to current stream after encoding if necessary
 
-        Returns
-        -------
-        len : int
-            number of items from input parameter written to stream.
-
+        Returns: number of items from input parameter written to stream.
         """
         with self._write_lock:
             self._out = string

@@ -491,26 +491,14 @@ class Caller:
         name: str | None = None,
         protected=False,
     ):
-        """Start a new caller in a separate thread.
+        """Start a new thread with a new Caller open in the context of anyio event loop.
 
-        The caller is run in a separate thread using AnyIO.  This is
-        necessary because the caller needs to run an event loop, and we
-        don't want to block the main thread.
+        A new thread and caller is always started and ready to start new jobs as soon as it is returned.
 
-        Parameters
-        ----------
-        backend : Literal["asyncio", "trio", None], optional
-            The AnyIO backend to use.  If None, we use the current anyio backend.
-        log : logging.LoggerAdapter, optional
-            A logger to use for logging.  If None, a default logger will be
-            created.
-        name : str, optional
-            The name for the new thread.
-
-        Returns
-        -------
-        Caller
-            The new caller.
+        Args:
+            backend: The backend to use for the anyio event loop (anyio.run).
+            log: A logging adapter to use for debug messages.
+            protected: When True, the caller will not shutdown unless shutdown is called with `force=True`.
         """
 
         def anyio_run_caller():
@@ -545,9 +533,11 @@ class Caller:
         Pass a generator should you wish to limit the number future jobs when calling to_thread/to_task etc.
         Pass a set/list/tuple to ensure all get monitored at once.
 
-        max_concurrent: int
-            The maximum number of future results to maintain. This may be useful when passing a generator
-            and you wish to limit the number future tasks.
+        Args:
+            items: Either a container with existing futures or generator of Futures.
+            max_concurrent: The maximum number of concurrent futures to monitor at a time.
+            This is useful when `items` is a generator utilising Caller.to_thread. By default this will
+            limit to `Caller.MAX_IDLE_POOL_INSTANCES`.
         """
         event_future_ready = threading.Event()
         has_result: deque[Future[T]] = deque()

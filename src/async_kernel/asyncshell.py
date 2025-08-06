@@ -78,22 +78,16 @@ class AsyncDisplayPublisher(DisplayPublisher):
         update=False,
         **kwargs,
     ) -> None:
-        """Publish a display-data message
+        """Publish a display-data message.
 
-        Parameters
-        ----------
-        data : dict
-            A mime-bundle dict, keyed by mime-type.
-        metadata : dict, optional
-            Metadata associated with the data.
-        transient : dict, optional, keyword-only
-            Transient data that may only be relevant during a live display,
-            such as display_id.
-            Transient data should not be persisted to documents.
-        update : bool, optional, keyword-only
-            If True, send an update_display_data message instead of display_data.
+        Args:
+            data: A mime-bundle dict, keyed by mime-type.
+            metadata: Metadata associated with the data.
+            transient: Transient data that may only be relevant during a live display, such as display_id.
+                Transient data should not be persisted to documents.
+            update: If True, send an update_display_data message instead of display_data.
 
-        Ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#update-display-data
+        [Reference](https://jupyter-client.readthedocs.io/en/stable/messaging.html#update-display-data)
         """
         self.kernel.iopub_send(
             msg_or_type="update_display_data" if update else "display_data",
@@ -105,13 +99,10 @@ class AsyncDisplayPublisher(DisplayPublisher):
     def clear_output(self, wait=False):
         """Clear output associated with the current execution (cell).
 
-        Parameters
-        ----------
-        wait : bool (default: False)
-            If True, the output will not be cleared immediately,
-            instead waiting for the next display before clearing.
-            This reduces bounce during repeated clear & display loops.
-
+        Args:
+            wait: If True, the output will not be cleared immediately,
+                instead waiting for the next display before clearing.
+                This reduces bounce during repeated clear & display loops.
         """
         self.kernel.iopub_send(msg_or_type="clear_output", content={"wait": wait}, ident=self.topic)
 
