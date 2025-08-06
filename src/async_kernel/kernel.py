@@ -40,7 +40,7 @@ from async_kernel.caller import Caller, CancelledError
 from async_kernel.debugger import Debugger
 from async_kernel.iostream import OutStream
 from async_kernel.kernelspec import Backend, KernelName
-from async_kernel.typing import EXECUTE_MODE_PREFIX, ExecuteContent, ExecuteMode, Job, MsgType, NoValue, SocketID
+from async_kernel.typing import ExecuteContent, ExecuteMode, Job, MsgType, NoValue, SocketID
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -399,29 +399,29 @@ class Kernel(ConnectionFileMixin):
                             ident, msg = self.session.recv(socket, copy=False)
                             assert ident
                             assert msg
+                            if socket_id == SocketID.shell:
+                                # Reset the frame to show the main thread is not blocked.
+                                self._last_interrupt_frame = None
+                            msg_type = msg["header"]["msg_type"]
+                            self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, msg)
+                            job = Job(
+                                socket_id=socket_id,
+                                socket=socket,
+                                ident=ident,
+                                msg=msg,  # type: ignore[call-arg]
+                                msg_type=msg_type,
+                            )
+                            if msg_type == MsgType.execute_request:
+                                if self.get_execute_mode(job) is ExecuteMode.queue:
+                                    await self._execute_request_queue.send((time.monotonic(), job))
+                                else:
+                                    Caller().taskgroup.start_soon(self.execute_request, time.monotonic(), job)
+                            else:
+                                hdlrs = self._shell_handlers if socket_id == SocketID.shell else self._control_handlers
+                                await self._run_handler(hdlrs.get(msg_type), job)
                         except Exception as e:
                             self.log.debug("Bad message on %s: %s", socket_id, e)
                             continue
-                        if socket_id == SocketID.shell:
-                            # Reset the frame to show the main thread is not blocked.
-                            self._last_interrupt_frame = None
-                        msg_type = msg["header"]["msg_type"]
-                        self.log.debug("*** _receive_msg_loop %s*** '%s' %s", socket_id, msg_type, msg)
-                        job = Job(
-                            socket_id=socket_id,
-                            socket=socket,
-                            ident=ident,
-                            msg=msg,  # type: ignore[call-arg]
-                            msg_type=msg_type,
-                        )
-                        if msg_type == MsgType.execute_request:
-                            if self.get_execute_mode(job) is ExecuteMode.queue:
-                                await self._execute_request_queue.send((time.monotonic(), job))
-                            else:
-                                Caller().taskgroup.start_soon(self.execute_request, time.monotonic(), job)
-                        else:
-                            hdlrs = self._shell_handlers if socket_id == SocketID.shell else self._control_handlers
-                            await self._run_handler(hdlrs.get(msg_type), job)
                         await anyio.sleep(0)
                     await anyio.wait_readable(socket)
             except (zmq.ContextTerminated, self.CancelledError):
@@ -433,13 +433,10 @@ class Kernel(ConnectionFileMixin):
         if m := job["msg"]["content"].get("execute_mode"):
             # Respect an existing mode
             return ExecuteMode(m)
-        mode = ExecuteMode.queue
-        if (code := job["msg"]["content"]["code"].strip()).startswith(EXECUTE_MODE_PREFIX):
-            try:
-                mode = ExecuteMode(code.removeprefix(EXECUTE_MODE_PREFIX).split(maxsplit=1)[0])
-            except Exception as e:
-                e.add_note(f"Valid modes are {list(ExecuteMode)}")
-                raise
+        if (c := job["msg"]["content"]["code"].strip().split("\n")[0].strip()) in ExecuteMode:
+            mode = ExecuteMode(c)
+        else:
+            mode = ExecuteMode.queue
         if (
             job["msg"]["content"].get("silent", True) or (job["socket_id"] is SocketID.control)
         ) and mode is ExecuteMode.queue:

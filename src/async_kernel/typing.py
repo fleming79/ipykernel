@@ -30,13 +30,13 @@ class SocketID(enum.StrEnum):
     iopub = "iopub"
 
 
+EXECUTE_MODE_PREFIX: Final = "##^"
+
+
 class ExecuteMode(enum.StrEnum):
-    task = "task"
-    thread = "thread"
-    queue = "queue"
-
-
-EXECUTE_MODE_PREFIX: Final = "# @"
+    task = f"{EXECUTE_MODE_PREFIX}task"
+    thread = f"{EXECUTE_MODE_PREFIX}thread"
+    queue = f"{EXECUTE_MODE_PREFIX}queue"
 
 
 class MsgType(enum.StrEnum):
