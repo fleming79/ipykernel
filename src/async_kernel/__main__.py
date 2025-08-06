@@ -19,7 +19,7 @@ from async_kernel.kernelspec import Backend, KernelName, write_kernel_spec
 
 
 def main(wait_exit_context=anyio.sleep_forever):
-    "Main entry point to launch kernel or add/remove installed kerenel specs."
+    "Main entry point to launch kernel or add/remove installed kernel specs."
     kernel_dir = pathlib.Path(sys.prefix) / "share/jupyter/kernels"
     parser = argparse.ArgumentParser(description="Kernel interface to start a kernel or add/remove a kernel spec.")
     parser.add_argument(
@@ -92,7 +92,6 @@ def main(wait_exit_context=anyio.sleep_forever):
             anyio.run(_start, backend=Backend.trio if "trio" in args.kernel_name.lower() else Backend.asyncio)
         except KeyboardInterrupt:
             print("\nKernel stopped")
-
         except BaseException as e:
             print(traceback.format_exception(e))
             sys.exit(1)

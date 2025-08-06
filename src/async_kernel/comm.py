@@ -76,7 +76,7 @@ class CommManager(comm.base_comm.CommManager, HasTraits):
     When `kernel` is set the `kernel` on all existing `Comm` instances is also set.
     Notes:
     - The `Comm` will only send messages when the kernel is set.
-    - `kernel` is set by the kerenel once the sockets are opened.
+    - `kernel` is set by the kernel once the sockets are opened.
     """
 
     _instance = None
