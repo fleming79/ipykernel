@@ -248,7 +248,7 @@ class Kernel(ConnectionFileMixin):
                     await tg.start(self._start_stdin)
                     await tg.start(self._start_iopub_proxy)
                     await tg.start(self._start_control_loop)
-                    await tg.start(self._shell_execute_request_loop)
+                    await tg.start(self._shell_execute_request_queue)
                     await tg.start(self._receive_msg_loop, SocketID.shell)
                     assert len(self._sockets) == len(SocketID)
                     if not self.connection_file:
@@ -416,10 +416,10 @@ class Kernel(ConnectionFileMixin):
                             msg_type=msg_type,
                         )
                         if msg_type == MsgType.execute_request:
-                            if self.get_execute_mode(job) is not ExecuteMode.queue:
-                                Caller().call_soon(self.execute_request, time.monotonic(), job)
+                            if self.get_execute_mode(job) is ExecuteMode.queue:
+                                await self._execute_request_queue.send((time.monotonic(), job))
                             else:
-                                await self._exec_send_stream.send((time.monotonic(), job))
+                                Caller().taskgroup.start_soon(self.execute_request, time.monotonic(), job)
                         else:
                             hdlrs = self._shell_handlers if socket_id == SocketID.shell else self._control_handlers
                             await self._run_handler(hdlrs.get(msg_type), job)
@@ -529,7 +529,7 @@ class Kernel(ConnectionFileMixin):
         )
 
     def _send_reply(self, job: Job, content: dict | None = None):
-        "Send the content as in the reply to the job."
+        """Send a reply to the job with the specified content."""
         content = content or {}
         if "status" not in content:
             content["status"] = "ok"
@@ -545,12 +545,10 @@ class Kernel(ConnectionFileMixin):
                 "send_reply: '%s' msg_id: %s %s", msg["msg_type"], job["msg"]["header"]["msg_id"], msg["content"]
             )
 
-    async def _shell_execute_request_loop(self, *, task_status: TaskStatus):
-        self._exec_send_stream, self._exec_receive_stream = anyio.create_memory_object_stream[tuple[float, Job]](
-            max_buffer_size=1000
-        )
+    async def _shell_execute_request_queue(self, *, task_status: TaskStatus):
+        self._execute_request_queue, queue = anyio.create_memory_object_stream[tuple[float, Job]](max_buffer_size=1000)
         with contextlib.suppress(self.CancelledError):
-            async with self._exec_receive_stream as receive_stream:
+            async with queue as receive_stream:
                 task_status.started()
                 async for job, received_time in receive_stream:
                     await self.execute_request(job, received_time)
