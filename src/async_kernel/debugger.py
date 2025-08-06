@@ -236,6 +236,7 @@ class Debugger(HasTraits):
         self._forbidden_names = tuple(self.kernel.shell.user_ns_hidden)
 
     async def send_dap_request(self, msg: DebugMessage, /):
+        """Sends a DAP request to the debug server, waits for and returns the corresponding response."""
         return await (await self.debugpy_client._send_request(msg))
 
     def next_seq(self):
