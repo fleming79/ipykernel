@@ -27,17 +27,14 @@ def main(wait_exit_context=anyio.sleep_forever):
         "--file",
         dest="connection_file",
         default="",
-        help="Start using the connection file. To start without specify a file use a period `.`",
+        help="Start a Kernel with a connection file. Use a period `.` to start a Kernel without an existing file.",
     )
     parser.add_argument(
         "-a",
         "--add",
         dest="add",
-        help=f"Add a kernel spec. Default kernels: {list(map(str, KernelName))}."
-        " Pass key/value pairs to configure the kernel. "
-        f"Built in options include: \n--kernel_name <{list(KernelName)}>: The name to use for the kernel as configured.\n"
-        "\n--klass <module.ClassName>: The import path for a custom kernel.\n"
-        "Other properties on the kernel can also be specified using --<attribute name> <value> pairs.",
+        help=f"Add a kernel spec. Default kernels: {list(map(str, KernelName))}.\n"
+        "Other kernels and options are permitted. See: `write_kernel_spec` for detail.",
     )
     parser.add_argument(
         "-r",
@@ -45,12 +42,7 @@ def main(wait_exit_context=anyio.sleep_forever):
         dest="remove",
         help=f"remove existing kernel specs. Installed kernels: {[item.name for item in kernel_dir.iterdir() if item.is_dir()]}",
     )
-    parser.add_argument(
-        "--kernel_name",
-        dest="kernel_name",
-        default=KernelName.asyncio,
-        help=f"options: {list(map(str, KernelName))}",
-    )
+
     args, unknownargs = parser.parse_known_args()
     for k, v in pairwise(unknownargs):
         if k.startswith("--"):
@@ -59,19 +51,21 @@ def main(wait_exit_context=anyio.sleep_forever):
         write_kernel_spec(kernel_dir, **vars(args))
         print(f"Added kernel spec {args.add}")
     elif args.remove:
-        for kernel_name in args.remove.split(","):
-            folder = kernel_dir / str(kernel_name)
+        for name in args.remove.split(","):
+            folder = kernel_dir / str(name)
             if folder.exists():
                 shutil.rmtree(folder, ignore_errors=True)
-                print(f"Removed kernel spec: {kernel_name}")
+                print(f"Removed kernel spec: {name}")
             else:
-                print(f"Kernel spec folder: '{kernel_name}' not found!")
+                print(f"Kernel spec folder: '{name}' not found!")
+
     elif not args.connection_file:
         parser.print_help()
     else:
         klass = getattr(args, "klass", None)
+        kernel_name: str = getattr(args, "kernel_name", None) or KernelName.asyncio
         cls: type[Kernel] = traitlets.import_item(klass) if klass else Kernel
-        kernel = cls(kernel_name=args.kernel_name)
+        kernel = cls(kernel_name=kernel_name)
         for k, v in vars(args).items():
             if hasattr(kernel, k):
                 if k == "connection_file" and v == ".":
@@ -89,7 +83,7 @@ def main(wait_exit_context=anyio.sleep_forever):
                     await wait_exit_context()
 
         try:
-            backend = Backend.trio if "trio" in args.kernel_name.lower() else Backend.asyncio
+            backend = Backend.trio if "trio" in kernel_name.lower() else Backend.asyncio
             anyio.run(_start, backend=backend)
         except KeyboardInterrupt:
             print("\nKernel stopped")
