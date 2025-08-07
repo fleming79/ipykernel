@@ -80,14 +80,14 @@ def test_start_kernel_success(monkeypatch, capsys):
     utils.clear_kernel()
 
 
-def test_start_kernel_failure(monkeypatch, capsys):
+def test_start_kernel_failure(monkeypatch, capsys, mocker):
     # Replace cleanup_connection_file with None to cause an exception
     monkeypatch.setattr(sys, "argv", ["prog", "-f", ".", "--cleanup_connection_file", "None"])
-
+    mocker.patch.object(sys, "__stderr__")
     with pytest.raises(SystemExit) as e:
         main.main()
     assert e.value.code == 1
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "the first argument must be callable" in out
 
 

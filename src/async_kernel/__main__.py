@@ -89,11 +89,14 @@ def main(wait_exit_context=anyio.sleep_forever):
                     await wait_exit_context()
 
         try:
-            anyio.run(_start, backend=Backend.trio if "trio" in args.kernel_name.lower() else Backend.asyncio)
+            backend = Backend.trio if "trio" in args.kernel_name.lower() else Backend.asyncio
+            anyio.run(_start, backend=backend)
         except KeyboardInterrupt:
             print("\nKernel stopped")
         except BaseException as e:
-            print(traceback.format_exception(e))
+            traceback.print_exception(e, file=sys.stderr)
+            if sys.__stderr__ is not sys.stderr:
+                traceback.print_exception(e, file=sys.__stderr__)
             sys.exit(1)
         else:
             sys.exit(0)
