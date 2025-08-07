@@ -30,7 +30,7 @@ class SocketID(enum.StrEnum):
     iopub = "iopub"
 
 
-EXECUTE_MODE_PREFIX: Final = "##^"
+EXECUTE_MODE_PREFIX: Final = "##"
 
 
 class ExecuteMode(enum.StrEnum):

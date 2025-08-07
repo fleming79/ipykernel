@@ -9,17 +9,17 @@ Async-kernel is a python implementation of a [Jupyter kernel](https://docs.jupyt
 
 - [Execute-requests](#kerneljob) by default are run in a task (sequentially) without blocking shell messages.
 - `stdout`(including print), `stderr` and `stdin`(input) map correctly to the execute request (see: [ContextVars](#contextvars)).
-- Cell code can be run in threads or tasks by adding `##^thread` or `##^task` respectively as the first line in a cell (see [Execute mode](#execute-mode)).
+- Cell code can be run in threads or tasks by adding `##thread` or `##task` respectively as the first line in a cell (see [Execute mode](#execute-mode)).
 - Provides a `Caller` class to execute code in tasks/threads with a thread safe Future providing access to the result.
 - Uses the anyio function [`wait_readable`](https://anyio.readthedocs.io/en/stable/api.html#anyio.wait_readable) to await ZMQ socket messages.
 
 ### Execute mode
 
-If you add `##^<execute-mode>` to the top of cell, the kernel will modify how the cell is run. The following execute modes are supported.
+If you add `##<execute-mode>` to the top of cell, the kernel will modify how the cell is run. The following execute modes are supported.
 
-- `##^thread` - The code is run in a thread.
-- `##^task` - The code is run as a task.
-- `##^queue` (default behaviour) - The code is added to a queue and executed sequentially in a task.
+- `##thread` - The code is run in a thread.
+- `##task` - The code is run as a task.
+- `##queue` (default behaviour) - The code is added to a queue and executed sequentially in a task.
 
 ### ContextVars
 
@@ -30,7 +30,7 @@ Execute request jobs are stored as a [ContextVar](https://docs.python.org/3/libr
 This code will run the code in a thread.
 
 ```python
-##^thread
+##thread
 
 import time
 
