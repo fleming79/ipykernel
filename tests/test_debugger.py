@@ -50,7 +50,10 @@ async def client(subprocess_kernels_client):
     # Attach
     reply = await send_debug_request(client, "attach")
     assert reply["status"] == "ok"
-    return client
+    try:
+        yield client
+    finally:
+        reply = await send_debug_request(client, "disconnect")
 
 
 async def send_debug_request(client: AsyncKernelClient, command: str, arguments: dict | None = None):
@@ -214,16 +217,14 @@ async def test_stop_on_breakpoint(client):
     assert reply["success"]
 
     # continue
-    await utils.clear_iopub(client)
+    await utils.clear_iopub(client, timeout=0.2)
     reply = await send_debug_request(client, "continue", {"threadId": thread_id})
     assert reply["success"]
     assert reply["body"] == {"allThreadsContinued": True}
-    while (msg := await client.get_iopub_msg()) and msg["content"]["event"] != "stopped":
-        pass
+    await utils.clear_iopub(client, timeout=0.1)
 
     reply = await send_debug_request(client, "continue", {"threadId": thread_id})
-    while (msg := await client.get_iopub_msg()) and msg["content"]["event"] != "continued":
-        pass
+    await utils.clear_iopub(client, timeout=0.1)
 
     # debugInfo (running)
     reply = await send_debug_request(client, "debugInfo")
