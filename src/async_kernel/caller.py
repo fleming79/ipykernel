@@ -13,10 +13,11 @@ import time
 import weakref
 from collections import deque
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast
 
 import anyio
 import sniffio
+from typing_extensions import override
 from zmq import Context, Socket, SocketType
 
 from async_kernel.typing import NoValue, T

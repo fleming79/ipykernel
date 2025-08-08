@@ -8,9 +8,10 @@ from __future__ import annotations
 import os
 import pathlib
 import tempfile
-from typing import ClassVar, override
+from typing import ClassVar
 
 from IPython.core.compilerop import CachingCompiler
+from typing_extensions import override
 
 __all__ = ["XCachingCompiler", "murmur2_x86"]
 

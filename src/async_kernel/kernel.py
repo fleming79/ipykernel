@@ -435,7 +435,7 @@ class Kernel(ConnectionFileMixin):
         if m := job["msg"]["content"].get("execute_mode"):
             # Respect an existing mode
             return ExecuteMode(m)
-        if (c := job["msg"]["content"]["code"].strip().split("\n")[0].strip()) in ExecuteMode:
+        if (c := job["msg"]["content"]["code"].strip().split("\n")[0].strip()) in iter(ExecuteMode):
             mode = ExecuteMode(c)
         else:
             mode = ExecuteMode.queue

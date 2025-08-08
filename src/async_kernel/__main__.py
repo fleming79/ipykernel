@@ -36,11 +36,12 @@ def main(wait_exit_context=anyio.sleep_forever):
         help=f"Add a kernel spec. Default kernels: {list(map(str, KernelName))}.\n"
         + "Other kernels and options are permitted. See: `write_kernel_spec` for detail.",
     )
+    kernels = [] if not kernel_dir.exists() else [item.name for item in kernel_dir.iterdir() if item.is_dir()]
     parser.add_argument(
         "-r",
         "--remove",
         dest="remove",
-        help=f"remove existing kernel specs. Installed kernels: {[item.name for item in kernel_dir.iterdir() if item.is_dir()]}",
+        help=f"remove existing kernel specs. Installed kernels: {kernels}",
     )
 
     args, unknownargs = parser.parse_known_args()

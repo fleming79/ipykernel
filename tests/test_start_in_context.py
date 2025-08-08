@@ -28,7 +28,7 @@ def anyio_backend(kernel_name: KernelName):
 
 async def test_start_kernel_in_context(anyio_backend, kernel_name):
     utils.clear_kernel()
-    if kernel_name is KernelName.asyncio_eager:
+    if kernel_name == "async-eager":
         loop = asyncio.get_running_loop()
         loop.set_task_factory(asyncio.eager_task_factory)
     try:

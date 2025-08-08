@@ -5,7 +5,9 @@ from __future__ import annotations
 
 from io import TextIOBase
 from threading import Lock
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING
+
+from typing_extensions import override
 
 if TYPE_CHECKING:
     from collections.abc import Callable
