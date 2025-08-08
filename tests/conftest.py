@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 
 import anyio
 import pytest
-import zmq
 from jupyter_client.asynchronous.client import AsyncKernelClient
 
 import async_kernel.utils
@@ -41,8 +40,7 @@ def anyio_backend(request):
 
 @pytest.fixture(scope="module")
 def transport():
-    return 'tcp'
-    return "ipc" if zmq.has("ipc") else "tcp"
+    return "ipc" if sys.platform == "linux" else "tcp"
 
 
 @pytest.fixture(scope="module")

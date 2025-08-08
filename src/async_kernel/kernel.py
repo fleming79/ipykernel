@@ -32,7 +32,7 @@ from IPython.utils.tokenutil import token_at_cursor
 from jupyter_client.connect import ConnectionFileMixin
 from jupyter_client.session import Session
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import CBool, Container, Dict, Instance, Int, Set, Tuple, UseEnum, default
+from traitlets import CaselessStrEnum, CBool, Container, Dict, Instance, Int, Set, Tuple, UseEnum, default
 from zmq import Context, Flag, PollEvent, Socket, SocketOption, SocketType
 
 from async_kernel import _version, utils
@@ -103,6 +103,9 @@ class Kernel(ConnectionFileMixin):
     log = Instance(logging.LoggerAdapter)
     debugger = Instance(Debugger, ())
     comm_manager: Instance[CommManager] = Instance("async_kernel.comm.CommManager")
+    transport: CaselessStrEnum[str] = CaselessStrEnum(
+        ["tcp", "ipc"] if sys.platform == "linux" else ["tcp"], default_value="tcp", config=True
+    )
 
     def __new__(cls, **kwargs) -> Self:  # noqa: ARG004
         #  There is only one instance.
@@ -437,7 +440,7 @@ class Kernel(ConnectionFileMixin):
         if m := job["msg"]["content"].get("execute_mode"):
             # Respect an existing mode
             return ExecuteMode(m)
-        if (c := job["msg"]["content"]["code"].strip().split("\n")[0].strip()) in iter(ExecuteMode):
+        if (c := job["msg"]["content"]["code"].strip().split("\n")[0].strip()) in tuple(ExecuteMode):
             mode = ExecuteMode(c)
         else:
             mode = ExecuteMode.queue

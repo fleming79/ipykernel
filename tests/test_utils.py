@@ -1,6 +1,7 @@
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
 
+import sys
 from typing import Literal
 
 import pytest
@@ -16,7 +17,7 @@ def transport(request):
 
 @pytest.mark.flaky
 def test_bind_socket(transport: Literal["tcp", "ipc"], tmp_path):
-    if transport == "ipc" and not zmq.has("ipc"):
+    if sys.platform != "linux":
         pytest.skip("transport='ipc' not supported.")
 
     ctx = zmq.Context()
