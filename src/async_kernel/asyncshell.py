@@ -39,22 +39,27 @@ class AsyncDisplayHook(DisplayHook):
     content: Dict[str, Any] = Dict()
 
     @property
+    @override
     def prompt_count(self):
         return self.kernel.execution_count
 
+    @override
     def start_displayhook(self):
         """Start the display hook."""
         self.content = {}
 
+    @override
     def write_output_prompt(self):
         """Write the output prompt."""
         self.content["execution_count"] = self.prompt_count
 
+    @override
     def write_format_data(self, format_dict, md_dict=None):
         """Write format data to the message."""
         self.content["data"] = format_dict
         self.content["metadata"] = md_dict
 
+    @override
     def finish_displayhook(self):
         """Finish up all displayhook activities."""
         if self.content:
@@ -69,7 +74,7 @@ class AsyncDisplayPublisher(DisplayPublisher):
     topic: ClassVar = b"display_data"
 
     @override
-    def publish(  # type: ignore[override]
+    def publish(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
         data,
         metadata=None,
@@ -137,7 +142,7 @@ class AsyncInteractiveShell(InteractiveShell):
     autoindent = CBool(False)
 
     @observe("exit_now")
-    def _update_exit_now(self, change):
+    def _update_exit_now(self, _):
         """stop eventloop when exit_now fires"""
         if self.exit_now:
             self.kernel.stop()
@@ -159,6 +164,7 @@ class AsyncInteractiveShell(InteractiveShell):
         return
 
     @property
+    @override
     def execution_count(self):
         return self.kernel.execution_count
 
@@ -167,6 +173,7 @@ class AsyncInteractiveShell(InteractiveShell):
         return
 
     @property
+    @override
     def user_ns(self):
         if not hasattr(self, "_user_ns"):
             self.user_ns = {}
@@ -180,10 +187,12 @@ class AsyncInteractiveShell(InteractiveShell):
         self.init_user_ns()
 
     @property
+    @override
     def user_global_ns(self):
         return self.user_ns
 
     @property
+    @override
     def ns_table(self):
         return {"user_global": self.user_ns, "user_local": self.user_ns, "builtin": builtins.__dict__}
 
@@ -220,6 +229,7 @@ class AsyncInteractiveShell(InteractiveShell):
             content={"traceback": stb, "ename": str(etype.__name__), "evalue": str(evalue)},
         )
 
+    @override
     def init_magics(self):
         """Initialize magics."""
         super().init_magics()
@@ -235,7 +245,7 @@ class KernelMagics(Magics):
     """Kernel magics."""
 
     @line_magic
-    def connect_info(self, arg_s):
+    def connect_info(self, _):
         """Print information for connecting other clients to this kernel."""
 
         kernel = async_kernel.Kernel()
@@ -248,19 +258,19 @@ class KernelMagics(Magics):
         info = kernel.get_connection_info()
         print(
             json.dumps(info, indent=2, default=json_default),
-            f"Paste the above JSON into a file, and connect with:\n"
-            f"    $> jupyter <app> --existing <file>\n"
-            f"or, if you are local, you can connect with just:\n"
-            f"    $> jupyter <app> --existing {connection_file}\n"
-            f"or even just:\n"
-            f"    $> jupyter <app> --existing\n"
-            f"if this is the most recent Jupyter kernel you have started.",
+            "Paste the above JSON into a file, and connect with:\n"
+            + "    $> jupyter <app> --existing <file>\n"
+            + "or, if you are local, you can connect with just:\n"
+            + f"    $> jupyter <app> --existing {connection_file}\n"
+            + "or even just:\n"
+            + "    $> jupyter <app> --existing\n"
+            + "if this is the most recent Jupyter kernel you have started.",
         )
 
     @line_magic
-    def callers(self, arg_s):
+    def callers(self, _):
         print("Active")
-        for caller in Caller._instances.values():
+        for caller in Caller.all_callers(active_only=False):
             symbol = "   ✓" if caller.active else "   ✗"
             current_thread = "← calling thread" if caller is Caller() else ""
             print(symbol, caller, current_thread, sep="\t")

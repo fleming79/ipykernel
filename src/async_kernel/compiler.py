@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import pathlib
 import tempfile
-from typing import ClassVar
+from typing import ClassVar, override
 
 from IPython.core.compilerop import CachingCompiler
 
@@ -63,6 +63,7 @@ class XCachingCompiler(CachingCompiler):
         """Initialize the compiler."""
         super().__init__(*args, **kwargs)
 
+    @override
     def get_code_name(self, raw_code, transformed_code, number):
         """Get the code name."""
         return str(self.get_file_name(raw_code))

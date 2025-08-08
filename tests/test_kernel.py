@@ -18,8 +18,7 @@ import zmq
 import async_kernel.utils
 from async_kernel.caller import Caller
 from async_kernel.comm import Comm
-from async_kernel.kernel import ExecuteMode, SocketID
-from async_kernel.typing import EXECUTE_MODE_PREFIX, ExecuteContent, Job
+from async_kernel.typing import EXECUTE_MODE_PREFIX, ExecuteContent, ExecuteMode, Job, SocketID
 from tests import utils
 
 
@@ -75,8 +74,7 @@ async def test_simple_print(kernel, client, quiet: bool):
         await utils.clear_iopub(client)
 
 
-@pytest.mark.parametrize("quiet", [True, False])
-async def test_bad_message(client, quiet: bool):
+async def test_bad_message(client):
     client.shell_channel.socket.send(b"")
     client.control_channel.socket.send(b"")
     await utils.execute(client, "")
@@ -251,7 +249,7 @@ async def test_comm_info_request(client):
 async def test_comm_open_msg_close(client, kernel, mocker):
     comm = None
 
-    def cb(comm_, msg):
+    def cb(comm_, _):
         nonlocal comm
         comm = comm_
 
@@ -352,7 +350,7 @@ async def test_is_complete_request(client):
 
 
 @pytest.mark.parametrize("command", ["debugInfo", "inspectVariables", "modules", "dumpCell", "source"])
-async def test_debug_static(kernel, client, command: str, mocker):
+async def test_debug_static(client, command: str, mocker):
     # These are tests on the debugger that don't required the debugger to be connected.
     code = "my_variable=123"
     if command == "debugInfo":
@@ -375,10 +373,10 @@ async def test_debug_static(kernel, client, command: str, mocker):
 
 async def test_debug_raises_no_socket(kernel):
     with pytest.raises(RuntimeError):
-        await kernel.debugger.debugpy_client._send_request({})
+        await kernel.debugger.debugpy_client.send_request({})
 
 
-async def test_debug_not_connected(kernel, client):
+async def test_debug_not_connected(client):
     reply = await utils.send_control_message(
         client, "debug_request", {"type": "request", "seq": 1, "command": "disconnect", "arguments": {}}
     )
@@ -386,7 +384,7 @@ async def test_debug_not_connected(kernel, client):
 
 
 @pytest.mark.parametrize("variable_name", ["my_variable", "invalid variable name", "special variables"])
-async def test_debug_static_richInspectVariables(kernel, client, variable_name):
+async def test_debug_static_richInspectVariables(client, variable_name):
     # These are tests on the debugger that don't required the debugger to be connected.
     reply = await utils.send_control_message(
         client,
@@ -409,7 +407,7 @@ async def test_properties(kernel) -> None:
     kernel.user_ns = {}
 
 
-async def test_matplotlib_inline_on_import(kernel, client):
+async def test_matplotlib_inline_on_import(client):
     pytest.importorskip("matplotlib", reason="this test requires matplotlib")
     code = "\n".join(["import matplotlib, matplotlib.pyplot as plt", "backend = matplotlib.get_backend()"])
     _, reply = await utils.execute(client, code, user_expressions={"backend": "backend"})
@@ -505,7 +503,7 @@ def test_get_execute_mode(code: str, silent: bool, socket_id, expected: ExecuteM
         stop_on_error=True,
         execute_mode=None,
     )
-    job = Job(msg={"content": content}, socket_id=socket_id)  # type: ignore[assignment]
+    job = Job(msg={"content": content}, socket_id=socket_id)  # pyright: ignore[reportCallIssue]
     execute_mode = async_kernel.Kernel.get_execute_mode(job)
     assert execute_mode is expected
     assert job["msg"]["content"]["execute_mode"] is expected

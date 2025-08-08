@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 import sys
+from typing import override
 
 from packaging.version import Version as PackingVersion
 from traitlets import Bool, Dict, Enum, HasTraits, Integer, List, TraitError, Unicode, observe
@@ -25,6 +26,7 @@ class Reference(HasTraits):
 
     """
 
+    @override
     def __str__(self):
         return str(self.__class__)
 
@@ -51,6 +53,7 @@ class Version(Unicode):
         kwargs["default_value"] = self.min
         super().__init__(*args, **kwargs)
 
+    @override
     def validate(self, obj, value):
         if self.min and PackingVersion(value) < PackingVersion(self.min):
             msg = f"bad version: {value} < {self.min}"
@@ -67,6 +70,7 @@ class RMessage(Reference):
     parent_header = Dict()
     content = Dict()
 
+    @override
     def check(self, d):
         super().check(d)
         RHeader().check(self.header)
@@ -104,6 +108,7 @@ class Reply(Reference):
 class ExecuteReply(Reply):
     execution_count = Integer()
 
+    @override
     def check(self, d):
         super().check(d)
         if d["status"] == "ok":
@@ -158,6 +163,7 @@ class KernelInfoReply(Reply):
     language_info = Dict()
     banner = Unicode()
 
+    @override
     def check(self, d):
         super().check(d)
         LanguageInfo().check(d["language_info"])
@@ -178,6 +184,7 @@ class CommInfoReply(Reply):
 class IsCompleteReply(Reference):
     status = Enum(("complete", "incomplete", "invalid", "unknown"), default_value="complete")
 
+    @override
     def check(self, d):
         super().check(d)
         if d["status"] == "incomplete":

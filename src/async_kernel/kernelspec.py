@@ -13,7 +13,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from jupyter_client.kernelspec import KernelSpec, _is_valid_kernel_name
+from jupyter_client.kernelspec import KernelSpec, _is_valid_kernel_name  # pyright: ignore[reportPrivateUsage]
 
 # path to kernelspec resources
 RESOURCES = Path(__file__).parent.joinpath("resources")

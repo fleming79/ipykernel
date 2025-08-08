@@ -61,19 +61,18 @@ async_kernel -add async-eager
 
 async_kernel -remove async
 
+# Development
+
 ## Installation from source
 
 1. `git clone`
 1. `cd ipykernel`
-1. `pip install -e ".[test]"`
+1. `uv sync"`
+1. Activate the environment.
 
 After that, all normal `ipython` commands will use this newly-installed version of the kernel.
 
 ## Running tests
-
-Follow the instructions from `Installation from source`.
-
-and then from the root directory
 
 ```bash
 pytest
@@ -81,12 +80,8 @@ pytest
 
 ## Running tests with coverage
 
-Follow the instructions from `Installation from source`.
-
-and then from the root directory
-
 ```bash
-pytest -vv -s --cov ipykernel --cov-branch --cov-report term-missing:skip-covered --durations 10
+pytest -vv -s --cov
 ```
 
 ## About the IPython Development Team

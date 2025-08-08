@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from io import TextIOBase
 from threading import Lock
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -27,23 +27,29 @@ class OutStream(TextIOBase):
         self._flusher = flusher
         self._out = ""
 
+    @override
     def isatty(self):
         return True
 
+    @override
     def readable(self):
         return False
 
+    @override
     def seekable(self):
         return False
 
+    @override
     def writable(self):
         return True
 
+    @override
     def flush(self):
         if out := self._out:
             self._out = ""
             self._flusher(out)
 
+    @override
     def write(self, string: str) -> int:
         """Write to current stream after encoding if necessary
 
@@ -54,6 +60,7 @@ class OutStream(TextIOBase):
             self.flush()
         return len(string)
 
+    @override
     def writelines(self, sequence):
         """Write lines to the stream (separators are not added)."""
         self.write("".join(sequence))

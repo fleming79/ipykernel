@@ -41,7 +41,7 @@ dependencies = [
 [project.scripts]
 async_kernel = "async_kernel.__main__:main"
 
-[project.optional-dependencies]
+[dependency-groups]
 docs = [
   "sphinx",
   "myst_parser",
@@ -50,9 +50,8 @@ docs = [
   "sphinxcontrib-spelling",
   "sphinx-autodoc-typehints",
   "intersphinx_registry",
-  "trio"
 ]
-test = [
+dev = [
     "debugpy",
     "pre-commit",
     "pytest-cov",
@@ -62,6 +61,7 @@ test = [
     "pytest>=8.4,<9",
     "matplotlib",
     "trio",
+    "basedpyright>=1.31.1",
 ]
 cov = [
   "coverage[toml]",
@@ -221,3 +221,21 @@ ignore = ["PY007", "PP308", "GH102", "MY101"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[tool.basedpyright]
+include = ['src/**']
+reportMissingParameterType = false
+reportExplicitAny = false
+reportUnknownParameterType = false
+reportUnannotatedClassAttribute = false
+reportMissingTypeArgument  = false
+reportMissingImports = false
+reportUnusedCallResult  = false
+reportUninitializedInstanceVariable = false
+reportUnknownVariableType = false
+reportAny = false
+reportUnknownMemberType = false
+reportUnknownArgumentType = false
+reportImportCycles = false
+reportMissingTypeStubs = false
+reportUnusedParameter = false

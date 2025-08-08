@@ -12,8 +12,8 @@ import threading
 import time
 import weakref
 from collections import deque
-from collections.abc import AsyncGenerator, Awaitable, Callable
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast, override
 
 import anyio
 import sniffio
@@ -25,6 +25,7 @@ from async_kernel.utils import wait_thread_event
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from anyio._core._synchronization import Event
     from anyio.abc import TaskGroup, TaskStatus
 
     from async_kernel.typing import P
@@ -89,7 +90,8 @@ class Future(Awaitable[T]):
         self._cancelled = False
         self._cancel_scope: anyio.CancelScope | None = None
 
-    def __await__(self):
+    @override
+    def __await__(self) -> Generator[Any, None, T]:
         return self.result().__await__()
 
     async def result(self) -> T:
@@ -181,7 +183,7 @@ class Future(Awaitable[T]):
             self._done_callbacks.remove(fn)
         return n
 
-    def _set_cancel_scope(self, scope: anyio.CancelScope):
+    def set_cancel_scope(self, scope: anyio.CancelScope):
         "Provide a cancel scope for cancellation"
         if self._cancelled:
             scope.cancel()
@@ -248,7 +250,7 @@ class Caller:
     _instances: ClassVar[dict[threading.Thread, Self]] = {}
     thread: threading.Thread
     backend = ""
-    log: logging.LoggerAdapter
+    log: logging.LoggerAdapter[Any]
     __stack = None
     _outstanding = 0
     _to_thread_pool: ClassVar[deque[Self]] = deque()
@@ -285,6 +287,7 @@ class Caller:
             cls._instances[thread] = inst
         return inst
 
+    @override
     def __repr__(self) -> str:
         return f"Caller<{self.thread.name}>"
 
@@ -302,7 +305,7 @@ class Caller:
             self.stop()
             await self.__stack.__aexit__(exc_type, exc_value, exc_tb)
 
-    async def _server_loop(self, tg: TaskGroup, task_status: TaskStatus):
+    async def _server_loop(self, tg: TaskGroup, task_status: TaskStatus[None]):
         thread = threading.current_thread()
         socket = Context.instance().socket(SocketType.PUB)
         socket.linger = 500
@@ -340,17 +343,17 @@ class Caller:
         func: Callable[..., T | Awaitable[T]],
         args: tuple,
         kwargs: dict,
-    ):
+    ) -> None:
         try:
             with anyio.CancelScope() as scope:
-                fut._set_cancel_scope(scope)
+                fut.set_cancel_scope(scope)
                 try:
                     if (delay_ := delay - time.monotonic() + starttime) > 0:
                         await anyio.sleep(float(delay_))
-                    result = func(*args, **kwargs) if callable(func) else func
+                    result = func(*args, **kwargs) if callable(func) else func  # pyright: ignore[reportAssignmentType]
                     while inspect.isawaitable(result):
-                        result = await result
-                    if fut._cancelled and not scope.cancel_called:
+                        result: T = await result
+                    if fut.cancelled() and not scope.cancel_called:
                         scope.cancel()
                     if scope.cancel_called:
                         # await here to allow the cancel scope to be raised/caught.
@@ -368,7 +371,7 @@ class Caller:
         except Exception:
             pass
 
-    def _to_thread_on_done(self, _):
+    def _to_thread_on_done(self, _) -> None:
         if not self._stopped:
             if (len(self._to_thread_pool) < self.MAX_IDLE_POOL_INSTANCES) or self._outstanding:
                 self._to_thread_pool.append(self)
@@ -408,7 +411,7 @@ class Caller:
         """
         if self._stopped:
             raise anyio.ClosedResourceError
-        fut = Future(thread=self.thread)
+        fut: Future[T] = Future(thread=self.thread)
         if threading.current_thread() is self.thread and (tg := self._taskgroup):
             tg.start_soon(self._wrap_call, fut, time.monotonic(), delay, func, args, kwargs)
         else:
@@ -427,7 +430,7 @@ class Caller:
         self._jobs_added.set()
 
     @classmethod
-    def stop_all(cls, **kwgs):
+    def stop_all(cls, **kwgs) -> None:
         "Stop all instances."
         force = kwgs.get("_stop_protected", False)
         for caller in tuple(reversed(cls._instances.values())):
@@ -490,7 +493,7 @@ class Caller:
         log: logging.LoggerAdapter | None = None,
         name: str | None = None,
         protected=False,
-    ):
+    ) -> Self:
         """Start a new thread with a new Caller open in the context of anyio event loop.
 
         A new thread and caller is always started and ready to start new jobs as soon as it is returned.
@@ -501,8 +504,8 @@ class Caller:
             protected: When True, the caller will not shutdown unless shutdown is called with `force=True`.
         """
 
-        def anyio_run_caller():
-            async def caller_context():
+        def anyio_run_caller() -> None:
+            async def caller_context() -> None:
                 nonlocal caller
                 async with cls(log=log, create=True, protected=protected) as caller:
                     ready_event.set()
@@ -513,7 +516,7 @@ class Caller:
 
         assert name not in [t.name for t in cls._instances], f"{name=} already exists!"
         backend_ = backend or sniffio.current_async_library()
-        caller = cast("Self", None)
+        caller = cast("Self", object)
         ready_event = threading.Event()
         thread = threading.Thread(target=anyio_run_caller, name=name, daemon=True)
         thread.start()
@@ -526,7 +529,7 @@ class Caller:
         cls,
         items: Iterable[Future[T]] | AsyncGenerator[Future[T]],
         *,
-        max_concurrent: NoValue | int = NoValue,
+        max_concurrent: NoValue | int = NoValue,  # pyright: ignore[reportInvalidTypeForm]
     ):
         """An iterator to get Futures as they complete.
 
@@ -543,13 +546,13 @@ class Caller:
         has_result: deque[Future[T]] = deque()
         futures: set[Future[T]] = set()
         done = False
-        resume: anyio.Event | None = None
+        resume: Event | None = cast("anyio.Event | None", None)
 
-        def _on_done(fut: Future):
+        def _on_done(fut: Future[T]) -> None:
             has_result.append(fut)
             event_future_ready.set()
 
-        async def iter_items(task_status: TaskStatus):
+        async def iter_items(task_status: TaskStatus[None]):
             nonlocal done, resume
             if isinstance(items, set | list | tuple):
                 max_concurrent_ = 0
@@ -592,8 +595,7 @@ class Caller:
                         await wait_thread_event(event_future_ready)
         finally:
             for fut in futures:
-                if isinstance(fut, Future):
-                    fut.cancel()
+                fut.cancel()
 
     @classmethod
     def all_callers(cls, active_only=True):

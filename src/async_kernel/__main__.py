@@ -34,7 +34,7 @@ def main(wait_exit_context=anyio.sleep_forever):
         "--add",
         dest="add",
         help=f"Add a kernel spec. Default kernels: {list(map(str, KernelName))}.\n"
-        "Other kernels and options are permitted. See: `write_kernel_spec` for detail.",
+        + "Other kernels and options are permitted. See: `write_kernel_spec` for detail.",
     )
     parser.add_argument(
         "-r",

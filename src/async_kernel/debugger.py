@@ -28,7 +28,7 @@ try:
         os.environ["PYDEVD_IPYTHON_COMPATIBLE_DEBUGGING"] = "1"
 
     # This import is required to provide _pydevd_bundle imports
-    from debugpy.server import api  # noqa: F401
+    from debugpy.server import api  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
     _is_debugpy_available = True
 except ImportError:
@@ -41,7 +41,7 @@ except Exception as e:
     else:
         raise
 
-_HOST_PORT: None | tuple[str, int] = None
+_host_port: None | tuple[str, int] = None
 
 
 class _FakeCode:
@@ -81,6 +81,7 @@ class VariableExplorer(HasTraits):
 
     def __init__(self):
         """Initialize the explorer."""
+        super().__init__()
         from _pydevd_bundle.pydevd_suspended_frames import SuspendedFramesManager, _FramesTracker  # type: ignore[attr-defined]  # noqa: I001, PLC0415
 
         self.suspended_frame_manager = SuspendedFramesManager()
@@ -127,6 +128,7 @@ class DebugpyClient(HasTraits):
 
     def __init__(self, log, event_callback):
         """Initialize the client."""
+        super().__init__()
         self.log = log
         self.event_callback = event_callback
         self._pack = self.kernel.session.pack
@@ -136,7 +138,7 @@ class DebugpyClient(HasTraits):
     def connected(self):
         return bool(self._socketstream)
 
-    async def _send_request(self, request: dict) -> Future:
+    async def send_request(self, request: dict) -> Future:
         if not (socketstream := self._socketstream):
             raise RuntimeError
         self._future_responses[request["seq"]] = fut = Future()
@@ -166,19 +168,19 @@ class DebugpyClient(HasTraits):
 
     async def connect_tcp_socket(self, ready: anyio.Event):
         """Connect to the tcp socket."""
-        global _HOST_PORT  # noqa: PLW0603
-        if not _HOST_PORT:
+        global _host_port  # noqa: PLW0603
+        if not _host_port:
             import debugpy  # noqa: PLC0415
 
-            _HOST_PORT = debugpy.listen(0)
+            _host_port = debugpy.listen(0)
             utils.mark_thread_pydev_do_not_trace(threading.current_thread())
             for thread in threading.enumerate():
                 if thread.name == "IPythonHistorySavingThread":
-                    thread.pydev_do_not_trace = True  # type: ignore[assignment]
+                    thread.pydev_do_not_trace = True  # pyright: ignore[reportAttributeAccessIssue]
             # This thread can't be stopped by the debugger when debugging
         try:
             self.log.debug("++ debugpy socketstream connecting ++")
-            async with await anyio.connect_tcp(*_HOST_PORT) as socketstream:
+            async with await anyio.connect_tcp(*_host_port) as socketstream:
                 self._socketstream = socketstream
                 self.log.debug("++ debugpy socketstream connected ++")
                 ready.set()
@@ -205,7 +207,7 @@ class Debugger(HasTraits):
     debugpy_client = Instance(DebugpyClient)
     log = Instance(logging.LoggerAdapter)
     kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
-    taskgroup: TaskGroup
+    taskgroup: TaskGroup | None = None
     init_event = Instance(anyio.Event, ())
 
     @default("log")
@@ -214,6 +216,7 @@ class Debugger(HasTraits):
 
     def __init__(self):
         """Initialize the debugger."""
+        super().__init__()
         self.debugpy_client = DebugpyClient(log=self.log, event_callback=self._handle_event)
         self.started_debug_handlers = {
             "setBreakpoints": self.do_set_breakpoints,
@@ -237,7 +240,7 @@ class Debugger(HasTraits):
 
     async def send_dap_request(self, msg: DebugMessage, /):
         """Sends a DAP request to the debug server, waits for and returns the corresponding response."""
-        return await (await self.debugpy_client._send_request(msg))
+        return await (await self.debugpy_client.send_request(msg))
 
     def next_seq(self):
         "A monotonically decreasing negative number so as not to clash with the frontend seq."
@@ -269,7 +272,7 @@ class Debugger(HasTraits):
         self.kernel.iopub_send(
             msg_or_type="debug_event",
             content=event,
-            ident=self.kernel._topic("debug_event"),
+            ident=self.kernel.topic("debug_event"),
             parent=None,
         )
 
@@ -528,11 +531,11 @@ class Debugger(HasTraits):
 
     async def do_attach(self, msg: DebugMessage, /):
         """Handle an attach message."""
-        assert _HOST_PORT
-        msg["arguments"]["connect"] = {"host": _HOST_PORT[0], "port": _HOST_PORT[1]}
+        assert _host_port
+        msg["arguments"]["connect"] = {"host": _host_port[0], "port": _host_port[1]}
         if self.just_my_code:
             msg["arguments"]["debugOptions"] = ["justMyCode"]
-        reply = await self.debugpy_client._send_request(msg)
+        reply = await self.debugpy_client.send_request(msg)
         await self.init_event.wait()
         await self.send_dap_request(
             {

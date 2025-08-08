@@ -1,5 +1,3 @@
-"""Base class for a Comm"""
-
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
 
@@ -12,7 +10,7 @@ from comm.base_comm import BaseComm, BuffersType, MaybeDict
 from traitlets import Dict, HasTraits, Instance, observe
 from typing_extensions import override
 
-from async_kernel.kernel import Kernel
+from async_kernel import Kernel
 
 __all__ = ["Comm"]
 
@@ -70,7 +68,7 @@ class Comm(BaseComm):
             self._msg_callback(msg)
 
 
-class CommManager(comm.base_comm.CommManager, HasTraits):
+class CommManager(HasTraits, comm.base_comm.CommManager):  # pyright: ignore[reportUnsafeMultipleInheritance]
     """A comm manager for Kernel (singleton).
 
     When `kernel` is set the `kernel` on all existing `Comm` instances is also set.
@@ -80,15 +78,18 @@ class CommManager(comm.base_comm.CommManager, HasTraits):
     """
 
     _instance = None
-    kernel: Instance[Kernel | None] = Instance(Kernel, allow_none=True)  # type: ignore[assignment]
-    comms: Dict[str, BaseComm] = Dict()  # type: ignore[assignment]
-    targets: Dict[str, comm.base_comm.CommTargetCallback] = Dict()  # type: ignore[assignment]
+    kernel: Instance[Kernel | None] = Instance(Kernel, allow_none=True)  # pyright: ignore[reportAssignmentType]
+    comms: Dict[str, BaseComm] = Dict()  # pyright: ignore[reportIncompatibleVariableOverride]
+    targets: Dict[str, comm.base_comm.CommTargetCallback] = Dict()  # pyright: ignore[reportIncompatibleVariableOverride]
 
     def __new__(cls) -> Self:
         if cls._instance:
             return cls._instance
         cls._instance = super().__new__(cls)
         return cls._instance
+
+    def __init__(self) -> None:
+        super().__init__()
 
     @observe("kernel")
     def _observe_kernel(self, change: dict):

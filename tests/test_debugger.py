@@ -17,7 +17,7 @@ import async_kernel.utils
 if async_kernel.utils.LAUNCHED_BY_DEBUGPY:
     import debugpy.server.api
 
-    if debugpy.server.api._config["subProcess"]:
+    if debugpy.server.api._config["subProcess"]:  # pyright: ignore[reportPrivateUsage]
         msg = 'Sub-process debugging is enabled! First set `"subProcess"=false` in .vscode.launch.json and try again.'
         raise RuntimeError(msg)
 
@@ -62,7 +62,7 @@ async def send_debug_request(client: AsyncKernelClient, command: str, arguments:
     It does not check if the request was successful.
     """
 
-    send_debug_request._seq = seq = getattr(send_debug_request, "_seq", 0) + 1  # type: ignore[assignment]
+    send_debug_request._seq = seq = getattr(send_debug_request, "_seq", 0) + 1  # pyright: ignore[reportFunctionMemberAccess]
     # DAP Ref: https://microsoft.github.io/debug-adapter-protocol/specification
     reply = await utils.send_control_message(
         client,

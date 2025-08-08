@@ -12,7 +12,7 @@ import anyio
 import pytest
 
 import async_kernel.__main__ as main
-from async_kernel.kernelspec import Backend, make_argv
+from async_kernel.kernelspec import Backend, KernelName, make_argv
 from tests import utils
 
 
@@ -34,18 +34,18 @@ def test_prints_help_when_no_args(monkeypatch, capsys):
 def test_add_kernel(monkeypatch, fake_kernel_dir, capsys):
     monkeypatch.setattr(sys, "argv", ["prog", "-a", "async-trio"])
     monkeypatch.setattr(main, "write_kernel_spec", mock.Mock())
-    monkeypatch.setattr(main, "KernelName", main.KernelName)
+    monkeypatch.setattr(main, "KernelName", KernelName)
     main.main()
     out = capsys.readouterr().out
     assert "Added kernel spec async-trio" in out
-    main.write_kernel_spec.assert_called()  # type: ignore[attr-defined]
+    main.write_kernel_spec.assert_called()  # pyright: ignore[reportFunctionMemberAccess, reportPrivateLocalImportUsage]
 
 
 def test_remove_existing_kernel(monkeypatch, fake_kernel_dir, capsys):
     kernel_name = "asyncio"
     (fake_kernel_dir / kernel_name).mkdir()
     monkeypatch.setattr(sys, "argv", ["prog", "-r", kernel_name])
-    monkeypatch.setattr(main, "KernelName", main.KernelName)
+    monkeypatch.setattr(main, "KernelName", KernelName)
     monkeypatch.setattr(main, "shutil", shutil)
     main.main()
     out = capsys.readouterr().out
@@ -56,7 +56,7 @@ def test_remove_existing_kernel(monkeypatch, fake_kernel_dir, capsys):
 def test_remove_nonexistent_kernel(monkeypatch, fake_kernel_dir, capsys):
     kernel_name = "notfound"
     monkeypatch.setattr(sys, "argv", ["prog", "-r", kernel_name])
-    monkeypatch.setattr(main, "KernelName", main.KernelName)
+    monkeypatch.setattr(main, "KernelName", KernelName)
     monkeypatch.setattr(main, "shutil", shutil)
     main.main()
     out = capsys.readouterr().out

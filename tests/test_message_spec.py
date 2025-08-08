@@ -132,7 +132,7 @@ async def test_user_expressions(client):
 
 
 async def test_user_expressions_fail(client):
-    msg_id, reply = await utils.execute(client, code="x=0", user_expressions={"foo": "nosuchname"})
+    _, reply = await utils.execute(client, code="x=0", user_expressions={"foo": "nosuchname"})
     user_expressions = reply["user_expressions"]
     foo = user_expressions["foo"]
     assert foo["status"] == "error"
@@ -247,14 +247,14 @@ async def test_history_search(client):
 
 async def test_stream(client):
     client.execute("print('hi')")
-    stdout, stderr = await utils.assemble_output(client)
+    stdout, _ = await utils.assemble_output(client)
     assert stdout.startswith("hi")
 
 
 @pytest.mark.parametrize("clear", [True, False])
 async def test_display_data(client, clear: bool):
     # kernel.display_formatter
-    msg_id, reply = await utils.execute(
+    msg_id, _ = await utils.execute(
         client, f"from IPython.display import display; display(1, clear={clear})", clear_pub=False
     )
     await utils.check_pub_message(client, msg_id, execution_state="busy")

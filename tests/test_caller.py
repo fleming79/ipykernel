@@ -182,7 +182,7 @@ class TestCaller:
     @pytest.mark.parametrize("check_result", ["result", "exception"])
     @pytest.mark.parametrize("check_mode", ["main", "local", "asyncio", "trio", "wait_sync"])
     async def test_wait_from_threads(self, anyio_backend, check_mode: str, check_result: str):
-        finished_event = cast("anyio.Event", None)
+        finished_event = cast("anyio.Event", object)
         ready = threading.Event()
 
         def _thread_task():
@@ -200,7 +200,7 @@ class TestCaller:
         the_thread = threading.Thread(target=_thread_task, daemon=True)
         the_thread.start()
         ready.wait()
-        assert finished_event
+        assert isinstance(finished_event, anyio.Event)
         caller = Caller.get_instance(the_thread.name)
         if check_result == "result":
             expr = "10"
@@ -231,6 +231,8 @@ class TestCaller:
 
                     result = await anyio.to_thread.run_sync(another_thread)
                     assert result == 10
+                case _:
+                    raise NotImplementedError
 
         caller.call_soon(finished_event.set)
         the_thread.join()
@@ -278,7 +280,7 @@ class TestCaller:
             assert len(threads) == 2
         else:
             assert len(threads) > 2
-        assert len(Caller._to_thread_pool) == 2
+        assert len(Caller._to_thread_pool) == 2  # pyright: ignore[reportPrivateUsage]
 
     async def test_as_completed_error(self, anyio_backend):
         def func():
@@ -291,7 +293,7 @@ class TestCaller:
     async def test_as_completed_cancelled(self, anyio_backend):
         items = {Caller.to_thread(anyio.sleep, 100) for _ in range(4)}
 
-        async def cancelled(task_status: TaskStatus):
+        async def cancelled(task_status: TaskStatus[None]):
             with pytest.raises(anyio.get_cancelled_exc_class()):  # noqa: PT012
                 task_status.started()
                 async for _ in Caller.as_completed(items):
@@ -327,7 +329,7 @@ class TestCaller:
             return True
 
         # Discouraged
-        fut = Caller.to_thread(my_func())  # type: ignore[call-arg]
+        fut = Caller.to_thread(my_func())  # pyright: ignore[reportCallIssue, reportArgumentType]
         val = await fut
         assert val is True
         # This the preferred way of calling.
@@ -404,4 +406,4 @@ class TestCaller:
                 await anyio.sleep(0)
                 tg.cancel_scope.cancel()
             await anyio.sleep(0)
-            assert isinstance(fut.exception(), CancelledError)
+            assert isinstance(fut.exception(), CancelledError)  # pyright: ignore[reportPossiblyUnboundVariable]

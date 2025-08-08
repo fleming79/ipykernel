@@ -24,7 +24,11 @@ LAUNCHED_BY_DEBUGPY = "debugpy" in sys.modules
 
 
 def bind_socket(
-    socket: Socket, transport: Literal["tcp", "ipc"], ip: str, port: int = 0, max_attempts: int | NoValue = NoValue
+    socket: Socket[SocketType],
+    transport: Literal["tcp", "ipc"],
+    ip: str,
+    port: int = 0,
+    max_attempts: int | NoValue = NoValue,  # pyright: ignore[reportInvalidTypeForm]
 ) -> int:
     """Bind the socket to a port using the settings.
 
@@ -82,7 +86,7 @@ def bind_socket(
 
 def mark_thread_pydev_do_not_trace(thread: threading.Thread, name="", *, remove=False):
     """Modifies the given thread's attributes to hide or unhide it from the debugger (e.g., debugpy)."""
-    thread.pydev_do_not_trace = not remove  # type: ignore[attr-defined]
+    thread.pydev_do_not_trace = not remove  # pyright: ignore[reportAttributeAccessIssue]
     if name:
         thread.name = name
 
