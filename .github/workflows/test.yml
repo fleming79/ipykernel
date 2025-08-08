@@ -1,0 +1,35 @@
+name: async-kernel test
+
+on: [ push, pull_request ]
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version:
+          - "3.11"
+          - "3.12"
+          - "3.13"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.6"
+          python-version: ${{ matrix.python-version }}
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install the project
+        run: uv sync --locked --dev
+
+      - name: Run the tests
+        timeout-minutes: 15
+        run: uv run pytest
+
+      - name: Run Ruff
+        run: ruff check --output-format=github .
+

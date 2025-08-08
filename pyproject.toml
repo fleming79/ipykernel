@@ -53,6 +53,8 @@ docs = [
 ]
 dev = [
     "debugpy",
+    "ruff",
+    "hatch",
     "pre-commit",
     "pytest-cov",
     "pytest-timeout",
