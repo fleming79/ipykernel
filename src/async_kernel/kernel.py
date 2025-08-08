@@ -11,6 +11,7 @@ import contextvars
 import getpass
 import logging
 import os
+import pathlib
 import signal
 import sys
 import threading
@@ -253,6 +254,7 @@ class Kernel(ConnectionFileMixin):
                     assert len(self._sockets) == len(SocketID)
                     if not self.connection_file:
                         self.connection_file = str(Path(jupyter_runtime_dir()).joinpath(f"kernel-{uuid.uuid4()}.json"))
+                    pathlib.Path(self.connection_file).parent.mkdir(parents=True, exist_ok=True)
                     self.write_connection_file()
                     atexit.register(self.cleanup_connection_file)
                     print(f"""Kernel started. To connect a client use: --existing "{self.connection_file}" """)

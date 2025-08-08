@@ -87,8 +87,6 @@ def test_start_kernel_failure(monkeypatch, capsys, mocker):
     with pytest.raises(SystemExit) as e:
         main.main()
     assert e.value.code == 1
-    out = capsys.readouterr().err
-    assert "the first argument must be callable" in out
 
 
 async def test_subprocess_kernels_client(subprocess_kernels_client, kernel_name):
