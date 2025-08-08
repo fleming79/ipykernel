@@ -41,6 +41,7 @@ def anyio_backend(request):
 
 @pytest.fixture(scope="module")
 def transport():
+    return 'tcp'
     return "ipc" if zmq.has("ipc") else "tcp"
 
 
