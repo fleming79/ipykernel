@@ -301,8 +301,8 @@ class Debugger(HasTraits):
         if handler := self.static_debug_handlers.get(command):
             return await handler(msg)
         if not self.debugpy_client.connected:
-            msg = "Debugy client not connected."
-            raise RuntimeError(msg)
+            msg_ = "Debugy client not connected."
+            raise RuntimeError(msg_)
         if handler := self.started_debug_handlers.get(command):
             return await handler(msg)
 
