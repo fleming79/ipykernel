@@ -301,8 +301,8 @@ class Debugger(HasTraits):
         if handler := self.static_debug_handlers.get(command):
             return await handler(msg)
         if not self.debugpy_client.connected:
-            self.log.debug("Not ready - ignoring command: '%s'", command)
-            return {}
+            msg = "Debugy client not connected."
+            raise RuntimeError(msg)
         if handler := self.started_debug_handlers.get(command):
             return await handler(msg)
 
@@ -322,7 +322,8 @@ class Debugger(HasTraits):
                 index = cleanup_transforms.index(leading_empty_lines)
                 self._removed_cleanup[index] = cleanup_transforms.pop(index)
         reply = await self.send_dap_request(msg)
-        self.capabilities = reply["body"]
+        if capabilities := reply.get("body"):
+            self.capabilities = capabilities
         return reply
 
     async def do_debug_info(self, msg: DebugMessage, /):

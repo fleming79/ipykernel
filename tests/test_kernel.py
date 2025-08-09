@@ -380,7 +380,8 @@ async def test_debug_not_connected(client):
     reply = await utils.send_control_message(
         client, "debug_request", {"type": "request", "seq": 1, "command": "disconnect", "arguments": {}}
     )
-    assert reply["content"]["status"] == "ok"
+    assert reply["content"]["status"] == "error"
+    assert reply["content"]["evalue"] == "Debugy client not connected."
 
 
 @pytest.mark.parametrize("variable_name", ["my_variable", "invalid variable name", "special variables"])
@@ -475,7 +476,7 @@ async def test_invalid_message(client, channel):
     f = utils.send_control_message if channel == "control" else utils.send_shell_message
     response = None
     with anyio.move_on_after(0.1):
-        response = await f(client, "invalid-message-type")
+        response = await f(client, "test_invalid_message")
     assert response is None
     await utils.clear_iopub(client)
 
