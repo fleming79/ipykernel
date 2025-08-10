@@ -153,7 +153,6 @@ omit = ["tests/*", "hatch_build.py"]
 
 [tool.ruff]
 required-version = ">=0.12.8"
-target-version = 'py311'
 line-length = 120
 
 [tool.ruff.lint]
@@ -220,8 +219,9 @@ exclude = ["docs", "tests"]
 toplevel = ["async_kernel/"]
 ignore = ["W002"]
 
-[tool.repo-review]
-ignore = ["PY007", "PP308", "GH102", "MY101"]
+[tool.repo-review.ignore]
+PC140 = "doesn't detect basedpyright as a typechecker" # Use a type checker
+MY = "Not using mypy yet" # Skip all MyPy
 
 [tool.hatch.metadata]
 allow-direct-references = true

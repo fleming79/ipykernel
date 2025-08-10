@@ -13,13 +13,17 @@ repos:
       - id: check-added-large-files
       - id: check-case-conflict
       - id: check-merge-conflict
-      - id: check-json
       - id: check-toml
       - id: check-yaml
       - id: debug-statements
         exclude: async_kernel/kernel.py
       - id: end-of-file-fixer
       - id: trailing-whitespace
+
+  - repo: https://gitlab.com/bmares/check-json5
+    rev: v1.0.0
+    hooks:
+      - id: check-json5
 
   - repo: https://github.com/python-jsonschema/check-jsonschema
     rev: 0.33.2

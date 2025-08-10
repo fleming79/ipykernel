@@ -1,4 +1,4 @@
-name: Enforce PR label
+name: Enforce PR label and pre-commit
 
 concurrency:
   group: label-${{ github.ref }}
@@ -15,3 +15,7 @@ jobs:
     steps:
       - name: enforce-triage-label
         uses: jupyterlab/maintainer-tools/.github/actions/enforce-label@v1
+
+      - name: pre-commit
+        uses: pre-commit-ci/lite-action@v1.1.0
+        if: always()

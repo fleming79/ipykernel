@@ -42,7 +42,7 @@ jobs:
       - name: Distribution
         uses: actions/upload-artifact@v4
         with:
-          name: "dist ${{ github.job }}-${{ strategy.job-index }}"
+          name: "dist built in ${{ matrix.python-version }}-${{ matrix.os }}"
           path: dist/*
 
       - name: Coverage
