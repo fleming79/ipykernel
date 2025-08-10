@@ -36,17 +36,22 @@ jobs:
       - name: Type checking
         run: uv run basedpyright
 
+
+      - name: Build
+        run: uv build
+
+      - name: Wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: "wheel"
+          path: dist/*.wheel
+
+      - name: Source
+        uses: actions/upload-artifact@v4
+        with:
+          name: "sdist"
+          path: dist/*.tar.gz
+
       - name: Coverage
         if: ${{ startsWith( matrix.python-version, '3.13' ) && startsWith(matrix.os, 'ubuntu') }}
         run: uv run pytest --cov  --cov-fail-under 99
-
-      - name: Build
-        if: ${{ startsWith( matrix.python-version, '3.13' ) && startsWith(matrix.os, 'ubuntu') }}
-        run: uv build
-
-      - name: Artifacts
-        if: ${{ startsWith( matrix.python-version, '3.13' ) && startsWith(matrix.os, 'ubuntu') }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: "dist"
-          path: dist/*
