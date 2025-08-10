@@ -1,6 +1,6 @@
-name: Pytest
+name: Async-kernel tests
 
-on: [ push ]
+on: [push]
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -29,3 +29,25 @@ jobs:
       - name: Run the tests
         timeout-minutes: 5
         run: uv run pytest -v
+
+      - name: Ruff
+        uses: astral-sh/ruff-action@v3
+
+      - name: Type checking
+        run: basedpyright
+
+      - name: Coverage
+        if: ${{ startsWith( matrix.python-version, '3.13' ) && startsWith(matrix.os, 'ubuntu') }}
+        run: | 
+          uv run pytest --cov  --cov-fail-under 99
+          uv build
+      
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "sdist"
+          path: dist/*.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "wheel"
+          path: dist/*.wheel
