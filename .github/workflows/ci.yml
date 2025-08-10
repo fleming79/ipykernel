@@ -39,18 +39,12 @@ jobs:
       - name: Build
         run: uv build
 
-      - name: Wheel
+      - name: Distribution
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ github.job }}-${{ strategy.job-index }}
-          path: dist/*.wheel
-
-      - name: Source
-        uses: actions/upload-artifact@v4
-        with:
-          name: sdist-${{ github.job }}-${{ strategy.job-index }}
-          path: dist/*.tar.gz
+          name: "dist ${{ github.job }}-${{ strategy.job-index }}"
+          path: dist/*
 
       - name: Coverage
-        if: ${{ startsWith( matrix.python-version, '3.13' ) && startsWith(matrix.os, 'ubuntu') }}
+        if: ${{ ( matrix.python-version >= '3.12' ) && ( matrix.os  ==  'ubuntu-latest' ) }}
         run: uv run pytest --cov  --cov-fail-under 99
