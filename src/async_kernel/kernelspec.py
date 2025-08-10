@@ -31,8 +31,6 @@ class Backend(enum.StrEnum):
 class KernelName(enum.StrEnum):
     asyncio = "async"
     trio = "async-trio"
-    if sys.version_info >= (3, 12):
-        asyncio_eager = "async-eager"
 
 
 def make_argv(

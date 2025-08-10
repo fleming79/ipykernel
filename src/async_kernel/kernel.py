@@ -199,11 +199,6 @@ class Kernel(ConnectionFileMixin):
         try:
             if sniffio.current_async_library() == "trio":
                 return KernelName.trio
-            if (
-                sys.version_info >= (3, 12)
-                and asyncio.get_running_loop().get_task_factory() is asyncio.eager_task_factory
-            ):
-                return KernelName.asyncio_eager
         except Exception:
             pass
         return KernelName.asyncio
@@ -238,9 +233,6 @@ class Kernel(ConnectionFileMixin):
             raise RuntimeError(msg)
         self.CancelledError = anyio.get_cancelled_exc_class()
         self.anyio_backend = sniffio.current_async_library()
-        if sys.version_info >= (3, 12) and self.kernel_name is KernelName.asyncio_eager:
-            loop = asyncio.get_running_loop()
-            loop.set_task_factory(asyncio.eager_task_factory)
         if self.connection_file and Path(self.connection_file).exists():
             self.load_connection_file()
         try:

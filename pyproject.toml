@@ -9,7 +9,7 @@ dynamic = ["version"]
 authors = [{name = "IPython Development Team", email = "ipython-dev@python.org"}]
 license = {file = "LICENSE"}
 readme = "README.md"
-description = "An Asynchronous Python kernel for Jupyter using anyio with asyncio (normal or eager task factory) or trio event loops."
+description = "A python kernel for Jupyter running inside an anyio (asyncio or trio) event loop."
 keywords = ["Interactive", "Interpreter", "Shell", "Web", "Jupyter"]
 classifiers = [
     "Intended Audience :: Developers",

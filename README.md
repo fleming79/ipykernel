@@ -45,7 +45,6 @@ The kernel name defines the anyio backend that is used. Currently there are thre
 
 1. async: An anyio 'asyncio' backend.
 1. async-trio: An anyio 'trio' backend (requires trio - install manually).
-1. async-eager: Any anyio 'asyncio' backend configure with an [eager task factory](https://docs.python.org/3/library/asyncio-task.html#eager-task-factory) (requires Python>=3.12).
 
 ### Enabling / disabling kernels
 
@@ -54,7 +53,7 @@ Kernels can be added/removed via the command line.
 #### Add
 
 ```shell
-async_kernel -add async-eager
+async_kernel -add async-trio
 ```
 
 #### Remove

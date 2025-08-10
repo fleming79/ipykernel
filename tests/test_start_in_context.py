@@ -2,7 +2,6 @@
 # Distributed under the terms of the Modified BSD License.
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -28,9 +27,6 @@ def anyio_backend(kernel_name: KernelName):
 
 async def test_start_kernel_in_context(anyio_backend, kernel_name):
     utils.clear_kernel()
-    if kernel_name == "async-eager":
-        loop = asyncio.get_running_loop()
-        loop.set_task_factory(asyncio.eager_task_factory)
     try:
         async with Kernel().start_in_context() as kernel:
             assert kernel.kernel_name == kernel_name
