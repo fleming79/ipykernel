@@ -31,6 +31,7 @@ if sys.platform.startswith("win"):
 @pytest.hookimpl
 def pytest_configure(config):
     os.environ["PYTEST_TIMEOUT"] = str(1e6) if async_kernel.utils.LAUNCHED_BY_DEBUGPY else str(utils.TIMEOUT)
+    os.environ["MPLBACKEND"] = utils.MATPLOTLIB_INLINE_BACKEND
 
 
 @pytest.fixture(scope="module")

@@ -408,13 +408,14 @@ async def test_properties(kernel) -> None:
     kernel.user_ns = {}
 
 
-async def test_matplotlib_inline_on_import(client):
-    pytest.importorskip("matplotlib", reason="this test requires matplotlib")
+async def test_matplotlib_inline_on_import(subprocess_kernels_client):
+    import matplotlib as mpl  # noqa: PLC0415
+
+    assert mpl.get_backend() == utils.MATPLOTLIB_INLINE_BACKEND
     code = "\n".join(["import matplotlib, matplotlib.pyplot as plt", "backend = matplotlib.get_backend()"])
-    _, reply = await utils.execute(client, code, user_expressions={"backend": "backend"})
-    backend_bundle = reply["user_expressions"]["backend"]
-    assert "backend_inline" in backend_bundle["data"]["text/plain"]
-    await utils.clear_iopub(client)
+    _, reply = await utils.execute(subprocess_kernels_client, code, user_expressions={"backend": "backend"})
+    backend = eval(reply["user_expressions"]["backend"]["data"]["text/plain"])
+    assert backend == utils.MATPLOTLIB_INLINE_BACKEND
 
 
 @pytest.mark.parametrize("code", ["%connect_info", "%matplotlib --list", "%callers"])

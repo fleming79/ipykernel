@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 
 TIMEOUT = 10 if not async_kernel.utils.LAUNCHED_BY_DEBUGPY else 1e6
+MATPLOTLIB_INLINE_BACKEND = "module://matplotlib_inline.backend_inline"
 
 
 class ExecuteContentType(TypedDict):
