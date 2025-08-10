@@ -36,20 +36,19 @@ jobs:
       - name: Type checking
         run: uv run basedpyright
 
-
       - name: Build
         run: uv build
 
       - name: Wheel
         uses: actions/upload-artifact@v4
         with:
-          name: "wheel"
+          name: wheel-${{ github.job }}-${{ strategy.job-index }}
           path: dist/*.wheel
 
       - name: Source
         uses: actions/upload-artifact@v4
         with:
-          name: "sdist"
+          name: sdist-${{ github.job }}-${{ strategy.job-index }}
           path: dist/*.tar.gz
 
       - name: Coverage
