@@ -1,4 +1,4 @@
-name: async-kernel test
+name: Pytest
 
 on: [ push ]
 jobs:
