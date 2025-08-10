@@ -3,7 +3,7 @@ requires = ["hatchling>=1.4", "jupyter_client>=8"]
 build-backend = "hatchling.build"
 
 [project]
-name = "async_kernel"
+name = "async-kernel"
 
 dynamic = ["version"]
 authors = [{name = "IPython Development Team", email = "ipython-dev@python.org"}]
@@ -39,7 +39,7 @@ dependencies = [
 # Tracker = ""
 
 [project.scripts]
-async_kernel = "async_kernel.__main__:main"
+async-kernel = "async_kernel.__main__:main"
 
 [dependency-groups]
 docs = [
@@ -80,43 +80,6 @@ path = "src/async_kernel/_version.py"
 
 [tool.hatch.build.targets.wheel.shared-data]
 "data_kernelspec" = "share/jupyter/kernels"
-
-
-[tool.hatch.envs.docs]
-features = ["docs"]
-[tool.hatch.envs.docs.scripts]
-build = "make -C docs html SPHINXOPTS='-W'"
-api = "sphinx-apidoc -o docs/api -f"
-
-[tool.hatch.envs.test]
-features = ["test"]
-[tool.hatch.envs.test.scripts]
-list = "python -m pip freeze"
-test = "python -m pytest -vv {args}"
-nowarn = "test -W default {args}"
-
-[tool.hatch.envs.cov]
-features = ["test", "cov"]
-[tool.hatch.envs.cov.scripts]
-test = "python -m pytest -vv --cov async_kernel --cov-branch --cov-report term-missing:skip-covered {args}"
-nowarn = "test -W default {args}"
-
-[[tool.hatch.envs.cov.matrix]]
-qt = ["qt5", "qt6"]
-
-
-[tool.hatch.envs.typing]
-dependencies = ["pre-commit"]
-detached = true
-
-[tool.hatch.envs.lint]
-dependencies = ["pre-commit"]
-detached = true
-[tool.hatch.envs.lint.scripts]
-build = [
-  "pre-commit run --all-files ruff",
-  "pre-commit run --all-files ruff-format"
-]
 
 
 [tool.pytest.ini_options]
@@ -222,6 +185,7 @@ ignore = ["W002"]
 [tool.repo-review.ignore]
 PC140 = "doesn't detect basedpyright as a typechecker" # Use a type checker
 MY = "Not using mypy yet" # Skip all MyPy
+PY007 = "Uses github workflows to run tests for all python and os versions"# Supports an easy task runner
 
 [tool.hatch.metadata]
 allow-direct-references = true
