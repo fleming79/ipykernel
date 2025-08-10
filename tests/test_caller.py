@@ -107,13 +107,12 @@ class TestFuture:
     async def test_set_from_non_thread(self, anyio_backend):
         caller = Caller.start_new(backend=anyio_backend)
         try:
-            fut = Future(   thread=caller.thread)
+            fut = Future(thread=caller.thread)
             assert fut.thread is not threading.current_thread()
             fut.set_result(value=123)
             assert (await fut) == 123
         finally:
             caller.stop()
-
 
 
 @pytest.mark.anyio
