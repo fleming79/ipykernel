@@ -78,6 +78,7 @@ class Future(Awaitable[T]):
         "_event_done",
         "_exception",
         "_result",
+        "_setting_value",
         "thread",
     ]
     _result: T
@@ -90,6 +91,7 @@ class Future(Awaitable[T]):
         self._done_callbacks = []
         self._cancelled = False
         self._cancel_scope: anyio.CancelScope | None = None
+        self._setting_value = False
 
     @override
     def __await__(self) -> Generator[Any, None, T]:
@@ -128,20 +130,34 @@ class Future(Awaitable[T]):
         self._set_value("exception", exception)
 
     def _set_value(self, mode: Literal["result", "exception"], value):
-        if self._event_done.is_set() or threading.current_thread() is not self.thread:
+        if self._setting_value:
             raise InvalidStateError
-        if mode == "exception":
-            self._exception = value
-        else:
-            self._result = value
-        self._event_done.set()
-        if self._anyio_event_done:
-            self._anyio_event_done.set()
-        for cb in reversed(self._done_callbacks):
+        self._setting_value = True
+
+        def set_value():
+            if mode == "exception":
+                self._exception = value
+            else:
+                self._result = value
+            self._event_done.set()
+            if self._anyio_event_done:
+                self._anyio_event_done.set()
+            for cb in reversed(self._done_callbacks):
+                try:
+                    cb(self)
+                except Exception:
+                    pass
+
+        if threading.current_thread() is not self.thread:
             try:
-                cb(self)
-            except Exception:
-                pass
+                Caller(self.thread).call_no_context(func=set_value)
+            except RuntimeError:
+                msg = (
+                    f"The current thread is not {self.thread.name} and a caller does not exist for that thread either."
+                )
+                raise RuntimeError(msg) from None
+        else:
+            set_value()
 
     def done(self):
         """Return True if the Future is done.
@@ -150,6 +166,11 @@ class Future(Awaitable[T]):
         return self._event_done.is_set()
 
     def add_done_callback(self, fn: Callable[[Self], object]):
+        """Add a callback for when the callback is done (not thread-safe).
+
+        The result of the future and done callbacks are always called for the futures thread.
+        Callbacks are called in the reverse order in which they were added.
+        """
         self._done_callbacks.append(fn)
 
     def cancel(self) -> bool:
@@ -369,8 +390,8 @@ class Caller:
                         else:
                             self.log.exception("Exception occurred while running %s", func, exc_info=e)
                         fut.set_exception(e)
-        except Exception:
-            pass
+        except Exception as e:
+            self.log.exception("Calling func %s failed", func, exc_info=e)
 
     def _to_thread_on_done(self, _) -> None:
         if not self._stopped:

@@ -99,6 +99,22 @@ class TestFuture:
         fut = Future()
         assert fut.cancel()
 
+    def test_error_from_non_thread(self):
+        fut = Future(thread=threading.Thread())
+        with pytest.raises(RuntimeError):
+            fut.set_result(None)
+
+    async def test_set_from_non_thread(self, anyio_backend):
+        caller = Caller.start_new(backend=anyio_backend)
+        try:
+            fut = Future(   thread=caller.thread)
+            assert fut.thread is not threading.current_thread()
+            fut.set_result(value=123)
+            assert (await fut) == 123
+        finally:
+            caller.stop()
+
+
 
 @pytest.mark.anyio
 class TestCaller:
