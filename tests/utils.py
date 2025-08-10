@@ -35,9 +35,9 @@ class ExecuteContentType(TypedDict):
 
 def clear_kernel():
     "Clear the kernel so it can be started fresh."
-    if kernel := Kernel._instance:
+    if kernel := Kernel._instance:  # pyright: ignore[reportPrivateUsage]
         kernel.stop()
-    Kernel._instance = None
+    Kernel._instance = None  # pyright: ignore[reportPrivateUsage]
     AsyncInteractiveShell.clear_instance()
     Caller.stop_all()
 
