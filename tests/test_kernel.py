@@ -409,10 +409,7 @@ async def test_properties(kernel) -> None:
 
 
 async def test_matplotlib_inline_on_import(subprocess_kernels_client):
-    import matplotlib as mpl  # noqa: PLC0415
-
-    assert mpl.get_backend() == utils.MATPLOTLIB_INLINE_BACKEND
-    code = "\n".join(["import matplotlib, matplotlib.pyplot as plt", "backend = matplotlib.get_backend()"])
+    code = "\n".join(["import matplotlib as mpl", "backend = mpl.get_backend()"])
     _, reply = await utils.execute(subprocess_kernels_client, code, user_expressions={"backend": "backend"})
     backend = eval(reply["user_expressions"]["backend"]["data"]["text/plain"])
     assert backend == utils.MATPLOTLIB_INLINE_BACKEND

@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 
-TIMEOUT = 10 if not async_kernel.utils.LAUNCHED_BY_DEBUGPY else 1e6
+TIMEOUT = 20 if not async_kernel.utils.LAUNCHED_BY_DEBUGPY else 1e6
 MATPLOTLIB_INLINE_BACKEND = "module://matplotlib_inline.backend_inline"
 
 

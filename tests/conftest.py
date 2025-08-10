@@ -79,7 +79,7 @@ def kernel_name(request):
     return request.param
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 async def subprocess_kernels_client(anyio_backend, tmp_path_factory, kernel_name: KernelName):
     """Starts a kernel in a subprocess and returns an AsyncKernelCient that is connected to it.
 
