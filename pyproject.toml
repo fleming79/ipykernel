@@ -152,6 +152,8 @@ source = ["async_kernel"]
 omit = ["tests/*", "hatch_build.py"]
 
 [tool.ruff]
+required-version = ">=0.12.8"
+target-version = 'py311'
 line-length = 120
 
 [tool.ruff.lint]
