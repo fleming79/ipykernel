@@ -2,11 +2,12 @@
 # Distributed under the terms of the Modified BSD License.
 from __future__ import annotations
 
+import json
 import shutil
 import signal
 import sys
 import types
-from unittest import mock
+from typing import TYPE_CHECKING
 
 import anyio
 import pytest
@@ -15,12 +16,16 @@ import async_kernel.__main__ as main
 from async_kernel.kernelspec import Backend, KernelName, make_argv
 from tests import utils
 
+if TYPE_CHECKING:
+    import pathlib
+
 
 @pytest.fixture
 def fake_kernel_dir(tmp_path, monkeypatch):
     kernel_dir = tmp_path / "share/jupyter/kernels"
     kernel_dir.mkdir(parents=True)
     monkeypatch.setattr(main, "sys", types.SimpleNamespace(prefix=str(tmp_path)))
+    monkeypatch.setattr(sys, "prefix", str(tmp_path))
     return kernel_dir
 
 
@@ -31,14 +36,35 @@ def test_prints_help_when_no_args(monkeypatch, capsys):
     assert "usage:" in out
 
 
-def test_add_kernel(monkeypatch, fake_kernel_dir, capsys):
-    monkeypatch.setattr(sys, "argv", ["prog", "-a", "async-trio"])
-    monkeypatch.setattr(main, "write_kernel_spec", mock.Mock())
-    monkeypatch.setattr(main, "KernelName", KernelName)
+def test_add_kernel(monkeypatch, fake_kernel_dir: pathlib.Path, capsys):
+    monkeypatch.setattr(
+        sys, "argv", ["prog", "-a", "async-trio", "--display_name", "my kernel", "--klass", "my.custom.class"]
+    )
     main.main()
     out = capsys.readouterr().out
-    assert "Added kernel spec async-trio" in out
-    main.write_kernel_spec.assert_called()  # pyright: ignore[reportFunctionMemberAccess, reportPrivateLocalImportUsage]
+    assert "Added kernel spec" in out
+    kernel_dir = fake_kernel_dir.joinpath("async-trio")
+    assert (kernel_dir).exists()
+    with kernel_dir.joinpath("kernel.json").open("rb") as f:
+        spec = json.load(f)
+    assert spec == {
+        "argv": [
+            "python",
+            "-m",
+            "async_kernel",
+            "-f",
+            "{connection_file}",
+            "--klass",
+            "my.custom.class",
+            "--kernel_name",
+            "async-trio",
+        ],
+        "env": {},
+        "display_name": "my kernel",
+        "language": "python",
+        "interrupt_mode": "message",
+        "metadata": {"debugger": True},
+    }
 
 
 def test_remove_existing_kernel(monkeypatch, fake_kernel_dir, capsys):
