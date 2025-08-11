@@ -3,718 +3,506 @@
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
 
-import ast
-import os.path
-import platform
-import signal
-import subprocess
-import sys
+from __future__ import annotations
+
+import logging
+import pathlib
+import threading
 import time
-from datetime import datetime, timedelta
-from subprocess import Popen
-from tempfile import TemporaryDirectory
+from typing import Literal, cast
 
-import IPython
-import psutil
+import anyio
 import pytest
-from flaky import flaky
-from IPython.paths import locate_profile
+import zmq
 
-from .utils import (
-    TIMEOUT,
-    assemble_output,
-    execute,
-    flush_channels,
-    get_reply,
-    kernel,
-    new_kernel,
-    wait_for_idle,
-)
+import async_kernel.utils
+from async_kernel.caller import Caller
+from async_kernel.comm import Comm
+from async_kernel.typing import EXECUTE_MODE_PREFIX, ExecuteContent, ExecuteMode, Job, SocketID
+from tests import utils
 
 
-def _check_main(kc, expected=True, stream="stdout"):
-    execute(kc=kc, code="import sys")
-    flush_channels(kc)
-    msg_id, content = execute(kc=kc, code="print(sys.%s._is_main_process())" % stream)
-    stdout, stderr = assemble_output(kc.get_iopub_msg)
-    assert stdout.strip() == repr(expected)
+@pytest.mark.parametrize("mode", ["direct", "proxy"])
+async def test_iopub(kernel, mode: Literal["direct", "proxy"]):
+    def pubio_subscribe():
+        """Consume messages"""
+        with ctx.socket(zmq.SocketType.SUB) as socket:
+            socket.linger = 0
+            socket.connect(url)
+            socket.setsockopt(zmq.SocketOption.SUBSCRIBE, b"")
+            i = 0
+            while i < n:
+                msg = socket.recv_multipart()
+                if msg[0] == b"0":
+                    assert int(msg[1]) == i
+                    i += 1
+            # Also test iopub from a thread that doesn't have a socket works via control thread.
+            print("done")
+            msg = socket.recv_multipart()
+            assert msg[-1] == b'{"name": "stdout", "text": "done"}'
 
-
-def _check_status(content):
-    """If status=error, show the traceback"""
-    if content["status"] == "error":
-        raise AssertionError("".join(["\n"] + content["traceback"]))
-
-
-# printing tests
-
-
-def test_simple_print():
-    """simple print statement in kernel"""
-    with kernel() as kc:
-        msg_id, content = execute(kc=kc, code="print('hi')")
-        stdout, stderr = assemble_output(kc.get_iopub_msg)
-        assert stdout == "hi\n"
-        assert stderr == ""
-        _check_main(kc, expected=True)
-
-
-def test_print_to_correct_cell_from_thread():
-    """should print to the cell that spawned the thread, not a subsequently run cell"""
-    iterations = 5
-    interval = 0.25
-    code = f"""\
-    from threading import Thread
-    from time import sleep
-
-    def thread_target():
-        for i in range({iterations}):
-            print(i, end='', flush=True)
-            sleep({interval})
-
-    Thread(target=thread_target).start()
-    """
-    with kernel() as kc:
-        thread_msg_id = kc.execute(code)
-        _ = kc.execute("pass")
-
-        received = 0
-        while received < iterations:
-            msg = kc.get_iopub_msg(timeout=interval * 2)
-            if msg["msg_type"] != "stream":
-                continue
-            content = msg["content"]
-            assert content["name"] == "stdout"
-            assert content["text"] == str(received)
-            # this is crucial as the parent header decides to which cell the output goes
-            assert msg["parent_header"]["msg_id"] == thread_msg_id
-            received += 1
-
-
-def test_print_to_correct_cell_from_child_thread():
-    """should print to the cell that spawned the thread, not a subsequently run cell"""
-    iterations = 5
-    interval = 0.25
-    code = f"""\
-    from threading import Thread
-    from time import sleep
-
-    def child_target():
-        for i in range({iterations}):
-            print(i, end='', flush=True)
-            sleep({interval})
-
-    def parent_target():
-        sleep({interval})
-        thread = Thread(target=child_target)
-        thread.start()
+    n = 10
+    socket = kernel._sockets[SocketID.iopub]
+    url = socket.get_string(zmq.SocketOption.LAST_ENDPOINT)
+    assert url.endswith(str(kernel.iopub_port))
+    ctx = zmq.Context()
+    thread = threading.Thread(target=pubio_subscribe)
+    thread.start()
+    try:
+        time.sleep(0.05)
+        if mode == "proxy":
+            socket = Caller.iopub_sockets[threading.current_thread()]
+        for i in range(n):
+            socket.send_multipart([b"0", f"{i}".encode()])
         thread.join()
-
-    Thread(target=parent_target).start()
-    """
-    with kernel() as kc:
-        thread_msg_id = kc.execute(code)
-        _ = kc.execute("pass")
-
-        received = 0
-        while received < iterations:
-            msg = kc.get_iopub_msg(timeout=interval * 2)
-            if msg["msg_type"] != "stream":
-                continue
-            content = msg["content"]
-            assert content["name"] == "stdout"
-            assert content["text"] == str(received)
-            # this is crucial as the parent header decides to which cell the output goes
-            assert msg["parent_header"]["msg_id"] == thread_msg_id
-            received += 1
+    finally:
+        ctx.term()
 
 
-def test_print_to_correct_cell_from_asyncio():
-    """should print to the cell that scheduled the task, not a subsequently run cell"""
-    iterations = 5
-    interval = 0.25
-    code = f"""\
-    import asyncio
-
-    async def async_task():
-        for i in range({iterations}):
-            print(i, end='', flush=True)
-            await asyncio.sleep({interval})
-
-    loop = asyncio.get_event_loop()
-    loop.create_task(async_task());
-    """
-    with kernel() as kc:
-        thread_msg_id = kc.execute(code)
-        _ = kc.execute("pass")
-
-        received = 0
-        while received < iterations:
-            msg = kc.get_iopub_msg(timeout=interval * 2)
-            if msg["msg_type"] != "stream":
-                continue
-            content = msg["content"]
-            assert content["name"] == "stdout"
-            assert content["text"] == str(received)
-            # this is crucial as the parent header decides to which cell the output goes
-            assert msg["parent_header"]["msg_id"] == thread_msg_id
-            received += 1
-
-
-@pytest.mark.skip(reason="Currently don't capture during test as pytest does its own capturing")
-def test_capture_fd():
+@pytest.mark.parametrize("quiet", [True, False])
+async def test_simple_print(kernel, client, quiet: bool):
     """simple print statement in kernel"""
-    with kernel() as kc:
-        iopub = kc.iopub_channel
-        msg_id, content = execute(kc=kc, code="import os; os.system('echo capsys')")
-        stdout, stderr = assemble_output(iopub)
-        assert stdout == "capsys\n"
+    kernel.quiet = quiet
+    try:
+        client.execute("print('test_simple_print')")
+        stdout, stderr = await utils.assemble_output(client)
+        assert stdout == "test_simple_print\n"
         assert stderr == ""
-        _check_main(kc, expected=True)
+        await utils.clear_iopub(client)
+    finally:
+        kernel.quiet = True
+        await utils.clear_iopub(client)
 
 
-@pytest.mark.skip(reason="Currently don't capture during test as pytest does its own capturing")
-def test_subprocess_peek_at_stream_fileno():
-    with kernel() as kc:
-        iopub = kc.iopub_channel
-        msg_id, content = execute(
-            kc=kc,
-            code="import subprocess, sys; subprocess.run(['python', '-c', 'import os; os.system(\"echo CAP1\"); print(\"CAP2\")'], stderr=sys.stderr)",
-        )
-        stdout, stderr = assemble_output(iopub)
-        assert stdout == "CAP1\nCAP2\n"
-        assert stderr == ""
-        _check_main(kc, expected=True)
+async def test_bad_message(client):
+    client.shell_channel.socket.send(b"")
+    client.control_channel.socket.send(b"")
+    await utils.execute(client, "")
 
 
-def test_sys_path():
-    """test that sys.path doesn't get messed up by default"""
-    with kernel() as kc:
-        msg_id, content = execute(kc=kc, code="import sys; print(repr(sys.path))")
-        stdout, stderr = assemble_output(kc.get_iopub_msg)
-    # for error-output on failure
-    sys.stderr.write(stderr)
+@pytest.mark.parametrize("test_mode", ["interrupt", "reply", "allow_stdin=False"])
+@pytest.mark.parametrize("mode", ["input", "password"])
+async def test_input(
+    subprocess_kernels_client,
+    mode: Literal["input", "password"],
+    test_mode: Literal["interrupt", "reply", "allow_stdin=False"],
+):
+    client = subprocess_kernels_client
+    client.input("Some input that should be discardes")
+    theprompt = "Enter a value >"
+    match mode:
+        case "input":
+            code = f"response = input('{theprompt}')"
+        case "password":
+            code = f"import getpass;response = getpass.getpass('{theprompt}')"
+    # allow_stdin=False
+    if test_mode == "allow_stdin=False":
+        _, reply = await utils.execute(client, code, allow_stdin=False)
+        assert reply["status"] == "error"
+        assert reply["ename"] == "StdinNotImplementedError"
+        return
+    msg_id = client.execute(code, allow_stdin=True, user_expressions={"response": "response"})
+    msg = await client.get_stdin_msg()
+    assert msg["header"]["msg_type"] == "input_request"
+    content = msg["content"]
+    assert content["prompt"] == theprompt
+    # interrupt
+    if test_mode == "interrupt":
+        await utils.send_control_message(client, "interrupt_request")
+        reply = await utils.get_reply(client, msg_id, clear_pub=False)
+        assert reply["content"]["status"] == "error"
+        return
+    # reply
+    text = "some text"
+    client.input(text)
+    reply = await utils.get_reply(client, msg_id)
+    assert reply["content"]["status"] == "ok"
+    assert text in reply["content"]["user_expressions"]["response"]["data"]["text/plain"]
 
-    sys_path = ast.literal_eval(stdout.strip())
-    assert "" in sys_path
+
+async def test_unraisablehook(kernel, mocker):
+    handler = logging.Handler()
+    kernel.log.logger.addHandler(handler)
+
+    class Unraiseable:
+        def __init__(self) -> None:
+            self.exc_type = BaseException
+            self.exc_value = BaseException()
+            self.exc_traceback = None
+            self.err_msg = "my error message"
+            self.object = ""
+
+    emit = mocker.patch.object(handler, "emit")
+    kernel.unraisablehook(Unraiseable())
+    assert emit.call_count == 1
+    kernel.log.logger.removeHandler(handler)
 
 
-def test_sys_path_profile_dir():
-    """test that sys.path doesn't get messed up when `--profile-dir` is specified"""
+async def test_save_history(client, tmp_path):
+    file = tmp_path.joinpath("hist.out")
+    client.execute("a=1")
+    await utils.wait_for_idle(client)
+    client.execute('b="abcþ"')
+    await utils.wait_for_idle(client)
+    _, reply = await utils.execute(client, f"%hist -f {file}")
+    assert reply["status"] == "ok"
+    with file.open("r", encoding="utf-8") as f:
+        content = f.read()
+    assert "a=1" in content
+    assert 'b="abcþ"' in content
+    await utils.clear_iopub(client)
 
-    with new_kernel(["--profile-dir", locate_profile("default")]) as kc:
-        msg_id, content = execute(kc=kc, code="import sys; print(repr(sys.path))")
-        stdout, stderr = assemble_output(kc.get_iopub_msg)
-    # for error-output on failure
-    sys.stderr.write(stderr)
 
-    sys_path = ast.literal_eval(stdout.strip())
-    assert "" in sys_path
-
-
-@flaky(max_runs=3)
-@pytest.mark.skipif(
-    sys.platform == "win32" or (sys.platform == "darwin"),
-    reason="subprocess prints fail on Windows and MacOS Python 3.8+",
+@pytest.mark.parametrize(
+    ("code", "status"),
+    [
+        ("2+2", "complete"),
+        ("raise = 2", "invalid"),
+        ("a = [1,\n2,", "incomplete"),
+        ("%%timeit\na\n\n", "complete"),
+    ],
 )
-def test_subprocess_print():
-    """printing from forked mp.Process"""
-    with new_kernel() as kc:
-        _check_main(kc, expected=True)
-        flush_channels(kc)
-        np = 5
-        code = "\n".join(
-            [
-                "import time",
-                "import multiprocessing as mp",
-                "pool = [mp.Process(target=print, args=('hello', i,)) for i in range(%i)]" % np,
-                "for p in pool: p.start()",
-                "for p in pool: p.join()",
-                "time.sleep(0.5),",
-            ]
-        )
-
-        msg_id, content = execute(kc=kc, code=code)
-        stdout, stderr = assemble_output(kc.get_iopub_msg)
-        assert stdout.count("hello") == np, stdout
-        for n in range(np):
-            assert stdout.count(str(n)) == 1, stdout
-        assert stderr == ""
-        _check_main(kc, expected=True)
-        _check_main(kc, expected=True, stream="stderr")
+async def test_is_complete(client, code: str, status: str):
+    # There are more test cases for this in core - here we just check
+    # that the kernel exposes the interface correctly.
+    client.is_complete(code)
+    reply = await client.get_shell_msg()
+    assert reply["content"]["status"] == status
+    await utils.clear_iopub(client)
 
 
-@flaky(max_runs=3)
-def test_subprocess_noprint():
-    """mp.Process without print doesn't trigger iostream mp_mode"""
-    with kernel() as kc:
-        np = 5
-        code = "\n".join(
-            [
-                "import multiprocessing as mp",
-                "pool = [mp.Process(target=range, args=(i,)) for i in range(%i)]" % np,
-                "for p in pool: p.start()",
-                "for p in pool: p.join()",
-            ]
-        )
-
-        msg_id, content = execute(kc=kc, code=code)
-        stdout, stderr = assemble_output(kc.get_iopub_msg)
-        assert stdout == ""
-        assert stderr == ""
-
-        _check_main(kc, expected=True)
-        _check_main(kc, expected=True, stream="stderr")
-
-
-@flaky(max_runs=3)
-@pytest.mark.skipif(
-    (sys.platform == "win32") or (sys.platform == "darwin"),
-    reason="subprocess prints fail on Windows and MacOS Python 3.8+",
-)
-def test_subprocess_error():
-    """error in mp.Process doesn't crash"""
-    with new_kernel() as kc:
-        code = "\n".join(
-            [
-                "import multiprocessing as mp",
-                "p = mp.Process(target=int, args=('hi',))",
-                "p.start()",
-                "p.join()",
-            ]
-        )
-
-        msg_id, content = execute(kc=kc, code=code)
-        stdout, stderr = assemble_output(kc.get_iopub_msg)
-        assert stdout == ""
-        assert "ValueError" in stderr
-
-        _check_main(kc, expected=True)
-        _check_main(kc, expected=True, stream="stderr")
-
-
-# raw_input tests
-
-
-def test_raw_input():
-    """test input"""
-    with kernel() as kc:
-        input_f = "input"
-        theprompt = "prompt> "
-        code = f'print({input_f}("{theprompt}"))'
-        kc.execute(code, allow_stdin=True)
-        msg = kc.get_stdin_msg(timeout=TIMEOUT)
-        assert msg["header"]["msg_type"] == "input_request"
-        content = msg["content"]
-        assert content["prompt"] == theprompt
-        text = "some text"
-        kc.input(text)
-        reply = kc.get_shell_msg(timeout=TIMEOUT)
-        assert reply["content"]["status"] == "ok"
-        stdout, stderr = assemble_output(kc.get_iopub_msg)
-        assert stdout == text + "\n"
-
-
-def test_save_history():
-    # Saving history from the kernel with %hist -f was failing because of
-    # unicode problems on Python 2.
-    with kernel() as kc, TemporaryDirectory() as td:
-        file = os.path.join(td, "hist.out")
-        execute("a=1", kc=kc)
-        wait_for_idle(kc)
-        execute('b="abcþ"', kc=kc)
-        wait_for_idle(kc)
-        _, reply = execute("%hist -f " + file, kc=kc)
-        assert reply["status"] == "ok"
-        with open(file, encoding="utf-8") as f:
-            content = f.read()
-        assert "a=1" in content
-        assert 'b="abcþ"' in content
-
-
-def test_smoke_faulthandler():
-    pytest.importorskip("faulthandler", reason="this test needs faulthandler")
-    with kernel() as kc:
-        # Note: faulthandler.register is not available on windows.
-        code = "\n".join(
-            [
-                "import sys",
-                "import faulthandler",
-                "import signal",
-                "faulthandler.enable()",
-                'if not sys.platform.startswith("win32"):',
-                "    faulthandler.register(signal.SIGTERM)",
-            ]
-        )
-        _, reply = execute(code, kc=kc)
-        assert reply["status"] == "ok", reply.get("traceback", "")
-
-
-def test_help_output():
-    """ipython kernel --help-all works"""
-    cmd = [sys.executable, "-m", "IPython", "kernel", "--help-all"]
-    proc = subprocess.run(cmd, timeout=30, capture_output=True, check=True)
-    assert proc.returncode == 0, proc.stderr
-    assert b"Traceback" not in proc.stderr
-    assert b"Options" in proc.stdout
-    assert b"Class" in proc.stdout
-
-
-def test_is_complete():
-    with kernel() as kc:
-        # There are more test cases for this in core - here we just check
-        # that the kernel exposes the interface correctly.
-        kc.is_complete("2+2")
-        reply = kc.get_shell_msg(timeout=TIMEOUT)
-        assert reply["content"]["status"] == "complete"
-
-        # SyntaxError
-        kc.is_complete("raise = 2")
-        reply = kc.get_shell_msg(timeout=TIMEOUT)
-        assert reply["content"]["status"] == "invalid"
-
-        kc.is_complete("a = [1,\n2,")
-        reply = kc.get_shell_msg(timeout=TIMEOUT)
-        assert reply["content"]["status"] == "incomplete"
-        assert reply["content"]["indent"] == ""
-
-        # Cell magic ends on two blank lines for console UIs
-        kc.is_complete("%%timeit\na\n\n")
-        reply = kc.get_shell_msg(timeout=TIMEOUT)
-        assert reply["content"]["status"] == "complete"
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="only run on Windows")
-def test_complete():
-    with kernel() as kc:
-        execute("a = 1", kc=kc)
-        wait_for_idle(kc)
-        cell = "import IPython\nb = a."
-        kc.complete(cell)
-        reply = kc.get_shell_msg(timeout=TIMEOUT)
-
-    c = reply["content"]
-    assert c["status"] == "ok"
-    start = cell.find("a.")
-    end = start + 2
-    assert c["cursor_end"] == cell.find("a.") + 2
-    assert c["cursor_start"] <= end
-
-    # there are many right answers for cursor_start,
-    # so verify application of the completion
-    # rather than the value of cursor_start
-
-    matches = c["matches"]
-    assert matches
-    for m in matches:
-        completed = cell[: c["cursor_start"]] + m
-        assert completed.startswith(cell)
-
-
-def test_matplotlib_inline_on_import():
-    pytest.importorskip("matplotlib", reason="this test requires matplotlib")
-    with kernel() as kc:
-        cell = "\n".join(
-            ["import matplotlib, matplotlib.pyplot as plt", "backend = matplotlib.get_backend()"]
-        )
-        _, reply = execute(cell, user_expressions={"backend": "backend"}, kc=kc)
-        _check_status(reply)
-        backend_bundle = reply["user_expressions"]["backend"]
-        _check_status(backend_bundle)
-        assert "backend_inline" in backend_bundle["data"]["text/plain"]
-
-
-def test_message_order():
+async def test_message_order(client):
     N = 100  # number of messages to test
-    with kernel() as kc:
-        _, reply = execute("a = 1", kc=kc)
-        _check_status(reply)
-        offset = reply["execution_count"] + 1
-        cell = "a += 1\na"
-        msg_ids = []
-        # submit N executions as fast as we can
-        for _ in range(N):
-            msg_ids.append(kc.execute(cell))
-        # check message-handling order
-        for i, msg_id in enumerate(msg_ids, offset):
-            reply = kc.get_shell_msg(timeout=TIMEOUT)
-            _check_status(reply["content"])
-            assert reply["content"]["execution_count"] == i
-            assert reply["parent_header"]["msg_id"] == msg_id
+
+    _, reply = await utils.execute(client, "a = 1")
+    offset = reply["execution_count"] + 1
+    cell = "a += 1\na"
+
+    # submit N executions as fast as we can
+    msg_ids = [client.execute(cell) for _ in range(N)]
+    # check message-handling order
+    for i, msg_id in enumerate(msg_ids, offset):
+        reply = await client.get_shell_msg()
+        assert reply["content"]["execution_count"] == i
+        assert reply["parent_header"]["msg_id"] == msg_id
+    await utils.clear_iopub(client)
 
 
-@pytest.mark.skipif(
-    sys.platform.startswith("linux") or sys.platform.startswith("darwin"),
-    reason="test only on windows",
-)
-def test_unc_paths():
-    with kernel() as kc, TemporaryDirectory() as td:
-        drive_file_path = os.path.join(td, "unc.txt")
-        with open(drive_file_path, "w+") as f:
-            f.write("# UNC test")
-        unc_root = "\\\\localhost\\C$"
-        file_path = os.path.splitdrive(os.path.dirname(drive_file_path))[1]
-        unc_file_path = os.path.join(unc_root, file_path[1:])
-
-        kc.execute(f"cd {unc_file_path:s}")
-        reply = kc.get_shell_msg(timeout=TIMEOUT)
-        assert reply["content"]["status"] == "ok"
-        out, err = assemble_output(kc.get_iopub_msg)
-        assert unc_file_path in out
-
-        flush_channels(kc)
-        kc.execute(code="ls")
-        reply = kc.get_shell_msg(timeout=TIMEOUT)
-        assert reply["content"]["status"] == "ok"
-        out, err = assemble_output(kc.get_iopub_msg)
-        assert "unc.txt" in out
-
-        kc.execute(code="cd")
-        reply = kc.get_shell_msg(timeout=TIMEOUT)
-        assert reply["content"]["status"] == "ok"
+async def test_execute_request_success(client):
+    reply = await utils.send_shell_message(client, "execute_request", {"code": "1 + 1", "silent": False})
+    assert reply["header"]["msg_type"] == "execute_reply"
+    assert reply["content"]["status"] == "ok"
+    await utils.clear_iopub(client)
 
 
-@pytest.mark.skipif(
-    platform.python_implementation() == "PyPy",
-    reason="does not work on PyPy",
-)
-def test_shutdown():
-    """Kernel exits after polite shutdown_request"""
-    with new_kernel() as kc:
-        km = kc.parent
-        execute("a = 1", kc=kc)
-        wait_for_idle(kc)
-        kc.shutdown()
-        for _ in range(300):  # 30s timeout
-            if km.is_alive():
-                time.sleep(0.1)
-            else:
-                break
-        assert not km.is_alive()
+async def test_execute_request_error(client):
+    reply = await utils.send_shell_message(client, "execute_request", {"code": "some invalid code", "silent": False})
+    assert reply["header"]["msg_type"] == "execute_reply"
+    assert reply["content"]["status"] == "error"
+    await utils.clear_iopub(client)
 
 
-def test_interrupt_during_input():
-    """
-    The kernel exits after being interrupted while waiting in input().
-
-    input() appears to have issues other functions don't, and it needs to be
-    interruptible in order for pdb to be interruptible.
-    """
-    with new_kernel() as kc:
-        km = kc.parent
-        msg_id = kc.execute("input()")
-        time.sleep(1)  # Make sure it's actually waiting for input.
-        km.interrupt_kernel()
-        from .test_message_spec import validate_message
-
-        # If we failed to interrupt interrupt, this will timeout:
-        reply = get_reply(kc, msg_id, TIMEOUT)
-        validate_message(reply, "execute_reply", msg_id)
+async def test_execute_request_stop_on_error(client, kernel):
+    kernel._stop_on_error_time = time.monotonic() + 10
+    reply = await utils.send_shell_message(client, "execute_request", {"code": "some invalid code", "silent": False})
+    assert reply["header"]["msg_type"] == "execute_reply"
+    assert reply["content"]["status"] == "error"
+    kernel._stop_on_error_time = 0
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Message based interrupt not supported on Windows")
-def test_interrupt_with_message():
-    with new_kernel() as kc:
-        km = kc.parent
-        km.kernel_spec.interrupt_mode = "message"
-        msg_id = kc.execute("input()")
-        time.sleep(1)  # Make sure it's actually waiting for input.
-        km.interrupt_kernel()
-        from .test_message_spec import validate_message
-
-        # If we failed to interrupt interrupt, this will timeout:
-        reply = get_reply(kc, msg_id, TIMEOUT)
-        validate_message(reply, "execute_reply", msg_id)
+async def test_complete_request(client):
+    reply = await utils.send_shell_message(client, "complete_request", {"code": "hello", "cursor_pos": 0})
+    assert reply["header"]["msg_type"] == "complete_reply"
 
 
-@pytest.mark.skipif(
-    "__pypy__" in sys.builtin_module_names,
-    reason="fails on pypy",
-)
-def test_interrupt_during_pdb_set_trace():
-    """
-    The kernel exits after being interrupted while waiting in pdb.set_trace().
-
-    Merely testing input() isn't enough, pdb has its own issues that need
-    to be handled in addition.
-
-    This test will fail with versions of IPython < 7.14.0.
-    """
-    with new_kernel() as kc:
-        km = kc.parent
-        msg_id = kc.execute("import pdb; pdb.set_trace()")
-        msg_id2 = kc.execute("3 + 4")
-        time.sleep(1)  # Make sure it's actually waiting for input.
-        km.interrupt_kernel()
-        from .test_message_spec import validate_message
-
-        # If we failed to interrupt interrupt, this will timeout:
-        reply = get_reply(kc, msg_id, TIMEOUT)
-        validate_message(reply, "execute_reply", msg_id)
-        # If we failed to interrupt interrupt, this will timeout:
-        reply = get_reply(kc, msg_id2, TIMEOUT)
-        validate_message(reply, "execute_reply", msg_id2)
+async def test_inspect_request(client):
+    reply = await utils.send_shell_message(client, "inspect_request", {"code": "hello", "cursor_pos": 0})
+    assert reply["header"]["msg_type"] == "inspect_reply"
 
 
-def test_control_thread_priority():
-    N = 5
-    with new_kernel() as kc:
-        msg_id = kc.execute("pass")
-        get_reply(kc, msg_id)
+async def test_history_request(client, kernel):
+    assert kernel.shell
+    # assert kernel.shell.history_manager
 
-        sleep_msg_id = kc.execute("import asyncio; await asyncio.sleep(2)")
-
-        # submit N shell messages
-        shell_msg_ids = []
-        for i in range(N):
-            shell_msg_ids.append(kc.execute(f"i = {i}"))
-
-        # ensure all shell messages have arrived at the kernel before any control messages
-        time.sleep(0.5)
-        # at this point, shell messages should be waiting in msg_queue,
-        # rather than zmq while the kernel is still in the middle of processing
-        # the first execution
-
-        # now send N control messages
-        control_msg_ids = []
-        for _ in range(N):
-            msg = kc.session.msg("kernel_info_request", {})
-            kc.control_channel.send(msg)
-            control_msg_ids.append(msg["header"]["msg_id"])
-
-        # finally, collect the replies on both channels for comparison
-        get_reply(kc, sleep_msg_id)
-        shell_replies = []
-        for msg_id in shell_msg_ids:
-            shell_replies.append(get_reply(kc, msg_id))
-
-        control_replies = []
-        for msg_id in control_msg_ids:
-            control_replies.append(get_reply(kc, msg_id, channel="control"))
-
-    # verify that all control messages were handled before all shell messages
-    shell_dates = [msg["header"]["date"] for msg in shell_replies]
-    control_dates = [msg["header"]["date"] for msg in control_replies]
-    # comparing first to last ought to be enough, since queues preserve order
-    # use <= in case of very-fast handling and/or low resolution timers
-    assert control_dates[-1] <= shell_dates[0]
+    # kernel.shell.history_manager.db = DummyDB()
+    reply = await utils.send_shell_message(client, "history_request", {"hist_access_type": "", "output": "", "raw": ""})
+    assert reply["header"]["msg_type"] == "history_reply"
+    reply = await utils.send_shell_message(
+        client, "history_request", {"hist_access_type": "tail", "output": "", "raw": ""}
+    )
+    assert reply["header"]["msg_type"] == "history_reply"
+    reply = await utils.send_shell_message(
+        client, "history_request", {"hist_access_type": "range", "output": "", "raw": ""}
+    )
+    assert reply["header"]["msg_type"] == "history_reply"
+    reply = await utils.send_shell_message(
+        client, "history_request", {"hist_access_type": "search", "output": "", "raw": ""}
+    )
+    assert reply["header"]["msg_type"] == "history_reply"
 
 
-def test_sequential_control_messages():
-    with new_kernel() as kc:
-        msg_id = kc.execute("import time")
-        get_reply(kc, msg_id)
-
-        # Send multiple messages on the control channel.
-        # Using execute messages to vary duration.
-        sleeps = [0.6, 0.3, 0.1]
-
-        # Prepare messages
-        msgs = [
-            kc.session.msg("execute_request", {"code": f"time.sleep({sleep})"}) for sleep in sleeps
-        ]
-        msg_ids = [msg["header"]["msg_id"] for msg in msgs]
-
-        # Submit messages
-        for msg in msgs:
-            kc.control_channel.send(msg)
-
-        # Get replies
-        replies = [get_reply(kc, msg_id, channel="control") for msg_id in msg_ids]
-
-        def ensure_datetime(arg):
-            # Support arg which is a datetime or str.
-            if isinstance(arg, str):
-                if sys.version_info[:2] < (3, 11) and arg.endswith("Z"):
-                    # Python < 3.11 doesn't support "Z" suffix in datetime.fromisoformat,
-                    # so use alternative timezone format.
-                    # https://github.com/python/cpython/issues/80010
-                    arg = arg[:-1] + "+00:00"
-                return datetime.fromisoformat(arg)
-            return arg
-
-        # Check messages are processed in order, one at a time, and of a sensible duration.
-        previous_end = None
-        for reply, sleep in zip(replies, sleeps):
-            start = ensure_datetime(reply["metadata"]["started"])
-            end = ensure_datetime(reply["header"]["date"])
-
-            if previous_end is not None:
-                assert start >= previous_end
-            previous_end = end
-
-            assert end >= start + timedelta(seconds=sleep)
+async def test_comm_info_request(client):
+    reply = await utils.send_shell_message(client, "comm_info_request")
+    assert reply["header"]["msg_type"] == "comm_info_reply"
 
 
-def _child():
-    print("in child", os.getpid())
+async def test_comm_open_msg_close(client, kernel, mocker):
+    comm = None
 
-    def _print_and_exit(sig, frame):
-        print(f"Received signal {sig}")
-        # take some time so retries are triggered
-        time.sleep(0.5)
-        sys.exit(-sig)
+    def cb(comm_, _):
+        nonlocal comm
+        comm = comm_
 
-    signal.signal(signal.SIGTERM, _print_and_exit)
-    time.sleep(30)
-
-
-def _start_children():
-    ip = IPython.get_ipython()  # type:ignore[attr-defined]
-    ns = ip.user_ns
-
-    cmd = [sys.executable, "-c", f"from {__name__} import _child; _child()"]
-    child_pg = Popen(cmd, start_new_session=False)
-    child_newpg = Popen(cmd, start_new_session=True)
-    ns["pid"] = os.getpid()
-    ns["child_pg"] = child_pg.pid
-    ns["child_newpg"] = child_newpg.pid
-    # give them time to start up and register signal handlers
-    time.sleep(1)
-
-
-@pytest.mark.skipif(
-    platform.python_implementation() == "PyPy",
-    reason="does not work on PyPy",
-)
-@pytest.mark.skipif(
-    sys.platform.lower() == "linux",
-    reason="Stalls on linux",
-)
-def test_shutdown_subprocesses():
-    """Kernel exits after polite shutdown_request"""
-    with new_kernel() as kc:
-        km = kc.parent
-        msg_id, reply = execute(
-            f"from {__name__} import _start_children\n_start_children()",
-            kc=kc,
-            user_expressions={
-                "pid": "pid",
-                "child_pg": "child_pg",
-                "child_newpg": "child_newpg",
-            },
+    kernel.comm_manager.register_target("my target", cb)
+    # open a comm
+    with anyio.move_on_after(0.1):
+        await utils.send_shell_message(
+            client, "comm_open", {"content": {}, "comm_id": "comm id", "target_name": "my target"}
         )
-        print(reply)
-        expressions = reply["user_expressions"]
-        kernel_process = psutil.Process(int(expressions["pid"]["data"]["text/plain"]))
-        child_pg = psutil.Process(int(expressions["child_pg"]["data"]["text/plain"]))
-        child_newpg = psutil.Process(int(expressions["child_newpg"]["data"]["text/plain"]))
-        wait_for_idle(kc)
+    assert isinstance(comm, Comm)
+    comm = cast("Comm", comm)
+    reply = await utils.send_shell_message(client, "comm_info_request")
+    assert reply["header"]["msg_type"] == "comm_info_reply"
+    assert reply["content"]["comms"].get("comm id") == {"target_name": "my target"}
 
-        kc.shutdown()
-        for _ in range(300):  # 30s timeout
-            if km.is_alive():
-                time.sleep(0.1)
-            else:
-                break
-        assert not km.is_alive()
-        assert not kernel_process.is_running()
-        # child in the process group shut down
-        assert not child_pg.is_running()
-        # child outside the process group was not shut down (unix only)
-        if os.name != "nt":
-            assert child_newpg.is_running()
-        try:
-            child_newpg.terminate()
-        except psutil.NoSuchProcess:
-            pass
+    msg_received = mocker.patch.object(comm, "handle_msg")
+    with anyio.move_on_after(0.1):
+        await utils.send_shell_message(client, "comm_msg", {"comm_id": comm.comm_id})
+    assert msg_received.call_count == 1
+    # close comm
+    closed = mocker.patch.object(comm, "handle_close")
+    with anyio.move_on_after(0.1):
+        await utils.send_shell_message(client, "comm_close", {"comm_id": comm.comm_id})
+    assert closed.call_count == 1
+    kernel.comm_manager.unregister_target("my target", cb)
+
+
+async def test_interrupt_request(client, kernel):
+    event = threading.Event()
+    kernel._interrupts.add(event.set)
+    reply = await utils.send_control_message(client, "interrupt_request")
+    assert reply["header"]["msg_type"] == "interrupt_reply"
+    assert reply["content"] == {"status": "ok"}
+    assert event.is_set()
+
+
+async def test_interrupt_request_async_request(subprocess_kernels_client):
+    client = subprocess_kernels_client
+    msg_id = client.execute("await anyio.sleep(100)")
+    await anyio.sleep(0.1)
+    reply = await utils.send_control_message(client, "interrupt_request")
+    reply = await utils.get_reply(client, msg_id)
+    assert reply["content"]["status"] == "error"
+
+
+async def test_interrupt_request_blocking_exec_request(subprocess_kernels_client):
+    client = subprocess_kernels_client
+    msg_id = client.execute("import time;time.sleep(100)")
+    await anyio.sleep(0.1)
+    reply = await utils.send_control_message(client, "interrupt_request")
+    reply = await utils.get_reply(client, msg_id)
+    assert reply["content"]["status"] == "error"
+    assert reply["content"]["ename"] == "KernelInterruptError"
+
+
+async def test_interrupt_request_blocking_task(subprocess_kernels_client):
+    code = """
+async def test():
+    import time
+    from async_kernel.kernel import KernelInterruptError
+    started.set()
+    await anyio.sleep(0.01)
+    try:
+        time.sleep(100)
+    except KernelInterruptError:
+        print("KernelInterruptError")
+    print("Failed")
+import anyio
+started = anyio.Event()
+from async_kernel import Caller
+Caller().call_soon(test)
+await started.wait()
+"""
+    client = subprocess_kernels_client
+    _, reply = await utils.execute(client, code)
+    assert reply["status"] == "ok"
+    await anyio.sleep(0.011)
+    for _ in range(2):  # Blocking calls in tasks need to be interrupted twice
+        await utils.send_control_message(client, "interrupt_request", clear_pub=False)
+    stdout, _ = await utils.assemble_output(client, timeout=1)
+    assert "KernelInterruptError" in stdout
+    await utils.clear_iopub(client)
+
+
+@pytest.mark.parametrize("response", ["y", ""])
+async def test_user_exit(client, kernel, mocker, response: Literal["y", ""]):
+    stop = mocker.patch.object(kernel, "stop")
+    raw_input = mocker.patch.object(kernel, "raw_input", return_value=response)
+    await utils.execute(client, "quit()")
+    assert raw_input.call_count == 1
+    assert stop.call_count == (1 if response == "y" else 0)
+    kernel.exit_now = False
+
+
+async def test_is_complete_request(client):
+    reply = await utils.send_shell_message(client, "is_complete_request", {"code": "hello"})
+    assert reply["header"]["msg_type"] == "is_complete_reply"
+
+
+@pytest.mark.parametrize("command", ["debugInfo", "inspectVariables", "modules", "dumpCell", "source"])
+async def test_debug_static(client, command: str, mocker):
+    # These are tests on the debugger that don't required the debugger to be connected.
+    code = "my_variable=123"
+    if command == "debugInfo":
+        mocker.patch.object(async_kernel.utils, "LAUNCHED_BY_DEBUGPY", new=True)
+        assert async_kernel.utils.LAUNCHED_BY_DEBUGPY
+    reply = await utils.send_control_message(
+        client, "debug_request", {"type": "request", "seq": 1, "command": command, "arguments": {"code": code}}
+    )
+    assert reply["content"]["status"] == "ok"
+    if command == "dumpCell":
+        path = reply["content"]["body"]["sourcePath"]
+        reply = await utils.send_control_message(
+            client,
+            "debug_request",
+            {"type": "request", "seq": 1, "command": "source", "arguments": {"source": {"path": path}}},
+        )
+        assert reply["content"]["status"] == "ok"
+        assert reply["content"]["body"] == {"content": code}
+
+
+async def test_debug_raises_no_socket(kernel):
+    with pytest.raises(RuntimeError):
+        await kernel.debugger.debugpy_client.send_request({})
+
+
+async def test_debug_not_connected(client):
+    reply = await utils.send_control_message(
+        client, "debug_request", {"type": "request", "seq": 1, "command": "disconnect", "arguments": {}}
+    )
+    assert reply["content"]["status"] == "error"
+    assert reply["content"]["evalue"] == "Debugy client not connected."
+
+
+@pytest.mark.parametrize("variable_name", ["my_variable", "invalid variable name", "special variables"])
+async def test_debug_static_richInspectVariables(client, variable_name):
+    # These are tests on the debugger that don't required the debugger to be connected.
+    reply = await utils.send_control_message(
+        client,
+        "debug_request",
+        {
+            "type": "request",
+            "seq": 1,
+            "command": "richInspectVariables",
+            "arguments": {"code": "my_variable=123", "variableName": variable_name},
+        },
+    )
+    assert reply["content"]["status"] == "ok"
+
+
+async def test_properties(kernel) -> None:
+    class user_mod:
+        __dict__ = {}
+
+    kernel.user_module = user_mod()
+    kernel.user_ns = {}
+
+
+async def test_matplotlib_inline_on_import(subprocess_kernels_client):
+    code = "\n".join(["import matplotlib as mpl", "backend = mpl.get_backend()"])
+    _, reply = await utils.execute(subprocess_kernels_client, code, user_expressions={"backend": "backend"})
+    backend = eval(reply["user_expressions"]["backend"]["data"]["text/plain"])
+    assert backend == utils.MATPLOTLIB_INLINE_BACKEND
+
+
+@pytest.mark.parametrize("code", ["%connect_info", "%matplotlib --list", "%callers"])
+async def test_magic(client, code: str, kernel, monkeypatch):
+    monkeypatch.setenv("JUPYTER_RUNTIME_DIR", str(pathlib.Path(kernel.connection_file).parent))
+    assert code
+    _, reply = await utils.execute(client, code, clear_pub=False)
+    assert reply["status"] == "ok"
+    stdout, _ = await utils.assemble_output(client)
+    assert stdout
+    await utils.clear_iopub(client)
+
+
+async def test_shell_required_properites(kernel):
+    # used by ipython AutoMagicChecker via is_shadowed (requires 'builitin')
+    assert set(kernel.shell.ns_table) == {"user_global", "user_local", "builtin"}
+    # U
+    kernel.shell.enable_gui()
+
+
+async def test_shell_can_set_namespace(kernel):
+    kernel.shell.user_ns = {}
+    assert set(kernel.shell.user_ns) == {"Out", "_oh", "In", "exit", "_dh", "open", "get_ipython", "_ih", "quit"}
+
+
+@pytest.mark.parametrize("mode", ExecuteMode)
+async def test_header_mode(client, mode: ExecuteMode):
+    code = f"""
+{mode}
+import time
+time.sleep(0.1)
+print("{mode.name}")
+"""
+    _, reply = await utils.execute(client, code, clear_pub=False)
+    assert reply["status"] == "ok"
+    stdout, _ = await utils.assemble_output(client)
+    assert mode.name in stdout
+    await utils.clear_iopub(client)
+    Caller.stop_all()
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "from async_kernel import Caller; Caller().call_later(str, 0, 123)",
+        "from async_kernel import Caller; Caller().call_soon(print, 'hello')",
+    ],
+)
+async def test_namespace_default(client, code: str):
+    assert code
+    _, reply = await utils.execute(client, code)
+    assert reply["status"] == "ok"
+    await anyio.sleep(0.02)
+    await utils.clear_iopub(client)
+
+
+@pytest.mark.parametrize("channel", ["shell", "control"])
+async def test_invalid_message(client, channel):
+    f = utils.send_control_message if channel == "control" else utils.send_shell_message
+    response = None
+    with anyio.move_on_after(0.1):
+        response = await f(client, "test_invalid_message")
+    assert response is None
+    await utils.clear_iopub(client)
+
+
+@pytest.mark.parametrize(
+    ("code", "silent", "socket_id", "expected"),
+    [
+        (f"{ExecuteMode.task}", False, SocketID.shell, ExecuteMode.task),
+        (f" {ExecuteMode.task}", False, SocketID.shell, ExecuteMode.task),
+        ("print(1)", False, SocketID.shell, ExecuteMode.queue),
+        ("", True, SocketID.shell, ExecuteMode.task),
+        (f"{ExecuteMode.thread}\nprint('hello')", False, SocketID.shell, ExecuteMode.thread),
+        ("", False, SocketID.control, ExecuteMode.task),
+        (f"{EXECUTE_MODE_PREFIX}threads", False, SocketID.shell, ExecuteMode.queue),
+        (f"{EXECUTE_MODE_PREFIX}Task", False, SocketID.shell, ExecuteMode.queue),
+    ],
+)
+def test_get_execute_mode(code: str, silent: bool, socket_id, expected: ExecuteMode):
+    content = ExecuteContent(
+        code=code,
+        silent=silent,
+        store_history=True,
+        user_expressions={},
+        allow_stdin=False,
+        stop_on_error=True,
+        execute_mode=None,
+    )
+    job = Job(msg={"content": content}, socket_id=socket_id)  # pyright: ignore[reportCallIssue]
+    execute_mode = async_kernel.Kernel.get_execute_mode(job)
+    assert execute_mode is expected
+    assert job["msg"]["content"]["execute_mode"] is expected

@@ -1,36 +1,22 @@
-"""A custom hatch build hook for ipykernel."""
+"""A custom hatch build hook for async_kernel."""
 
-import shutil
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
+
 import sys
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 
-class CustomHook(BuildHookInterface):
-    """The IPykernel build hook."""
+class CustomHook(BuildHookInterface):  # pyright: ignore[reportUntypedBaseClass]
+    """The async_kernel build hook."""
 
     def initialize(self, version, build_data):
         """Initialize the hook."""
         here = Path(__file__).parent.resolve()
-        sys.path.insert(0, str(here))
-        from ipykernel.kernelspec import make_ipkernel_cmd, write_kernel_spec
 
-        overrides = {}
+        sys.path.insert(0, str(here / "src" / "async_kernel"))
+        from kernelspec import KernelName, write_kernel_spec  # noqa: PLC0415
 
-        # When building a standard wheel, the executable specified in the kernelspec is simply 'python'.
-        if version == "standard":
-            overrides["metadata"] = dict(debugger=True)
-            argv = make_ipkernel_cmd(executable="python")
-
-        # When installing an editable wheel, the full `sys.executable` can be used.
-        else:
-            argv = make_ipkernel_cmd()
-
-        overrides["argv"] = argv
-
-        dest = Path(here) / "data_kernelspec"
-        if Path(dest).exists():
-            shutil.rmtree(dest)
-
-        write_kernel_spec(dest, overrides=overrides)
+        write_kernel_spec(base=Path(here) / "data_kernelspec", kernel_name=KernelName.asyncio)

@@ -1,7 +1,7 @@
-ipykernel
+async_kernel
 =========
 
 .. toctree::
    :maxdepth: 4
 
-   ipykernel
+   async_kernel

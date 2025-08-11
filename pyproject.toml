@@ -1,15 +1,16 @@
 [build-system]
-requires = ["hatchling>=1.4", "jupyter_client>=6"]
+requires = ["hatchling>=1.4", "jupyter_client>=8"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ipykernel"
+name = "async-kernel"
+
 dynamic = ["version"]
-authors = [{name = "IPython Development Team", email = "ipython-dev@python.org"}]
+authors = [{name = "", email = "ipython-dev@python.org"}]
 license = {file = "LICENSE"}
 readme = "README.md"
-description = "IPython Kernel for Jupyter"
-keywords = ["Interactive", "Interpreter", "Shell", "Web"]
+description = "A python kernel for Jupyter running inside an anyio (asyncio or trio) event loop."
+keywords = ["Interactive", "Interpreter", "Shell", "Web", "Jupyter"]
 classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
@@ -17,318 +18,155 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
-    "debugpy>=1.8.1",
-    "ipython>=7.23.1",
-    "comm>=0.1.1",
-    "traitlets>=5.4.0",
-    "jupyter_client>=8.0.0",
-    "jupyter_core>=4.12,!=5.0.*",
-    # For tk event loop support only.
-    "nest_asyncio>=1.4",
-    "matplotlib-inline>=0.1",
-    'appnope>=0.1.2;platform_system=="Darwin"',
+    "ipython>=9.4",
+    "comm>=0.2.2",
+    "traitlets>=5.14.3",
+    "jupyter_client>=8.6.3",
+    "jupyter_core>=5.8.1",
     "pyzmq>=26.0",
-    "psutil>=5.7",
-    "packaging>=22",
     "anyio>=4.8.0,<5.0.0",
-    "zmq-anyio >=0.3.6",
+    "typing_extensions>=4.14.1",
+    "sniffio",
+    "matplotlib-inline>=0.1"
 ]
 
 [project.urls]
-Homepage = "https://ipython.org"
-Documentation = "https://ipykernel.readthedocs.io"
-Source = "https://github.com/ipython/ipykernel"
-Tracker = "https://github.com/ipython/ipykernel/issues"
+# Homepage = ""
+# Documentation = ""
+# Source = ""
+# Tracker = ""
 
-[project.optional-dependencies]
+[project.scripts]
+async-kernel = "async_kernel.__main__:main"
+
+[dependency-groups]
 docs = [
-  # Sphinx pinned until `sphinx-autodoc-typehints` issue is resolved:
-  # https://github.com/tox-dev/sphinx-autodoc-typehints/issues/523
-  "sphinx<8.2.0",
+  "sphinx",
   "myst_parser",
   "pydata_sphinx_theme",
   "sphinxcontrib_github_alt",
   "sphinxcontrib-spelling",
   "sphinx-autodoc-typehints",
   "intersphinx_registry",
-  "trio"
 ]
-test = [
-    "flaky",
-    "ipyparallel",
+dev = [
+    "debugpy",
+    "ruff",
+    "hatch",
     "pre-commit",
     "pytest-cov",
     "pytest-timeout",
-    "pytest>=7.0,<9",
+    "pytest-mock",
+    "pytest-retry",
+    "pytest>=8.4,<9",
+    "matplotlib",
     "trio",
+    "basedpyright>=1.31.1",
 ]
 cov = [
   "coverage[toml]",
   "pytest-cov",
   "matplotlib",
-  "curio",
   "trio",
 ]
-pyqt5 = ["pyqt5"]
-pyside6 = ["pyside6"]
 
 [tool.hatch.version]
-path = "ipykernel/_version.py"
+path = "src/async_kernel/_version.py"
 
 # Used to call hatch_build.py
 [tool.hatch.build.hooks.custom]
 
 [tool.hatch.build.targets.wheel.shared-data]
-"data_kernelspec" = "share/jupyter/kernels/python3"
-
-[tool.hatch.build.force-include]
-"./ipykernel_launcher.py" = "ipykernel_launcher.py"
-
-[tool.hatch.envs.docs]
-features = ["docs"]
-[tool.hatch.envs.docs.scripts]
-build = "make -C docs html SPHINXOPTS='-W'"
-api = "sphinx-apidoc -o docs/api -f -E ipykernel tests ipykernel/datapub.py ipykernel/pickleutil.py ipykernel/serialize.py ipykernel/gui ipykernel/pylab"
-
-[tool.hatch.envs.test]
-features = ["test"]
-[tool.hatch.envs.test.scripts]
-list = "python -m pip freeze"
-test = "python -m pytest -vv {args}"
-nowarn = "test -W default {args}"
-
-[tool.hatch.envs.cov]
-features = ["test", "cov"]
-[tool.hatch.envs.cov.scripts]
-test = "python -m pytest -vv --cov ipykernel --cov-branch --cov-report term-missing:skip-covered {args}"
-nowarn = "test -W default {args}"
-
-[[tool.hatch.envs.cov.matrix]]
-qt = ["qt5", "qt6"]
-
-[tool.hatch.envs.cov.overrides]
-matrix.qt.features = [
-  { value = "pyqt5", if = ["qt5"] },
-  { value = "pyside6", if = ["qt6"] },
-]
-
-[tool.hatch.envs.typing]
-dependencies = ["pre-commit"]
-detached = true
-[tool.hatch.envs.typing.scripts]
-test = "pre-commit run --all-files --hook-stage manual mypy"
-
-[tool.hatch.envs.lint]
-dependencies = ["pre-commit"]
-detached = true
-[tool.hatch.envs.lint.scripts]
-build = [
-  "pre-commit run --all-files ruff",
-  "pre-commit run --all-files ruff-format"
-]
-
-[tool.mypy]
-files = "ipykernel"
-strict = true
-#disable_error_code = [ "import-not-found"]
-disable_error_code = ["no-untyped-def", "no-untyped-call", "import-not-found"]
-enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
-follow_imports = "normal"
-#pretty = true
-warn_unreachable = true
-
-[[tool.mypy.overrides]]
-module = [
-    "ipykernel._eventloop_macos",
-    "ipykernel.comm.comm",
-    "ipykernel.comm.manager",
-    "ipykernel.compiler",
-    "ipykernel.connect",
-    "ipykernel.control",
-    "ipykernel.datapub",
-    "ipykernel.debugger",
-    "ipykernel.displayhook",
-    "ipykernel.embed",
-    "ipykernel.eventloops",
-    "ipykernel.gui.gtk3embed",
-    "ipykernel.gui.gtkembed",
-    "ipykernel.heartbeat",
-    "ipykernel.inprocess.blocking",
-    "ipykernel.inprocess.channels",
-    "ipykernel.inprocess.client",
-    "ipykernel.inprocess.ipkernel",
-    "ipykernel.inprocess.manager",
-    "ipykernel.inprocess.session",
-    "ipykernel.inprocess.socket",
-    "ipykernel.iostream",
-    "ipykernel.ipkernel",
-    "ipykernel.jsonutil",
-    "ipykernel.kernelapp",
-    "ipykernel.kernelbase",
-    "ipykernel.log",
-    "ipykernel.parentpoller",
-    "ipykernel.pickleutil",
-    "ipykernel.serialize",
-    "ipykernel.shellchannel",
-    "ipykernel.subshell",
-    "ipykernel.subshell_manager",
-    "ipykernel.thread",
-    "ipykernel.trio_runner",
-    "ipykernel.zmqshell"
-]
-#check_untyped_defs = false
-#disallow_incomplete_defs = false
-#disallow_untyped_calls = false
-#disallow_untyped_decorators = false
-#disallow_untyped_defs = false
-#ignore_missing_imports = true
-#follow_untyped_imports = false
-
+"data_kernelspec" = "share/jupyter/kernels"
 
 
 [tool.pytest.ini_options]
 minversion = "6.0"
 xfail_strict = true
-log_cli_level = "info"
+log_cli_level =  "INFO"
 addopts = [
   "-raXs", "--durations=10", "--color=yes", "--doctest-modules",
    "--showlocals", "--strict-markers", "--strict-config",
-   "--ignore=ipykernel/pylab/backend_inline.py",
-   "--ignore=ipykernel/pylab/config.py",
-   "--ignore=ipykernel/gui/gtk3embed.py",
-   "--ignore=ipykernel/gui/gtkembed.py",
-   "--ignore=ipykernel/datapub.py",
-   "--ignore=ipykernel/log.py",
-   "--ignore=ipykernel/pickleutil.py",
-   "--ignore=ipykernel/serialize.py",
-   "--ignore=ipykernel/_eventloop_macos.py"
+  "-s",
 ]
-testpaths = [
-    "tests",
-    # "tests/inprocess"
-]
-norecursedirs = "tests/inprocess"
-timeout = 60
-# Restore this setting to debug failures
-# timeout_method = "thread"
-filterwarnings= [
-  # Fail on warnings
-  "error",
-  # IPython warnings
-  "ignore: `Completer.complete` is pending deprecation since IPython 6.0 and will be replaced by `Completer.completions`:PendingDeprecationWarning",
-  "ignore: backends is deprecated since IPython 8.24, backends are managed in matplotlib and can be externally registered.:DeprecationWarning",
-  "ignore: backend2gui is deprecated since IPython 8.24, backends are managed in matplotlib and can be externally registered.:DeprecationWarning",
+testpaths = ["tests"]
 
-  # Ignore jupyter_client warnings
-  "module:Jupyter is migrating its paths to use standard platformdirs:DeprecationWarning",
-
-  # we do not want to raise on resources warnings, or we will not have a chance to
-  # collect the messages and print the location of the leak
-  "always::ResourceWarning",
-
-  # ignore unclosed sqlite in traits
-  "ignore:unclosed database in <sqlite3.Connection:ResourceWarning",
-
-  # ignore timeout cancel coroutine not awaited in zmq-anyio
-  "ignore: coroutine 'Poller._apoll.<locals>.trigger_timeout' was never awaited",
-  "ignore: Unclosed socket",
-
-  # ignore deprecated non async during tests:
-  "always:For consistency across implementations, it is recommended that:PendingDeprecationWarning",
-]
+filterwarnings= []
 
 [tool.coverage.report]
 exclude_lines = [
-  "pragma: no cover",
   "def __repr__",
-  "if self.debug:",
-  "if settings.DEBUG",
-  "raise AssertionError",
   "raise NotImplementedError",
-  "if 0:",
   "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
   "class .*\bProtocol\\):",
   "@(abc\\.)?abstractmethod",
+  "except .*",
+  "def excepthook.*", # Pytest overrides excepthook so it's not possible to test it.
+  ".*sys.platform == \"win32\".*"
 ]
 
 [tool.coverage.run]
+parallel = true
 relative_files = true
-source = ["ipykernel"]
-omit = [
-  "tests/*",
-  "ipykernel/datapub.py",
-  "ipykernel/debugger.py",
-  "ipykernel/eventloops.py",
-  "ipykernel/log.py",
-  "ipykernel/pickleutil.py",
-  "ipykernel/serialize.py",
-  "ipykernel/gui/*",
-  "ipykernel/pylab/*",
-]
+source = ["async_kernel"]
+omit = ["tests/*", "hatch_build.py"]
 
 [tool.ruff]
-line-length = 100
+required-version = ">=0.12.8"
+line-length = 120
 
 [tool.ruff.lint]
 extend-select = [
   "B",        # flake8-bugbear
   "I",        # isort
+  "F",        # Pyflakes
   "ARG",      # flake8-unused-arguments
   "C4",       # flake8-comprehensions
   "EM",       # flake8-errmsg
   "ICN",      # flake8-import-conventions
   "G",        # flake8-logging-format
+  "PERF",     # Perflint
   "PGH",      # pygrep-hooks
   "PIE",      # flake8-pie
   "PL",       # pylint
+  "PLR",      # Refactor
   "PT",       # flake8-pytest-style
   "PTH",      # flake8-use-pathlib
   "RET",      # flake8-return
   "RUF",      # Ruff-specific
   "SIM",      # flake8-simplify
   "T20",      # flake8-print
+  "TRY",      # tryceratops
+  "FURB",     # Refurb
   "UP",       # pyupgrade
   "YTT",      # flake8-2020
   "EXE",      # flake8-executable
   "NPY",      # NumPy specific rules
   "PD",       # pandas-vet
   "PYI",      # flake8-pyi
+  "TC",       # flake8-type-checking
 ]
 ignore = [
   "PLR",    # Design related pylint codes
-  # Allow non-abstract empty methods in abstract base classes
-  "B027",
+  "B027", # Allow non-abstract empty methods in abstract base classes
   "T201", # `print` found
-  # Unnecessary `dict` call (rewrite as a literal)
-  "C408",
   "SIM105", # Use `contextlib.suppress(ValueError)` instead of try-except-pass
-  # Mutable class attributes should be annotated with `typing.ClassVar`
-  "RUF012",
-  # Unused function argument:
-  "ARG001",
-  # Unused method argument:
-  "ARG002",
-  # `open()` should be replaced by `Path.open()`
-  "PTH123",
-  "UP007", # use `X | Y` for type annotations, this does not works for dynamic getting type hints on older python
+  "RUF012", # Mutable class attributes should be annotated with `typing.ClassVar`
+  "ARG001", # Unused function argument
+  "ARG002",  # Unused method argument
+  "PTH123", # `open()` should be replaced by `Path.open()`
   "UP031", # Use format specifiers instead of percent format
   "PT023", # Use `@pytest.mark.skip` over `@pytest.mark.skip()`
-  "PT001", # autofixable: Use `@pytest.fixture` over `@pytest.fixture()`
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# B011 Do not call assert False since python -O removes these calls
-# C408 Unnecessary `dict` call
-# T201 `print` found
-# B007 Loop control variable `i` not used within the loop body.
-# PLW0603 Using the global statement to update ...
-# PLC1901 `stderr == ""` can be simplified to `not stderr` as an empty string is falsey
-# B018 Found useless expression. Either assign it to a variable or remove it.
-# S603 `subprocess` call: check for execution of untrusted input
-"tests/*" = ["B011", "C408", "T201", "B007", "EM", "PTH", "PLW", "PLC1901", "B018", "S603", "ARG", "RET", "PGH"]
-"*/__init__.py" = ["F401"]
+"examples/*" = ["PLC0415"]
+
+[tool.ruff.format]
+docstring-code-format = true
 
 [tool.interrogate]
 ignore-init-module=true
@@ -341,11 +179,31 @@ fail-under=95
 exclude = ["docs", "tests"]
 
 [tool.check-wheel-contents]
-toplevel = ["ipykernel/", "ipykernel_launcher.py"]
+toplevel = ["async_kernel/"]
 ignore = ["W002"]
 
-[tool.repo-review]
-ignore = ["PY007", "PP308", "GH102", "MY101"]
+[tool.repo-review.ignore]
+PC140 = "doesn't detect basedpyright as a typechecker" # Use a type checker
+MY = "Not using mypy yet" # Skip all MyPy
+PY007 = "Uses github workflows to run tests for all python and os versions"# Supports an easy task runner
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[tool.basedpyright]
+include = ['src/**']
+reportMissingParameterType = false
+reportExplicitAny = false
+reportUnknownParameterType = false
+reportUnannotatedClassAttribute = false
+reportMissingTypeArgument  = false
+reportMissingImports = false
+reportUnusedCallResult  = false
+reportUninitializedInstanceVariable = false
+reportUnknownVariableType = false
+reportAny = false
+reportUnknownMemberType = false
+reportUnknownArgumentType = false
+reportImportCycles = false
+reportMissingTypeStubs = false
+reportUnusedParameter = false

@@ -4,7 +4,7 @@ ci:
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: check-case-conflict
       - id: check-ast
@@ -13,16 +13,20 @@ repos:
       - id: check-added-large-files
       - id: check-case-conflict
       - id: check-merge-conflict
-      - id: check-json
       - id: check-toml
       - id: check-yaml
       - id: debug-statements
-        exclude: ipykernel/kernelapp.py
+        exclude: async_kernel/kernel.py
       - id: end-of-file-fixer
       - id: trailing-whitespace
 
+  - repo: https://gitlab.com/bmares/check-json5
+    rev: v1.0.0
+    hooks:
+      - id: check-json5
+
   - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 0.31.3
+    rev: 0.33.2
     hooks:
       - id: check-github-workflows
 
@@ -38,21 +42,6 @@ repos:
     hooks:
       - id: prettier
         types_or: [yaml, html, json]
-
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: "v1.15.0"
-    hooks:
-      - id: mypy
-        files: ipykernel
-        args: ["--install-types", "--non-interactive"]
-        additional_dependencies:
-          [
-            "traitlets>=5.13",
-            "ipython>=8.16.1",
-            "jupyter_client>=8.5",
-            "appnope",
-            "types-psutil",
-          ]
 
   - repo: https://github.com/adamchainz/blacken-docs
     rev: "1.19.1"
@@ -74,7 +63,7 @@ repos:
       - id: rst-inline-touching-normal
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.11.2
+    rev: v0.12.8
     hooks:
       - id: ruff
         types_or: [python, jupyter]
@@ -83,7 +72,12 @@ repos:
         types_or: [python, jupyter]
 
   - repo: https://github.com/scientific-python/cookie
-    rev: "2025.01.22"
+    rev: "2025.05.02"
     hooks:
       - id: sp-repo-review
         additional_dependencies: ["repo-review[cli]"]
+
+  - repo: https://github.com/kynan/nbstripout
+    rev: "0.8.1"
+    hooks:
+      - id: nbstripout

@@ -1,21 +1,24 @@
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
+
 import unittest.mock
 
 import pytest
 
-from ipykernel.comm import Comm, CommManager
-from ipykernel.ipkernel import IPythonKernel
-from ipykernel.kernelbase import Kernel
+from async_kernel.comm import Comm, CommManager
 
 
-def test_comm(kernel: Kernel) -> None:
-    manager = CommManager(kernel=kernel)
-    kernel.comm_manager = manager  # type:ignore
+@pytest.fixture(scope="module", params=["asyncio", "trio"])
+def anyio_backend(request):
+    return request.param
 
-    with pytest.deprecated_call():
-        c = Comm(kernel=kernel, target_name="bar")
+
+async def test_comm(kernel) -> None:
+    assert isinstance(kernel.comm_manager, CommManager)
+    c = Comm(target_name="bar")
     msgs = []
 
-    assert kernel is c.kernel  # type:ignore
+    assert c.kernel is kernel
 
     def on_close(msg):
         msgs.append(msg)
@@ -23,6 +26,8 @@ def test_comm(kernel: Kernel) -> None:
     def on_message(msg):
         msgs.append(msg)
 
+    c.publish_msg("foo")
+    kernel.comm_manager.kernel = None
     c.publish_msg("foo")
     c.open({})
     c.on_msg(on_message)
@@ -34,16 +39,19 @@ def test_comm(kernel: Kernel) -> None:
     assert c.target_name == "bar"
 
 
-def test_comm_manager(kernel: Kernel) -> None:
-    manager = CommManager(kernel=kernel)
+async def test_comm_manager(kernel) -> None:
+    manager = kernel.comm_manager
     msgs = []
+
+    assert CommManager() is manager
 
     def foo(comm, msg):
         msgs.append(msg)
         comm.close()
 
     def fizz(comm, msg):
-        raise RuntimeError("hi")
+        msg = "hi"
+        raise RuntimeError(msg)
 
     def on_close(msg):
         msgs.append(msg)
@@ -54,36 +62,30 @@ def test_comm_manager(kernel: Kernel) -> None:
     manager.register_target("foo", foo)
     manager.register_target("fizz", fizz)
 
-    kernel.comm_manager = manager  # type:ignore
+    kernel.comm_manager = manager
     with unittest.mock.patch.object(Comm, "publish_msg") as publish_msg:
-        with pytest.deprecated_call():
-            comm = Comm()
+        comm = Comm()
         comm.on_msg(on_msg)
         comm.on_close(on_close)
         manager.register_comm(comm)
         assert publish_msg.call_count == 1
 
-    # make sure that when we don't pass a kernel, the 'default' kernel is taken
-    Kernel._instance = kernel  # type:ignore
-    assert comm.kernel is kernel  # type:ignore
-    Kernel.clear_instance()
-
     assert manager.get_comm(comm.comm_id) == comm
     assert manager.get_comm("foo") is None
 
-    msg = dict(content=dict(comm_id=comm.comm_id, target_name="foo"))
+    msg = {"content": {"comm_id": comm.comm_id, "target_name": "foo"}}
     manager.comm_open(None, None, msg)
     assert len(msgs) == 1
     msg["content"]["target_name"] = "bar"
     manager.comm_open(None, None, msg)
     assert len(msgs) == 1
-    msg = dict(content=dict(comm_id=comm.comm_id, target_name="fizz"))
+    msg = {"content": {"comm_id": comm.comm_id, "target_name": "fizz"}}
     manager.comm_open(None, None, msg)
     assert len(msgs) == 1
 
     manager.register_comm(comm)
     assert manager.get_comm(comm.comm_id) == comm
-    msg = dict(content=dict(comm_id=comm.comm_id))
+    msg = {"content": {"comm_id": comm.comm_id}}
     manager.comm_msg(None, None, msg)
     assert len(msgs) == 2
     msg["content"]["comm_id"] = "foo"
@@ -92,15 +94,13 @@ def test_comm_manager(kernel: Kernel) -> None:
 
     manager.register_comm(comm)
     assert manager.get_comm(comm.comm_id) == comm
-    msg = dict(content=dict(comm_id=comm.comm_id))
+    msg = {"content": {"comm_id": comm.comm_id}}
+    manager.kernel = None
+    assert comm.kernel is None
+    manager.kernel = kernel
+    assert comm.kernel is kernel
+
     manager.comm_close(None, None, msg)
     assert len(msgs) == 3
 
     assert comm._closed
-
-
-def test_comm_in_manager(ipkernel: IPythonKernel) -> None:
-    with pytest.deprecated_call():
-        comm = Comm()
-
-    assert comm.comm_id in ipkernel.comm_manager.comms

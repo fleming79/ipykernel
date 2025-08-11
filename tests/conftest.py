@@ -1,253 +1,111 @@
-import gc
-import logging
-import warnings
-from math import inf
-from threading import Event
-from typing import Any, Callable, no_type_check
-from unittest.mock import MagicMock
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 
+import os
+import subprocess
+import sys
+from typing import TYPE_CHECKING
+
+import anyio
 import pytest
-import zmq
-import zmq_anyio
-from anyio import create_memory_object_stream, create_task_group, sleep
-from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
-from jupyter_client.session import Session
+from jupyter_client.asynchronous.client import AsyncKernelClient
 
-from ipykernel.ipkernel import IPythonKernel
-from ipykernel.kernelbase import Kernel
-from ipykernel.zmqshell import ZMQInteractiveShell
+import async_kernel.utils
+from async_kernel.kernel import Kernel
+from async_kernel.kernelspec import KernelName, make_argv
+from tests import utils
 
-
-@pytest.fixture(scope="session", autouse=True)
-def _garbage_collection(request):
-    gc.collect()
-
-
-try:
-    import resource
-except ImportError:
-    # Windows
-    resource = None  # type:ignore
-
-try:
-    import tracemalloc
-except ModuleNotFoundError:
-    tracemalloc = None
+if TYPE_CHECKING:
+    pytest_plugins = ["anyio.pytest_plugin"]
 
 pytestmark = pytest.mark.anyio
 
+if sys.platform.startswith("win"):
+    import asyncio
 
-# Handle resource limit
-# Ensure a minimal soft limit of DEFAULT_SOFT if the current hard limit is at least that much.
-if resource is not None:
-    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-
-    DEFAULT_SOFT = 4096
-    if hard >= DEFAULT_SOFT:
-        soft = DEFAULT_SOFT
-
-    if hard < soft:
-        hard = soft
-
-    resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+    # needed for `jupyter_client.AsyncKernelClient` messaging only
+    # ref: https://github.com/zeromq/pyzmq/issues/1423
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
 
 
-class TestSession(Session):
-    """A session that copies sent messages to an internal stream, so that
-    they can be accessed later.
-    """
-
-    def __init__(self, sockets, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._streams = {}
-        for socket in sockets:
-            send_stream, receive_stream = create_memory_object_stream(max_buffer_size=inf)
-            self._streams[socket] = {"send": send_stream, "receive": receive_stream}
-
-    def close(self):
-        for streams in self._streams.values():
-            for stream in streams.values():
-                stream.close()
-        self._streams.clear()
-
-    def send(self, socket, *args, **kwargs):
-        msg = super().send(socket, *args, **kwargs)
-        send_stream: MemoryObjectSendStream[Any] = self._streams[socket]["send"]
-        send_stream.send_nowait(msg)
-        return msg
+@pytest.hookimpl
+def pytest_configure(config):
+    os.environ["PYTEST_TIMEOUT"] = str(1e6) if async_kernel.utils.LAUNCHED_BY_DEBUGPY else str(utils.TIMEOUT)
+    os.environ["MPLBACKEND"] = utils.MATPLOTLIB_INLINE_BACKEND
 
 
-class KernelMixin:
-    shell_socket: zmq_anyio.Socket
-    control_socket: zmq_anyio.Socket
-    stop: Callable[[], None]
-
-    log = logging.getLogger()
-
-    def _initialize(self):
-        self._is_test = True
-        self.context = context = zmq.Context()
-        self.iopub_socket = zmq_anyio.Socket(context.socket(zmq.PUB))
-        self.stdin_socket = zmq_anyio.Socket(context.socket(zmq.ROUTER))
-        self.test_sockets = [self.iopub_socket]
-
-        for name in ["shell", "control"]:
-            socket = zmq_anyio.Socket(context.socket(zmq.ROUTER))
-            self.test_sockets.append(socket)
-            setattr(self, f"{name}_socket", socket)
-
-        self.session = TestSession(
-            [
-                self.shell_socket,
-                self.control_socket,
-                self.iopub_socket,
-            ]
-        )
-
-    async def do_debug_request(self, msg):
-        return {}
-
-    def destroy(self):
-        self.stop()
-        self.session.close()
-        for socket in self.test_sockets:
-            socket.close()
-        self.context.destroy()
-
-    @no_type_check
-    async def test_shell_message(self, *args, **kwargs):
-        msg_list = self._prep_msg(*args, **kwargs)
-        await self.process_shell_message(msg_list)
-        receive_stream: MemoryObjectReceiveStream[Any] = self.session._streams[self.shell_socket][
-            "receive"
-        ]
-        return await receive_stream.receive()
-
-    @no_type_check
-    async def test_control_message(self, *args, **kwargs):
-        msg_list = self._prep_msg(*args, **kwargs)
-        await self.process_control_message(msg_list)
-        receive_stream: MemoryObjectReceiveStream[Any] = self.session._streams[self.control_socket][
-            "receive"
-        ]
-        return await receive_stream.receive()
-
-    def _on_send(self, msg, *args, **kwargs):
-        self._reply = msg
-
-    def _prep_msg(self, *args, **kwargs):
-        self._reply = None
-        raw_msg = self.session.msg(*args, **kwargs)
-        msg = self.session.serialize(raw_msg)
-        return msg
-
-    async def _wait_for_msg(self):
-        while not self._reply:
-            await sleep(0.1)
-        _, msg = self.session.feed_identities(self._reply)
-        return self.session.deserialize(msg)
-
-    def _send_interrupt_children(self):
-        # override to prevent deadlock
-        pass
+@pytest.fixture(scope="module")
+def anyio_backend(request):
+    return "asyncio"
 
 
-class MockKernel(KernelMixin, Kernel):  # type:ignore
-    implementation = "test"
-    implementation_version = "1.0"
-    language = "no-op"
-    language_version = "0.1"
-    language_info = {
-        "name": "test",
-        "mimetype": "text/plain",
-        "file_extension": ".txt",
-    }
-    banner = "test kernel"
-
-    def __init__(self, *args, **kwargs):
-        self._initialize()
-        self.shell = MagicMock()
-        self.shell_stop = Event()
-        self.control_stop = Event()
-        super().__init__(*args, **kwargs)
-
-    async def do_execute(
-        self, code, silent, store_history=True, user_expressions=None, allow_stdin=False
-    ):
-        if not silent:
-            stream_content = {"name": "stdout", "text": code}
-            self.send_response(self.iopub_socket, "stream", stream_content)
-
-        return {
-            "status": "ok",
-            # The base class increments the execution count
-            "execution_count": self.execution_count,
-            "payload": [],
-            "user_expressions": {},
-        }
+@pytest.fixture(scope="module")
+def transport():
+    return "ipc" if sys.platform == "linux" else "tcp"
 
 
-class MockIPyKernel(KernelMixin, IPythonKernel):  # type:ignore
-    def __init__(self, *args, **kwargs):
-        self._initialize()
-        self.shell_stop = Event()
-        self.control_stop = Event()
-        super().__init__(*args, **kwargs)
-
-
-@pytest.fixture()
-async def kernel(anyio_backend):
-    async with create_task_group() as tg:
-        kernel = MockKernel()
-        tg.start_soon(kernel.start)
-        try:
-            yield kernel
-        finally:
-            kernel.destroy()
-
-
-@pytest.fixture()
-async def ipkernel(anyio_backend):
-    async with create_task_group() as tg:
-        kernel = MockIPyKernel()
-        tg.start_soon(kernel.start)
-        try:
-            yield kernel
-        finally:
-            kernel.destroy()
-            ZMQInteractiveShell.clear_instance()
-
-
-@pytest.fixture()
-def tracemalloc_resource_warning(recwarn, N=10):
-    """fixture to enable tracemalloc for a single test, and report the
-    location of the leaked resource
-
-    We cannot only enable tracemalloc, as otherwise it is stopped just after the
-    test, the frame cache is cleared by tracemalloc.stop() and thus the warning
-    printing code get None when doing
-    `tracemalloc.get_object_traceback(r.source)`.
-
-    So we need to both filter the warnings to enable ResourceWarning, and loop
-    through it print the stack before we stop tracemalloc and continue.
-
-    """
-    if tracemalloc is None:
-        yield
-        return
-
-    tracemalloc.start(N)
-    with warnings.catch_warnings():
-        warnings.simplefilter("always", category=ResourceWarning)
-        yield None
+@pytest.fixture(scope="module")
+async def kernel(anyio_backend, transport: str, tmp_path_factory):
+    # Set a blank connection_file
+    utils.clear_kernel()
+    connection_file = tmp_path_factory.mktemp("async_kernel") / "temp_connection.json"
+    os.environ["IPYTHONDIR"] = str(tmp_path_factory.mktemp("ipython_config"))
+    kernel = Kernel()
+    kernel.connection_file = str(connection_file.resolve())
+    kernel.transport = transport
     try:
-        for r in recwarn:
-            if r.category is ResourceWarning and r.source is not None:
-                tb = tracemalloc.get_object_traceback(r.source)
-                if tb:
-                    info = f"Leaking resource:{r}\n |" + "\n |".join(tb.format())
-                    # technically an Error and not a failure as we fail in the fixture
-                    # and not the test
-                    pytest.fail(info)
+        async with kernel.start_in_context():
+            yield kernel
     finally:
-        tracemalloc.stop()
+        utils.clear_kernel()
+
+
+@pytest.fixture(scope="module")
+async def client(kernel: Kernel):
+    if kernel.kernel_name is KernelName.trio:
+        pytest.skip("AsyncKernelClient needs asyncio")
+    client = AsyncKernelClient()
+    client.load_connection_info(kernel.get_connection_info())
+    client.start_channels()
+    try:
+        yield client
+    finally:
+        client.stop_channels()
+        await anyio.sleep(0)
+
+
+@pytest.fixture(scope="module", params=KernelName)
+def kernel_name(request):
+    return request.param
+
+
+@pytest.fixture(scope="module")
+async def subprocess_kernels_client(anyio_backend, tmp_path_factory, kernel_name: KernelName):
+    """Starts a kernel in a subprocess and returns an AsyncKernelCient that is connected to it.
+
+    This is primarily provided for testing the debugger making it more convenient
+    connect a debugger to the test.
+    """
+    assert anyio_backend == "asyncio", "Asyncio is required for the client"
+    connection_file = tmp_path_factory.mktemp("async_kernel") / "temp_connection.json"
+    command = make_argv(connection_file=connection_file, kernel_name=kernel_name)
+    process = subprocess.Popen(command)
+    try:
+        client = AsyncKernelClient()
+        while not connection_file.exists() or not connection_file.stat().st_size:
+            await anyio.sleep(0.1)
+        client.load_connection_file(connection_file)
+        client.start_channels()
+        msg_id = client.kernel_info()
+        await utils.get_reply(client, msg_id)
+        try:
+            yield client
+        finally:
+            client.shutdown()
+            client.stop_channels()
+            assert process.wait(10) == 0
+    finally:
+        if process.returncode is None:
+            process.kill()
+
+    assert not connection_file.exists(), "cleanup_connection_file not called by atexit ..."
