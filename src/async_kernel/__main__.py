@@ -21,20 +21,22 @@ from async_kernel.kernelspec import Backend, KernelName, write_kernel_spec
 def main(wait_exit_context=anyio.sleep_forever):
     "Main entry point to launch kernel or add/remove installed kernel specs."
     kernel_dir = pathlib.Path(sys.prefix) / "share/jupyter/kernels"
-    parser = argparse.ArgumentParser(description="Kernel interface to start a kernel or add/remove a kernel spec.")
+    parser = argparse.ArgumentParser(
+        description="Kernel interface to start a kernel or add/remove a kernel spec."
+        + f"The Jupyter Kernel directory is: f'{kernel_dir}'"
+    )
     parser.add_argument(
         "-f",
         "--file",
         dest="connection_file",
-        default="",
-        help="Start a Kernel with a connection file. Use a period `.` to start a Kernel without an existing file.",
+        help="Start a Kernel with a connection file. To start a Kernel without a file use a period `.`.",
     )
     parser.add_argument(
         "-a",
         "--add",
         dest="add",
-        help=f"Add a kernel spec. Default kernels: {list(map(str, KernelName))}.\n"
-        + "Other kernels and options are permitted. See: `write_kernel_spec` for detail.",
+        help=f"Add a kernel spec. Default kernel names are: {list(map(str, KernelName))}.\n"
+        + "To specify a 'trio' backend, include 'trio' in the name. Other options are also permitted. See: `write_kernel_spec` for detail.",
     )
     kernels = [] if not kernel_dir.exists() else [item.name for item in kernel_dir.iterdir() if item.is_dir()]
     parser.add_argument(
@@ -49,8 +51,11 @@ def main(wait_exit_context=anyio.sleep_forever):
         if k.startswith("--"):
             setattr(args, k.removeprefix("--"), v)
     if args.add:
-        write_kernel_spec(kernel_dir, **vars(args))
-        print(f"Added kernel spec {args.add}")
+        args.kernel_name = args.add
+        for name in ["add", "remove"] + (["connection_file"] if args.connection_file is None else []):
+            delattr(args, name)
+        path = write_kernel_spec(path=kernel_dir / args.kernel_name, **vars(args))
+        print(f"Added kernel spec {path!s}")
     elif args.remove:
         for name in args.remove.split(","):
             folder = kernel_dir / str(name)

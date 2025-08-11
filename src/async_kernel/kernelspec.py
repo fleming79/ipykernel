@@ -75,6 +75,7 @@ def write_kernel_spec(
     connection_file="{connection_file}",
     kernel_name: KernelName | str = KernelName.asyncio,
     fullpath=False,
+    display_name="",
     **kwargs,
 ) -> Path:
     """
@@ -89,6 +90,7 @@ def write_kernel_spec(
     assert _is_valid_kernel_name(kernel_name)
     path = Path(path) if path else Path(tempfile.mkdtemp(suffix="_kernels")) / kernel_name
     # stage resources
+    path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(RESOURCES, path, dirs_exist_ok=True)
     spec = KernelSpec()
     spec.argv = make_argv(
@@ -99,7 +101,7 @@ def write_kernel_spec(
         **kwargs,
     )
     spec.name = kernel_name
-    spec.display_name = f"Python ({kernel_name})"
+    spec.display_name = display_name or f"Python ({kernel_name})"
     spec.language = "python"
     spec.interrupt_mode = "message"
     spec.metadata = {"debugger": True}
