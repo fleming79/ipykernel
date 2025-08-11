@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "async-kernel"
 
 dynamic = ["version"]
-authors = [{name = "IPython Development Team", email = "ipython-dev@python.org"}]
+authors = [{name = "", email = "ipython-dev@python.org"}]
 license = {file = "LICENSE"}
 readme = "README.md"
 description = "A python kernel for Jupyter running inside an anyio (asyncio or trio) event loop."

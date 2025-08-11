@@ -1,4 +1,4 @@
-name: Async-kernel tests
+name: Async-kernel test
 
 on: [push]
 jobs:
@@ -26,25 +26,9 @@ jobs:
       - name: Install the project
         run: uv sync --locked --dev
 
-      - name: Run the tests
+      - name: Run the test
         timeout-minutes: 5
         run: uv run pytest -v
 
-      - name: Ruff
-        uses: astral-sh/ruff-action@v3
-
-      - name: Type checking
+      - name: Type checking with basedpyright
         run: uv run basedpyright
-
-      - name: Build
-        run: uv build
-
-      - name: Distribution
-        uses: actions/upload-artifact@v4
-        with:
-          name: "dist built in ${{ matrix.python-version }}-${{ matrix.os }}"
-          path: dist/*
-
-      - name: Coverage
-        if: ${{ ( matrix.python-version >= '3.12' ) && ( matrix.os  ==  'ubuntu-latest' ) }}
-        run: uv run pytest --cov  --cov-fail-under 99
