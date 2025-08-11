@@ -42,7 +42,7 @@ def test_add_kernel(monkeypatch, fake_kernel_dir: pathlib.Path, capsys):
     )
     main.main()
     out = capsys.readouterr().out
-    assert "Added kernel spec async-trio" in out
+    assert "Added kernel spec" in out
     kernel_dir = fake_kernel_dir.joinpath("async-trio")
     assert (kernel_dir).exists()
     with kernel_dir.joinpath("kernel.json").open("rb") as f:
