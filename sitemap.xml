@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/</loc>
+         <lastmod>2025-08-12</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/api/</loc>
+         <lastmod>2025-08-12</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/caller/</loc>
+         <lastmod>2025-08-12</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/contributing/</loc>
+         <lastmod>2025-08-12</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/execute_mode/</loc>
+         <lastmod>2025-08-12</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/license/</loc>
+         <lastmod>2025-08-12</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/usage/commands/</loc>
+         <lastmod>2025-08-12</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/usage/executing_code/</loc>
+         <lastmod>2025-08-12</lastmod>
+    </url>
+</urlset>
