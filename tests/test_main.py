@@ -38,7 +38,7 @@ def test_prints_help_when_no_args(monkeypatch, capsys):
 
 def test_add_kernel(monkeypatch, fake_kernel_dir: pathlib.Path, capsys):
     monkeypatch.setattr(
-        sys, "argv", ["prog", "-a", "async-trio", "--display_name", "my kernel", "--klass", "my.custom.class"]
+        sys, "argv", ["prog", "-a", "async-trio", "--display_name", "my kernel", "--kernel_factory", "my.custom.class"]
     )
     main.main()
     out = capsys.readouterr().out
@@ -54,7 +54,7 @@ def test_add_kernel(monkeypatch, fake_kernel_dir: pathlib.Path, capsys):
             "async_kernel",
             "-f",
             "{connection_file}",
-            "--klass",
+            "--kernel_factory",
             "my.custom.class",
             "--kernel_name",
             "async-trio",

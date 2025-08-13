@@ -2,6 +2,7 @@ MANIFEST
 build
 cover
 dist
+site
 _build
 docs/man/*.gz
 docs/source/api/generated

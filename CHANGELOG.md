@@ -1,4 +1,4 @@
-# Changes in IPython kernel
+# Changes in Async kernel
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
@@ -6,7 +6,7 @@
 
 ([Full Changelog](<>))
 
-Kernel - Derived from an discontinued version branching from Ipython version 6.29.4.
+Kernel - Derived from an discontinued version branching from IPyKernel version 6.29.4.
 
 ### Enhancements made
 
@@ -20,7 +20,7 @@ Kernel - Derived from an discontinued version branching from Ipython version 6.2
 
 ### Contributors to this release
 
-<!-- ([GitHub contributors page for this release](https://github.com/ipython/ipykernel/graphs/contributors?from=2024-10-22&to=2025-03-07&type=c)) -->
+<!-- ([GitHub contributors page for this release](https://github.com/ipython/IPyKernel/graphs/contributors?from=2024-10-22&to=2025-03-07&type=c)) -->
 
 <!-- <END NEW CHANGELOG ENTRY> -->
 
@@ -28,6 +28,6 @@ Kernel - Derived from an discontinued version branching from Ipython version 6.2
 
 ([Full Changelog](<>))
 
-See Ipython [changelog](https://ipykernel.readthedocs.io/en/stable/changelog.html#id2) for all the hard work done to get here.
+See IPyKernel [changelog](https://ipykernel.readthedocs.io/en/stable/changelog.html#id2) for all the hard work done to get here.
 
-Forked from IPykernel commit [#8322a7684b004ee95f07b2f86f61e28146a5996d](https://github.com/ipython/ipykernel/commit/8322a7684b004ee95f07b2f86f61e28146a5996d)
+Forked from IPyKernel commit [#8322a7684b004ee95f07b2f86f61e28146a5996d](https://github.com/ipython/ipykernel/commit/8322a7684b004ee95f07b2f86f61e28146a5996d)

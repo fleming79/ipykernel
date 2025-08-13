@@ -1,28 +1,32 @@
-# Copyright (c) IPython Development Team.
-# Distributed under the terms of the Modified BSD License.
-
 """The cli entry point for async_kernel."""
 
+from __future__ import annotations
+
+# Copyright (c) IPython Development Team.
+# Distributed under the terms of the Modified BSD License.
 import argparse
 import contextlib
-import pathlib
 import shutil
 import sys
 import traceback
 from itertools import pairwise
+from typing import TYPE_CHECKING
 
 import anyio
 import traitlets
 
 from async_kernel.kernel import Kernel
-from async_kernel.kernelspec import Backend, KernelName, write_kernel_spec
+from async_kernel.kernelspec import Backend, KernelName, get_kernel_dir, write_kernel_spec
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
-def main(wait_exit_context=anyio.sleep_forever):
+def main(wait_exit_context=anyio.sleep_forever) -> None:
     "Main entry point to launch kernel or add/remove installed kernel specs."
-    kernel_dir = pathlib.Path(sys.prefix) / "share/jupyter/kernels"
+    kernel_dir: Path = get_kernel_dir()
     parser = argparse.ArgumentParser(
-        description="Kernel interface to start a kernel or add/remove a kernel spec."
+        description="Kernel interface to start a kernel or add/remove a kernel spec. "
         + f"The Jupyter Kernel directory is: f'{kernel_dir}'"
     )
     parser.add_argument(
@@ -51,10 +55,11 @@ def main(wait_exit_context=anyio.sleep_forever):
         if k.startswith("--"):
             setattr(args, k.removeprefix("--"), v)
     if args.add:
-        args.kernel_name = args.add
+        if not hasattr(args, "kernel_name"):
+            args.kernel_name = args.add
         for name in ["add", "remove"] + (["connection_file"] if args.connection_file is None else []):
             delattr(args, name)
-        path = write_kernel_spec(path=kernel_dir / args.kernel_name, **vars(args))
+        path = write_kernel_spec(**vars(args))
         print(f"Added kernel spec {path!s}")
     elif args.remove:
         for name in args.remove.split(","):
@@ -68,10 +73,10 @@ def main(wait_exit_context=anyio.sleep_forever):
     elif not args.connection_file:
         parser.print_help()
     else:
-        klass = getattr(args, "klass", None)
+        kernel_factory = getattr(args, "kernel_factory", None)
         kernel_name: str = getattr(args, "kernel_name", None) or KernelName.asyncio
-        cls: type[Kernel] = traitlets.import_item(klass) if klass else Kernel
-        kernel = cls(kernel_name=kernel_name)
+        factory: type[Kernel] = traitlets.import_item(kernel_factory) if kernel_factory else Kernel
+        kernel = factory(kernel_name=kernel_name)
         for k, v in vars(args).items():
             if hasattr(kernel, k):
                 if k == "connection_file" and v == ".":

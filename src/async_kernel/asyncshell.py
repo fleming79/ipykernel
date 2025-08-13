@@ -7,7 +7,7 @@ import builtins
 import json
 import pathlib
 import sys
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 import IPython.core.release
 from IPython.core.displayhook import DisplayHook
@@ -269,11 +269,13 @@ class KernelMagics(Magics):
 
     @line_magic
     def callers(self, _):
-        print("Active")
+        print("Active", "Protected", "\t", "Name")
+        print("─" * 70)
         for caller in Caller.all_callers(active_only=False):
             symbol = "   ✓" if caller.active else "   ✗"
-            current_thread = "← calling thread" if caller is Caller() else ""
-            print(symbol, caller, current_thread, sep="\t")
+            current_thread: Literal["← current thread", ""] = "← current thread" if caller is Caller() else ""
+            protected = "   🔐" if caller.protected else ""
+            print(symbol, protected, "", caller.thread.name, current_thread, sep="\t")
 
 
 InteractiveShellABC.register(AsyncInteractiveShell)

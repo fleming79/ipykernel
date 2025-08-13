@@ -33,23 +33,18 @@ dependencies = [
 ]
 
 [project.urls]
-# Homepage = ""
-# Documentation = ""
-# Source = ""
-# Tracker = ""
+Homepage = "https://fleming79.github.io/async-kernel"
+Documentation = "https://fleming79.github.io/async-kernel"
+Source = "https://github.com/fleming79/async-kernel"
+Tracker = "https://github.com/fleming79/async-kernel/issues"
 
 [project.scripts]
 async-kernel = "async_kernel.__main__:main"
 
 [dependency-groups]
-docs = [
-  "sphinx",
-  "myst_parser",
-  "pydata_sphinx_theme",
-  "sphinxcontrib_github_alt",
-  "sphinxcontrib-spelling",
-  "sphinx-autodoc-typehints",
-  "intersphinx_registry",
+docs = ["mkdocs-material",
+    "mkdocstrings[python]",
+    "mkdocs-jupyter"
 ]
 dev = [
     "debugpy",
@@ -163,7 +158,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"examples/*" = ["PLC0415"]
+"*.ipynb" = ["PLC0415"]
 
 [tool.ruff.format]
 docstring-code-format = true

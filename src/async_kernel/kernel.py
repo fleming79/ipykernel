@@ -8,6 +8,7 @@ import atexit
 import builtins
 import contextlib
 import contextvars
+import errno
 import getpass
 import logging
 import os
@@ -33,7 +34,7 @@ from jupyter_client.connect import ConnectionFileMixin
 from jupyter_client.session import Session
 from jupyter_core.paths import jupyter_runtime_dir
 from traitlets import CaselessStrEnum, CBool, Container, Dict, Instance, Int, Set, Tuple, UseEnum, default
-from zmq import Context, Flag, PollEvent, Socket, SocketOption, SocketType
+from zmq import Context, Flag, PollEvent, Socket, SocketOption, SocketType, ZMQError
 
 from async_kernel import _version, utils
 from async_kernel.asyncshell import AsyncInteractiveShell
@@ -53,6 +54,80 @@ if TYPE_CHECKING:
 
 
 __all__ = ["Kernel", "KernelInterruptError"]
+
+
+def error_to_dict(error: BaseException):
+    """Convert the error to a dict.
+
+    ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#request-reply
+    """
+    return {
+        "status": "error",
+        "ename": type(error).__name__,
+        "evalue": str(error),
+        "traceback": traceback.format_exception(error),
+    }
+
+
+def bind_socket(
+    socket: Socket[SocketType],
+    transport: Literal["tcp", "ipc"],
+    ip: str,
+    port: int = 0,
+    max_attempts: int | NoValue = NoValue,  # pyright: ignore[reportInvalidTypeForm]
+) -> int:
+    """Bind the socket to a port using the settings.
+
+    max_attempts: The maximum number of attempts to bind the socket. If un-specified,
+    defaults to 100 if port missing, else 2 attempts.
+    """
+
+    def _try_bind_socket(port: int):
+        if transport == "tcp":
+            if not port:
+                port = socket.bind_to_random_port(f"tcp://{ip}")
+            else:
+                socket.bind(f"tcp://{ip}:{port}")
+        elif transport == "ipc":
+            if not port:
+                port = 1
+                while True:
+                    port = port + 1
+                    path = f"{ip}-{port}"
+                    if not Path(path).exists():
+                        break
+            else:
+                path = f"{ip}-{port}"
+            socket.bind(f"ipc://{path}")
+        return port
+
+    if transport == "ipc":
+        ip = Path(ip).as_posix()
+    if socket.TYPE == SocketType.ROUTER:
+        # ref: https://github.com/ipython/ipykernel/issues/270
+        socket.router_handover = 1
+    try:
+        win_in_use = errno.WSAEADDRINUSE  # type: ignore[attr-defined]
+    except AttributeError:
+        win_in_use = None
+    # Try up to 100 times to bind a port when in conflict to avoid
+    # infinite attempts in bad setups
+    if max_attempts is NoValue:
+        max_attempts = 2 if port else 100
+    e = None
+    for _ in range(max_attempts):
+        try:
+            return _try_bind_socket(port)
+        except ZMQError as e_:
+            # Raise if we have any error not related to socket binding
+            # 135: Protocol not supported
+            if e_.errno in {errno.EADDRINUSE, win_in_use, 135}:
+                e = e_
+                break
+            if port:
+                time.sleep(1)
+    msg = f"Failed to bind {socket} for {transport=}" + (f" to {port=}!" if port else "!")
+    raise RuntimeError(msg) from e
 
 
 class KernelInterruptError(InterruptedError):
@@ -252,7 +327,9 @@ class Kernel(ConnectionFileMixin):
                     pathlib.Path(self.connection_file).parent.mkdir(parents=True, exist_ok=True)
                     self.write_connection_file()
                     atexit.register(self.cleanup_connection_file)
-                    print(f"""Kernel started. To connect a client use: --existing "{self.connection_file}" """)
+                    print(
+                        f"""Kernel started with backend: {self.anyio_backend}. To connect a client use: --existing "{self.connection_file}" """
+                    )
                     await tg.start(self._start_iopub)
                     yield self
                 finally:
@@ -428,7 +505,7 @@ class Kernel(ConnectionFileMixin):
 
     @staticmethod
     def get_execute_mode(job: Job[ExecuteContent]) -> ExecuteMode:
-        """Get job["msg"]["content"]["execute_mode"] adding it if it has't been set."""
+        """Extract `ExecuteMode` from the job."""
         if m := job["msg"]["content"].get("execute_mode"):
             # Respect an existing mode
             return ExecuteMode(m)
@@ -452,7 +529,7 @@ class Kernel(ConnectionFileMixin):
             self._publish_status("busy", job)
             await handler(job)
         except Exception as e:
-            self._send_reply(job, utils.error_to_dict(e))
+            self._send_reply(job, content=error_to_dict(e))
             self.log.exception("Exception in message handler:", exc_info=e)
         finally:
             self._publish_status("idle", job)
@@ -469,7 +546,7 @@ class Kernel(ConnectionFileMixin):
         if socket_id is not SocketID.iopub:
             # ref: https://github.com/ipython/ipykernel/issues/270
             socket.router_handover = 1
-        port = utils.bind_socket(socket=socket, transport=self.transport, ip=self.ip, port=getattr(self, port_name))  # pyright: ignore[reportArgumentType]
+        port = bind_socket(socket=socket, transport=self.transport, ip=self.ip, port=getattr(self, port_name))  # pyright: ignore[reportArgumentType]
         setattr(self, port_name, port)
         self.log.debug("%s socket on port: %i", socket_id, port)
         self._sockets[socket_id] = socket
@@ -596,7 +673,7 @@ class Kernel(ConnectionFileMixin):
         if (received_time < self._stop_on_error_time) and not job["msg"]["content"]["silent"]:
             self.log.info("Aborting execute_request: %s", job)
             self._publish_status("busy", job)
-            content = utils.error_to_dict(RuntimeError("Aborting due to prior exception"))
+            content: dict[str, str | list[str]] = error_to_dict(RuntimeError("Aborting due to prior exception"))
             content["execution_count"] = self.execution_count  # pyright: ignore[reportArgumentType]
             self._send_reply(job, content)
             self._publish_status("idle", job)
@@ -638,7 +715,7 @@ class Kernel(ConnectionFileMixin):
             "user_expressions": self.shell.user_expressions(content.get("user_expressions", {})),
         }
         if err:
-            reply_content |= utils.error_to_dict(error=err)
+            reply_content |= error_to_dict(error=err)
             if not silent and content.get("stop_on_error"):
                 self._stop_on_error_time = time.monotonic()
                 self.log.info("An error occurred in a non-silent execution request")

@@ -7,7 +7,7 @@ from typing import Literal
 import pytest
 import zmq
 
-from async_kernel.utils import bind_socket
+from async_kernel.kernel import bind_socket
 
 
 @pytest.fixture(scope="module", params=["tcp", "ipc"])
@@ -24,9 +24,9 @@ def test_bind_socket(transport: Literal["tcp", "ipc"], tmp_path):
     ip = tmp_path / "mypath" if transport == "ipc" else "0.0.0.0"
     with ctx:
         with ctx.socket(zmq.SocketType.ROUTER) as socket:
-            port = bind_socket(socket, transport, ip)
+            port = bind_socket(socket, transport, ip)  # pyright: ignore[reportArgumentType]
         with ctx.socket(zmq.SocketType.ROUTER) as socket:
-            assert bind_socket(socket, transport, ip, port) == port
+            assert bind_socket(socket, transport, ip, port) == port  # pyright: ignore[reportArgumentType]
             if transport == "tcp":
                 with pytest.raises(RuntimeError):
-                    bind_socket(socket, transport, ip, "invalid port")  # type: ignore[call-arg]
+                    bind_socket(socket, transport, ip, "invalid port")  # pyright: ignore[reportArgumentType]
