@@ -14,7 +14,7 @@
       
       
       
-        <link rel="next" href="usage/executing_code/">
+        <link rel="next" href="simple_example/">
       
       
       <link rel="icon" href="assets/images/favicon.png">
@@ -32,6 +32,12 @@
         <link rel="stylesheet" href="assets/stylesheets/palette.06af60db.min.css">
       
       
+
+  
+  
+  
+  
+  <style>:root{--md-annotation-icon:url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2024%2024%22%3E%3Cpath%20d%3D%22M11%209h2V7h-2m1%2013c-4.41%200-8-3.59-8-8s3.59-8%208-8%208%203.59%208%208-3.59%208-8%208m0-18A10%2010%200%200%200%202%2012a10%2010%200%200%200%2010%2010%2010%2010%200%200%200%2010-10A10%2010%200%200%200%2012%202m-1%2015h2v-6h-2z%22/%3E%3C/svg%3E');}</style>
 
 
     
@@ -87,12 +93,28 @@
       
     </div>
     
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+          <aside class="md-banner md-banner--warning">
+            <div class="md-banner__inner md-grid md-typeset">
+               You're not
+viewing the latest version.
+<a href="../.">
+  <strong>Click here to go to latest.</strong>
+</a>
+
+            </div>
+            <script>var el=document.querySelector("[data-md-component=outdated]"),base=new URL("."),outdated=__md_get("__outdated",sessionStorage,base);!0===outdated&&el&&(el.hidden=!1)</script>
+          </aside>
+        
+      </div>
+    
     
       
 
   
 
-<header class="md-header md-header--shadow" data-md-component="header">
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="." title="async-kernel" class="md-header__button md-logo" aria-label="async-kernel" data-md-component="logo">
       
@@ -114,7 +136,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Async kernel
+              Home
             
           </span>
         </div>
@@ -219,13 +241,102 @@
     
   </nav>
   
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="simple_example/" class="md-tabs__link">
+          
+  
+  
+  Usage
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="contributing/" class="md-tabs__link">
+          
+  
+  
+  About
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
 </header>
     
     <div class="md-container" data-md-component="container">
       
       
-        
-          
         
       
       <main class="md-main" data-md-component="main">
@@ -239,10 +350,12 @@
                     
 
 
+  
+
 
   
 
-<nav class="md-nav md-nav--primary md-nav--integrated" aria-label="Navigation" data-md-level="0">
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
     <a href="." title="async-kernel" class="md-nav__button md-logo" aria-label="async-kernel" data-md-component="logo">
       
@@ -288,7 +401,7 @@
   
   
   <span class="md-ellipsis">
-    Async kernel
+    Home
     
   </span>
   
@@ -301,7 +414,7 @@
   
   
   <span class="md-ellipsis">
-    Async kernel
+    Home
     
   </span>
   
@@ -339,14 +452,20 @@
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#origin" class="md-nav__link">
+    <nav class="md-nav" aria-label="Installation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#trio" class="md-nav__link">
     <span class="md-ellipsis">
-      Origin
+      Trio
     </span>
   </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -364,41 +483,22 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="installation.md" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Installation
     
-  </span>
-  
-
-      </a>
-    </li>
-  
-
+    
+    
     
       
       
-  
-  
-  
-  
-    
-    
-    
     
     
     <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
             
   
   
@@ -411,8 +511,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Usage
           </label>
@@ -425,12 +525,12 @@
   
   
     <li class="md-nav__item">
-      <a href="usage/commands.md ``" class="md-nav__link">
+      <a href="simple_example/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Commands
+    Simple example
     
   </span>
   
@@ -448,12 +548,12 @@
   
   
     <li class="md-nav__item">
-      <a href="usage/executing_code/" class="md-nav__link">
+      <a href="execute_mode/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Executing code
+    Execute mode
     
   </span>
   
@@ -463,51 +563,6 @@
   
 
               
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
-        
-          
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    Notebooks
-    
-  </span>
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4">
-            <span class="md-nav__icon md-icon"></span>
-            Notebooks
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
             
               
                 
@@ -539,12 +594,12 @@
   
   
     <li class="md-nav__item">
-      <a href="execute_mode/" class="md-nav__link">
+      <a href="command_line/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Execute mode
+    Command line
     
   </span>
   
@@ -590,6 +645,47 @@
   
   
   
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    About
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            About
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
     <li class="md-nav__item">
       <a href="contributing/" class="md-nav__link">
         
@@ -605,6 +701,60 @@
     </li>
   
 
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Changelog
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="license/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    License
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
     
   </ul>
 </nav>
@@ -617,50 +767,75 @@
           
             <div class="md-content" data-md-component="content">
               <article class="md-content__inner md-typeset">
-                
-
-
-
+                  
                   
 
 
   
+    <a href="https://github.com/fleming79/async-kernel/edit/master/docs/index.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/fleming79/async-kernel/raw/master/docs/index.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
   
 
 
 <h1 id="async-kernel">Async kernel<a class="headerlink" href="#async-kernel" title="Permanent link">&para;</a></h1>
-<p>Async kernel is a Python <a href="https://docs.jupyter.org/en/latest/projects/kernels.html#kernels-programming-languages">Jupyter kernel</a> that runs in an <a href="https://pypi.org/project/anyio/">anyio</a> event loop. </p>
+<p><a href="https://pypi.python.org/pypi/async-kernel"><img alt="image" src="https://img.shields.io/pypi/pyversions/async-kernel.svg" /></a>
+<a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" /></a>
+<a href="https://github.com/astral-sh/uv"><img alt="uv" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json" /></a>
+<a href="https://docs.basedpyright.com"><img alt="basedpyright - checked" src="https://img.shields.io/badge/basedpyright-checked-42b983" /></a>
+<a href="https://squidfunk.github.io/mkdocs-material/"><img alt="Built with Material for MkDocs" src="https://img.shields.io/badge/Material_for_MkDocs-526CFE?style=plastic&amp;logo=MaterialForMkDocs&amp;logoColor=white" /></a></p>
+<p>Async kernel is a Python <a href="https://docs.jupyter.org/en/latest/projects/kernels.html#kernels-programming-languages">Jupyter kernel</a> that runs in an <a href="https://pypi.org/project/anyio/">anyio</a> event loop.</p>
+<p>Async kernel is designed to run <a href="https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute">execute requests</a> outside the shell message loop to prevent dead locks when waiting for a response via the shell message loop.</p>
 <h2 id="highlights">Highlights<a class="headerlink" href="#highlights" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Execute requests<ul>
-<li>do not block shell messaging</li>
-<li>are queued by default</li>
-<li>can run concurrently (insert <code>##task</code> or <code>##thread</code> as the first line in a code cell)</li>
-<li>use <a href="https://docs.python.org/3/library/contextvars.html#context-variables">Context Variables</a> to associate input and output with the originating cell  </li>
+<li>Comms is not blocked during cell execution<sup id="fnref:non-blocking-execution"><a class="footnote-ref" href="#fn:non-blocking-execution">1</a></sup></li>
+<li>Concurrent cell execution in tasks or cells <sup id="fnref:run-concurrent"><a class="footnote-ref" href="#fn:run-concurrent">2</a></sup></li>
+<li><a href="https://jupyterlab.readthedocs.io/en/latest/user/debugger.html#debugger">Debugger client</a></li>
+<li>Configurable backend - "asyncio" (default) or "trio backend" <sup id="fnref2:config-backend"><a class="footnote-ref" href="#fn:config-backend">3</a></sup></li>
+<li><a href="https://pypi.org/project/ipython/">IPython</a> shell for magic, code completions, etc</li>
+<li>No tornado - instead using anyio's <a href="https://anyio.readthedocs.io/en/stable/api.html#anyio.wait_readable"><code>wait_readable</code></a> to wait for incoming messages on zmq sockets</li>
 </ul>
-</li>
-<li>Launching custom kernels is supported</li>
-<li><a href="https://docs.python.org/3/library/asyncio.html#module-asyncio">asyncio</a> backed by default, <a href="https://github.com/python-trio/trio">trio</a> backend configurable</li>
-<li><a href="https://anyio.readthedocs.io/en/stable/api.html#anyio.wait_readable"><code>wait_readable</code></a> enables asychronous polling of zmq sockets (tornado-less)</li>
-<li>Kernel debugging supported</li>
-<li>Kernel requests run in a customised IPython shell supporting:<ul>
-<li><a href="https://pypi.org/project/ipython/">IPython</a> </li>
-<li>magic</li>
-<li>code completion</li>
-<li>widgets</li>
-<li>matplotlib</li>
-</ul>
-</li>
-</ul>
+<p><img alt="Simple demo" src="https://github.com/user-attachments/assets/9a4935ba-6af8-4c9f-bc67-b256be368811" /></p>
 <h2 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">&para;</a></h2>
-<pre><code class="language-shell">pip install async-kernel
-</code></pre>
-<p>To add a kernel spec for <code>trio</code>. </p>
-<pre><code class="language-shell">pip install trio
-async-kernel add async-trio
-</code></pre>
-<h2 id="origin">Origin<a class="headerlink" href="#origin" title="Permanent link">&para;</a></h2>
-<p>Async-kernel started as fork of <a href="https://pypi.org/project/ipykernel/">IPyKernel</a> commit <a href="https://github.com/ipython/ipykernel/commit/8322a7684b004ee95f07b2f86f61e28146a5996d">#8322a7684b004ee95f07b2f86f61e28146a5996d</a>.</p>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>async-kernel
+</code></pre></div>
+<h3 id="trio">Trio<a class="headerlink" href="#trio" title="Permanent link">&para;</a></h3>
+<p>To add a kernel spec for <code>trio</code><sup id="fnref:config-backend"><a class="footnote-ref" href="#fn:config-backend">3</a></sup>.</p>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>trio
+async-kernel<span class="w"> </span>add<span class="w"> </span>async-trio
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>async-kernel<span class="w"> </span>-a<span class="w"> </span>async-trio
+</code></pre></div>
+<div class="footnote">
+<hr />
+<ol>
+<li id="fn:non-blocking-execution">
+<p>Shell messaging runs in a task separate to execute requests in the main thread. This means shell messages (including comms) can pass freely whilst an execute request is busy awaiting a result.&#160;<a class="footnote-backref" href="#fnref:non-blocking-execution" title="Jump back to footnote 1 in the text">&#8617;</a></p>
+</li>
+<li id="fn:run-concurrent">
+<p>Code can also be scheduled for concurrent execution by adding <code>##task</code> or <code>##thread</code> at the top of the cell.</p>
+<p>Works with concurrent cell execution</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> Jupyterlab</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> VS code - runs one cell at a time</li>
+</ul>
+<p><a class="footnote-backref" href="#fnref:run-concurrent" title="Jump back to footnote 2 in the text">&#8617;</a></p>
+</li>
+<li id="fn:config-backend">
+<p>The default backend is 'asyncio'. To add a 'trio' backend, define a KernelSpec with a kernel name that includes trio in it.&#160;<a class="footnote-backref" href="#fnref:config-backend" title="Jump back to footnote 3 in the text">&#8617;</a><a class="footnote-backref" href="#fnref2:config-backend" title="Jump back to footnote 3 in the text">&#8617;</a></p>
+</li>
+</ol>
+</div>
 
 
 
@@ -673,8 +848,7 @@ async-kernel add async-trio
 
 
 
-                
-
+                 
               </article>
             </div>
           
@@ -691,6 +865,30 @@ async-kernel add async-trio
       </main>
       
         <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+        
+          
+          <a href="simple_example/" class="md-footer__link md-footer__link--next" aria-label="Next: Simple example">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Simple example
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
   
   <div class="md-footer-meta md-typeset">
     <div class="md-footer-meta__inner md-grid">
@@ -718,12 +916,74 @@ async-kernel add async-trio
     </div>
     
     
+      <div class="md-consent" data-md-component="consent" id="__consent" hidden>
+        <div class="md-consent__overlay"></div>
+        <aside class="md-consent__inner">
+          <form class="md-consent__form md-grid md-typeset" name="consent">
+            
+
+
+  
+
+
+<h4>Cookie consent</h4>
+<p>We use cookies to recognize your repeated visits and preferences, as well as to measure the effectiveness of our documentation and whether users find what they're searching for. With your consent, you're helping us to make our documentation better.</p>
+<input class="md-toggle" type="checkbox" id="__settings" >
+<div class="md-consent__settings">
+  <ul class="task-list">
+    
     
       
-      <script id="__config" type="application/json">{"base": ".", "features": ["toc.follow", "toc.integrate", "navigation.top", "search.suggest"], "search": "assets/javascripts/workers/search.d50fe291.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      
+        
+  
+  
+    
+    
+  
+  <li class="task-list-item">
+    <label class="task-list-control">
+      <input type="checkbox" name="github" checked>
+      <span class="task-list-indicator"></span>
+      GitHub
+    </label>
+  </li>
+
+      
+    
+    
+  </ul>
+</div>
+<div class="md-consent__controls">
+  
+    
+      <button class="md-button md-button--primary">Accept</button>
+    
+    
+    
+  
+    
+    
+    
+      <label class="md-button" for="__settings">Manage settings</label>
+    
+  
+</div>
+          </form>
+        </aside>
+      </div>
+      <script>var consent=__md_get("__consent");if(consent)for(var input of document.forms.consent.elements)input.name&&(input.checked=consent[input.name]||!1);else"file:"!==location.protocol&&setTimeout((function(){document.querySelector("[data-md-component=consent]").hidden=!1}),250);var form=document.forms.consent;for(var action of["submit","reset"])form.addEventListener(action,(function(e){if(e.preventDefault(),"reset"===e.type)for(var n of document.forms.consent.elements)n.name&&(n.checked=!1);__md_set("__consent",Object.fromEntries(Array.from(new FormData(form).keys()).map((function(e){return[e,!0]})))),location.hash="",location.reload()}))</script>
+    
+    
+      
+      <script id="__config" type="application/json">{"base": ".", "features": ["navigation.tabs", "navigation.tabs.sticky", "content.code.copy", "content.action.edit", "content.action.view", "toc.follow", "toc.integrate", "navigation.top", "header.autohide", "navigation.footer", "search.suggest", "search.highlight", "navigation.instant"], "search": "assets/javascripts/workers/search.d50fe291.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
     
     
       <script src="assets/javascripts/bundle.50899def.min.js"></script>
+      
+        <script src="js/open_in_new_tab.js"></script>
       
     
   </body>
