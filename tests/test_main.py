@@ -1,5 +1,6 @@
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
+
 from __future__ import annotations
 
 import json
@@ -103,6 +104,7 @@ def test_start_kernel_success(monkeypatch, capsys):
     assert started
     out = capsys.readouterr().out
     assert "Starting kernel" in out
+    assert "Kernel stopped" in out
     utils.clear_kernel()
 
 

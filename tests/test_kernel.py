@@ -9,7 +9,7 @@ import logging
 import pathlib
 import threading
 import time
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import anyio
 import pytest
@@ -18,8 +18,11 @@ import zmq
 import async_kernel.utils
 from async_kernel.caller import Caller
 from async_kernel.comm import Comm
-from async_kernel.typing import EXECUTE_MODE_PREFIX, ExecuteContent, ExecuteMode, Job, SocketID
+from async_kernel.typing import EXECUTE_MODE_PREFIX, ExecuteContent, ExecuteMode, Job, SocketID, Tags
 from tests import utils
+
+if TYPE_CHECKING:
+    from async_kernel.kernel import Kernel
 
 
 @pytest.mark.parametrize("mode", ["direct", "proxy"])
@@ -72,6 +75,28 @@ async def test_simple_print(kernel, client, quiet: bool):
     finally:
         kernel.quiet = True
         await utils.clear_iopub(client)
+
+
+@pytest.mark.parametrize("mode", ["kernel_timeout", "metadata", "metadata-do-not-publish-error"])
+async def test_execute_kernel_timeout(client, kernel: Kernel, mode: str):
+    kernel.cell_execute_timeout = 0.1 if "kernel" in mode else None
+    last_stop_time = kernel._stop_on_error_time  # pyright: ignore[reportPrivateUsage]
+    metadata: dict[str, float | list] = {"timeout": 0.1}
+    if "do-not-publish-error" in mode:
+        metadata["tags"] = ["do-not-publish-error"]
+    try:
+        code = "\n".join(["import anyio", "await anyio.sleep_forever()"])
+        msg_id, content = await utils.execute(client, code=code, metadata=metadata, clear_pub=False)
+        assert last_stop_time == kernel._stop_on_error_time, "Should not cause cancellation"  # pyright: ignore[reportPrivateUsage]
+        assert content["status"] == "ok"
+        await utils.check_pub_message(client, msg_id, execution_state="busy")
+        await utils.check_pub_message(client, msg_id, msg_type="execute_input")
+        if "do-not-publish-error" not in mode:
+            expected = {"traceback": [], "ename": "TimeoutError", "evalue": "Cell execute timeout"}
+            await utils.check_pub_message(client, msg_id, msg_type="error", **expected)
+        await utils.check_pub_message(client, msg_id, execution_state="idle")
+    finally:
+        kernel.cell_execute_timeout = None
 
 
 async def test_bad_message(client):
@@ -195,6 +220,13 @@ async def test_execute_request_success(client):
     await utils.clear_iopub(client)
 
 
+async def test_execute_request_error_tag_ignore_error(client):
+    metadata = {"tags": [Tags.suppress_error]}
+    _, content = await utils.execute(client, "ignore error", metadata=metadata)
+    assert content["status"] == "ok"
+    await utils.clear_iopub(client)
+
+
 async def test_execute_request_error(client):
     reply = await utils.send_shell_message(client, "execute_request", {"code": "some invalid code", "silent": False})
     assert reply["header"]["msg_type"] == "execute_reply"
@@ -302,7 +334,7 @@ async def test_interrupt_request_blocking_exec_request(subprocess_kernels_client
     reply = await utils.send_control_message(client, "interrupt_request")
     reply = await utils.get_reply(client, msg_id)
     assert reply["content"]["status"] == "error"
-    assert reply["content"]["ename"] == "KernelInterruptError"
+    assert reply["content"]["ename"] == "FutureCancelledError"
 
 
 async def test_interrupt_request_blocking_task(subprocess_kernels_client):

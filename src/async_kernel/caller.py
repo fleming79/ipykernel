@@ -31,10 +31,10 @@ if TYPE_CHECKING:
 
     from async_kernel.typing import P
 
-__all__ = ["Caller", "CancelledError", "Future"]
+__all__ = ["Caller", "Future", "FutureCancelledError"]
 
 
-class CancelledError(anyio.ClosedResourceError):
+class FutureCancelledError(anyio.ClosedResourceError):
     "Used to indicate a Future is cancelled."
 
 
@@ -289,7 +289,7 @@ class Caller:
             self.active = False
             for job in self._jobs:
                 if not callable(job):
-                    job[1][0].set_exception(CancelledError())
+                    job[1][0].set_exception(FutureCancelledError())
             socket.close()
             self.iopub_sockets.pop(thread, None)
             self.taskgroup.cancel_scope.cancel()
@@ -310,7 +310,7 @@ class Caller:
                     if (delay_ := delay - time.monotonic() + starttime) > 0:
                         await anyio.sleep(float(delay_))
                     result = func(*args, **kwargs) if callable(func) else func  # pyright: ignore[reportAssignmentType]
-                    while inspect.isawaitable(result):
+                    if inspect.isawaitable(result):
                         result: T = await result
                     if fut.cancelled() and not scope.cancel_called:
                         scope.cancel()
@@ -323,7 +323,7 @@ class Caller:
                     self._outstanding -= 1  # # update first for _to_thread_on_done
                     if not fut.done():
                         if isinstance(e, self._cancelled_exception_class):
-                            e = CancelledError()
+                            e = FutureCancelledError()
                         else:
                             self.log.exception("Exception occurred while running %s", func, exc_info=e)
                         fut.set_exception(e)
@@ -410,19 +410,18 @@ class Caller:
         return self._protected
 
     @classmethod
-    def stop_all(cls, **kwgs) -> None:
-        "Stop all instances."
-        force = kwgs.get("_stop_protected", False)
+    def stop_all(cls, *, _stop_protected=False) -> None:
+        "A classmethod to stop all un-protected instances."
         for caller in tuple(reversed(cls._instances.values())):
-            caller.stop(force=force)
+            caller.stop(force=_stop_protected)
 
     @classmethod
     def get_instance(cls, name: str | None = "MainThread", *, create: bool = False) -> Self:
-        """Gets an instance of the Caller by name.
+        """A classmethod that gets an instance by name, possibly starting a new instance.
 
         Args:
-            name: Name of the caller instance thread.
-            create: If the Caller instance does not exist a new thread is created.
+            name: The name to identify the caller.
+            create: Create a new instance if one with the corresponding name does not already exist.
         """
         for thread in cls._instances:
             if thread.name == name:
@@ -434,25 +433,33 @@ class Caller:
 
     @classmethod
     def to_thread(cls, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
-        """Call func in a separate thread.
-
-        A pool of 'workers' is are used to provide an event loop
-        """
+        """A classmethod to call func in a separate thread see also [to_thread_by_name][async_kernel.Caller.to_thread_by_name]."""
         return cls.to_thread_by_name(None, func, *args, **kwargs)
 
     @classmethod
     def to_thread_by_name(
         cls, name: str | None, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs
     ) -> Future[T]:
-        """Call the function in the Caller's thread.
-
-        If a caller does not exist for `name` a new `Caller` is started. The one caveat being 'MainThread'.
+        """A classmethod to call func in the thread specified by name.
 
         Args:
-            name: name of the caller's thread. passing an empty string will provide a caller from the pool.
-            func: The function (awaitables permitted, though discouraged).
+            name: The name of the `Caller`. A new `Caller` is created if an instance corresponding to name  [^notes].
+
+                [^notes]:  'MainThread' is special name that applies to the main thread and
+                    will raise a runtime error if a Caller does not exist for the main thread.
+
+            func: The function to call. If it returns an awaitable, the awaitable will be awaited.
+                Passing a coroutine as `func` discourage, but will be awaited.
+
             *args: Arguments to use with func.
             **kwargs: Keyword arguments to use with func.
+
+        Returns:
+            A future that can be awaited for the  result of func.
+
+
+
+
         """
         caller = (
             cls._to_thread_pool.popleft()
@@ -576,6 +583,6 @@ class Caller:
                 fut.cancel()
 
     @classmethod
-    def all_callers(cls, active_only=True):
+    def all_callers(cls, active_only=True) -> list[Caller]:
         "Get a list of the callers."
         return [caller for caller in Caller._instances.values() if caller.active or not active_only]

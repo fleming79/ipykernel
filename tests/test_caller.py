@@ -18,7 +18,7 @@ import sniffio
 import zmq
 from anyio.abc import TaskStatus
 
-from async_kernel.caller import Caller, CancelledError, Future
+from async_kernel.caller import Caller, Future, FutureCancelledError
 
 
 @pytest.fixture(scope="module", params=["asyncio", "trio"])
@@ -318,7 +318,7 @@ class TestCaller:
             await tg.start(cancelled)
             tg.cancel_scope.cancel()
         for item in items:
-            with pytest.raises(CancelledError):
+            with pytest.raises(FutureCancelledError):
                 await item
 
     async def test_call_early(self, anyio_backend):
@@ -368,13 +368,13 @@ class TestCaller:
         ready.wait()
         never_called_future = caller.call_later(str, 10)
         proceed.set()
-        with pytest.raises(CancelledError):
+        with pytest.raises(FutureCancelledError):
             await fut
         assert fut.done()
         assert caller.stopped
         with pytest.raises(anyio.ClosedResourceError):
             caller.call_soon(time.sleep, 0)
-        with pytest.raises(CancelledError):
+        with pytest.raises(FutureCancelledError):
             await never_called_future
 
     @pytest.mark.parametrize("mode", ["async", "blocking"])
@@ -421,4 +421,4 @@ class TestCaller:
                 await anyio.sleep(0)
                 tg.cancel_scope.cancel()
             await anyio.sleep(0)
-            assert isinstance(fut.exception(), CancelledError)  # pyright: ignore[reportPossiblyUnboundVariable]
+            assert isinstance(fut.exception(), FutureCancelledError)  # pyright: ignore[reportPossiblyUnboundVariable]

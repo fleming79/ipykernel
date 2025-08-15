@@ -33,22 +33,22 @@ from IPython.utils.tokenutil import token_at_cursor
 from jupyter_client.connect import ConnectionFileMixin
 from jupyter_client.session import Session
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import CaselessStrEnum, CBool, Container, Dict, Instance, Int, Set, Tuple, UseEnum, default
+from traitlets import CaselessStrEnum, CBool, Container, Dict, Float, Instance, Int, Set, Tuple, UseEnum, default
 from zmq import Context, Flag, PollEvent, Socket, SocketOption, SocketType, ZMQError
 
-from async_kernel import _version, utils
+from async_kernel import Caller, _version, utils
 from async_kernel.asyncshell import AsyncInteractiveShell
-from async_kernel.caller import Caller, CancelledError
 from async_kernel.debugger import Debugger
 from async_kernel.iostream import OutStream
 from async_kernel.kernelspec import Backend, KernelName
-from async_kernel.typing import ExecuteContent, ExecuteMode, Job, MsgType, NoValue, SocketID
+from async_kernel.typing import ExecuteContent, ExecuteMode, Job, MetadataKeys, MsgType, NoValue, SocketID, Tags
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncGenerator, Callable
     from types import CoroutineType, FrameType
 
     from anyio.abc import TaskStatus
+    from IPython.core.interactiveshell import ExecutionResult
 
     from async_kernel.comm import CommManager
 
@@ -181,6 +181,7 @@ class Kernel(ConnectionFileMixin):
     transport: CaselessStrEnum[str] = CaselessStrEnum(
         ["tcp", "ipc"] if sys.platform == "linux" else ["tcp"], default_value="tcp", config=True
     )
+    cell_execute_timeout = Float(None, allow_none=True)
 
     def __new__(cls, **kwargs) -> Self:  # noqa: ARG004
         #  There is only one instance.
@@ -228,7 +229,7 @@ class Kernel(ConnectionFileMixin):
         return self._execution_count_var.get(self._execution_count)
 
     @property
-    def kernel_info(self):
+    def kernel_info(self) -> dict[str, str | dict[str, str | dict[str, str | int]] | Any | tuple[Any, ...] | bool]:
         return {
             "protocol_version": _version.kernel_protocol_version,
             "implementation": "async_kernel",
@@ -241,7 +242,7 @@ class Kernel(ConnectionFileMixin):
         }
 
     @default("help_links")
-    def _default_help_links(self):
+    def _default_help_links(self) -> tuple[dict[str, str], ...]:
         return (
             {
                 "text": "Async Kernel Reference ",
@@ -294,14 +295,14 @@ class Kernel(ConnectionFileMixin):
         return AsyncInteractiveShell.instance(parent=self, kernel=self)
 
     @classmethod
-    def stop(cls):
+    def stop(cls) -> None:
         """Stop the kernel."""
         if instance := cls._instance:
             cls._instance = None
             instance._stop_event.set()
 
     @asynccontextmanager
-    async def start_in_context(self):
+    async def start_in_context(self) -> AsyncGenerator[Self, Any]:
         """Start the Kernel in an already running anyio event loop."""
         if self._sockets:
             msg = "Already started"
@@ -683,9 +684,11 @@ class Kernel(ConnectionFileMixin):
     async def _execute_request_handler(self, job: Job[ExecuteContent]):
         """Perform the actual execute_request."""
         content = job["msg"]["content"]
+        metadata = job["msg"].get("metadata") or {}
         if not (silent := content["silent"]):
             self._execution_count += 1
             self._execution_count_var.set(self._execution_count)
+            self.shell.execute_request_timeout = metadata.get(MetadataKeys.timeout) or self.cell_execute_timeout
             self.iopub_send(
                 msg_or_type="execute_input",
                 content={"code": content["code"], "execution_count": self.execution_count},
@@ -699,16 +702,21 @@ class Kernel(ConnectionFileMixin):
             silent=silent,
             transformed_cell=self.shell.transform_cell(content["code"]),
             shell_futures=True,
-            cell_id=None if silent else job["msg"].get("metadata", {}).get("cellId"),
+            cell_id=metadata.get("cellId"),
         )
         if not silent:
             self._interrupts.add(fut.cancel)
             fut.add_done_callback(lambda fut: self._interrupts.discard(fut.cancel))
-        try:
-            result = await fut
-        except CancelledError:
-            result = None
+        result: ExecutionResult = await fut
         err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError()
+        if (err) and (
+            (Tags.suppress_error in metadata.get("tags", ()))  # 1.
+            or (isinstance(err, self.CancelledError) and (self.shell.execute_request_timeout is not None))  # 2.
+        ):
+            # Suppress the error due to either:
+            # 1. tag
+            # 2. timeout
+            err = None
         reply_content = {
             "status": "error" if err else "ok",
             "execution_count": self.execution_count,
@@ -719,7 +727,7 @@ class Kernel(ConnectionFileMixin):
             if not silent and content.get("stop_on_error"):
                 self._stop_on_error_time = time.monotonic()
                 self.log.info("An error occurred in a non-silent execution request")
-        self._send_reply(job, reply_content)
+        self._send_reply(job, content=reply_content)
 
     async def interrupt_request(self, job: Job):
         """Handle an interrupt request."""

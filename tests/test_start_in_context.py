@@ -1,5 +1,6 @@
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
@@ -7,8 +8,8 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from async_kernel import Kernel
-from async_kernel.kernel import SocketID
 from async_kernel.kernelspec import KernelName
+from async_kernel.typing import SocketID
 from tests import utils
 
 if TYPE_CHECKING:

@@ -1,6 +1,6 @@
 # Contributing
 
-This project is in development. Create an issue to provide feedback.
+This project is in development. Feel free to create an issue to provide feedback.
 
 ## Development
 
@@ -22,8 +22,7 @@ pytest
 
 ## Running tests with coverage
 
-We are aiming for 100% code coverage. Any new code should have meaningful tests
-added to ensure reliability.
+We are aiming for 100% code coverage on CI (Linux). Any new code should also update tests to maintain coverage.
 
 ```shell
 pytest -vv --cov
@@ -48,9 +47,7 @@ pre-commit run
 
 ## Type checking
 
-Type checking is performed using [basedpyright](https://docs.basedpyright.com/). It is installed automatically.
-
-To run use
+Type checking is performed using [basedpyright](https://docs.basedpyright.com/).
 
 ```shell
 basedpyright
@@ -58,19 +55,42 @@ basedpyright
 
 ## Documentation
 
-Documentation is provided my [Material for MkDocs ](https://squidfunk.github.io/mkdocs-material/).
+Documentation is provided my [Material for MkDocs ](https://squidfunk.github.io/mkdocs-material/). To start up a server for editing locally:
 
-To install dependencies:
-
-```shell
-uv sync --no-dev --frozen --group docs
-```
-
-To start the server locally:
+### Install
 
 ```shell
-mkdocs serve
+uv sync --group docs
+uv run async-kernel -a async-docs --cell_execute_timeout 0.1
 ```
+
+### Serve locally
+
+```shell
+mkdocs serve 
+```
+
+### API / Docstrings
+
+API documentation is included using [mkdocstrings](https://mkdocstrings.github.io/).
+
+Docstrings are written in [google format without types](https://mkdocstrings.github.io/griffe/reference/docstrings/?h=google#google-style).
+Typing information is included automatically by [griff](https://mkdocstrings.github.io/griffe).
+
+#### See also
+
+- [cross-referencing](https://mkdocstrings.github.io/usage/#cross-references)
+
+### Notebooks
+
+Notebooks are included in the documentation with the plugin [mkdocs-jupyter](https://github.com/danielfrg/mkdocs-jupyter).
+
+#### Useful links
+
+These links are not relevant for docstrings.
+
+- [footnotes](https://squidfunk.github.io/mkdocs-material/reference/footnotes/#usage)
+- [tooltips](https://squidfunk.github.io/mkdocs-material/reference/tooltips/#usage)
 
 ## Releasing Async kernel
 

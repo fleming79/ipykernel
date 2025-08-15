@@ -7,8 +7,10 @@ import builtins
 import json
 import pathlib
 import sys
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
+import anyio
 import IPython.core.release
 from IPython.core.displayhook import DisplayHook
 from IPython.core.displaypub import DisplayPublisher
@@ -22,6 +24,7 @@ from typing_extensions import override
 import async_kernel
 from async_kernel.caller import Caller
 from async_kernel.compiler import XCachingCompiler
+from async_kernel.typing import Tags
 
 if TYPE_CHECKING:
     from async_kernel.kernel import Kernel
@@ -124,6 +127,7 @@ class AsyncInteractiveShell(InteractiveShell):
     compile: Instance[XCachingCompiler]
     user_ns_hidden = Dict()
     _main_mod_cache = Dict()
+    _execute_request_timeout: ContextVar[float | None] = ContextVar("execute_request_timeout", default=None)
 
     @default("banner1")
     def _default_banner1(self):
@@ -140,6 +144,14 @@ class AsyncInteractiveShell(InteractiveShell):
     # autoindent has no meaning in a zmqshell, and attempting to enable it
     # will print a warning in the absence of readline.
     autoindent = CBool(False)
+
+    @property
+    def execute_request_timeout(self):
+        return self._execute_request_timeout.get()
+
+    @execute_request_timeout.setter
+    def execute_request_timeout(self, value: float | None):
+        self._execute_request_timeout.set(value)
 
     @observe("exit_now")
     def _update_exit_now(self, _):
@@ -208,15 +220,16 @@ class AsyncInteractiveShell(InteractiveShell):
         preprocessing_exc_tuple: tuple | None = None,
         cell_id: str | None = None,
     ) -> ExecutionResult:
-        result = await super().run_cell_async(
-            raw_cell=raw_cell,
-            store_history=store_history,
-            silent=silent,
-            shell_futures=shell_futures,
-            transformed_cell=transformed_cell,
-            preprocessing_exc_tuple=preprocessing_exc_tuple,
-            cell_id=cell_id,
-        )
+        with anyio.fail_after(delay=self.execute_request_timeout):
+            result: ExecutionResult = await super().run_cell_async(
+                raw_cell=raw_cell,
+                store_history=store_history,
+                silent=silent,
+                shell_futures=shell_futures,
+                transformed_cell=transformed_cell,
+                preprocessing_exc_tuple=preprocessing_exc_tuple,
+                cell_id=cell_id,
+            )
         self.events.trigger("post_execute")
         if not silent:
             self.events.trigger("post_run_cell", result)
@@ -224,6 +237,10 @@ class AsyncInteractiveShell(InteractiveShell):
 
     @override
     def _showtraceback(self, etype, evalue, stb):
+        if Tags.do_not_publish_error in async_kernel.utils.get_tags():
+            return
+        if self.execute_request_timeout is not None and etype is self.kernel.CancelledError:
+            etype, evalue, stb = TimeoutError, "Cell execute timeout", []
         self.kernel.iopub_send(
             msg_or_type="error",
             content={"traceback": stb, "ename": str(etype.__name__), "evalue": str(evalue)},
@@ -269,13 +286,13 @@ class KernelMagics(Magics):
 
     @line_magic
     def callers(self, _):
-        print("Active", "Protected", "\t", "Name")
-        print("─" * 70)
+        lines = ["\t".join(["Active", "Protected", "\t", "Name"]), "─" * 70]
         for caller in Caller.all_callers(active_only=False):
             symbol = "   ✓" if caller.active else "   ✗"
             current_thread: Literal["← current thread", ""] = "← current thread" if caller is Caller() else ""
             protected = "   🔐" if caller.protected else ""
-            print(symbol, protected, "", caller.thread.name, current_thread, sep="\t")
+            lines.append("\t".join([symbol, protected, "", caller.thread.name, current_thread]))
+        print(*lines, sep="\n")
 
 
 InteractiveShellABC.register(AsyncInteractiveShell)

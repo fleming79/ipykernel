@@ -1,9 +1,10 @@
 """The cli entry point for async_kernel."""
 
-from __future__ import annotations
-
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
+
+from __future__ import annotations
+
 import argparse
 import contextlib
 import shutil
@@ -97,7 +98,7 @@ def main(wait_exit_context=anyio.sleep_forever) -> None:
             backend = Backend.trio if "trio" in kernel_name.lower() else Backend.asyncio
             anyio.run(_start, backend=backend)
         except KeyboardInterrupt:
-            print("\nKernel stopped")
+            pass
         except BaseException as e:
             traceback.print_exception(e, file=sys.stderr)
             if sys.__stderr__ is not sys.stderr:
@@ -105,6 +106,8 @@ def main(wait_exit_context=anyio.sleep_forever) -> None:
             sys.exit(1)
         else:
             sys.exit(0)
+        finally:
+            print("\nKernel stopped: ", kernel.connection_file)
 
 
 if __name__ == "__main__":

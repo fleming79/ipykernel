@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any, Final, Generic, Literal, ParamSpec, Typed
 from typing_extensions import Sentinel
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     import zmq
 
 __all__ = ["DebugMessage", "Job", "Message", "MsgHeader", "SocketID"]
@@ -56,6 +58,36 @@ class MsgType(enum.StrEnum):
     debug_request = "debug_request"
 
 
+class MetadataKeys(enum.StrEnum):
+    """This is an enum of keys for [metadata in kernel messages](https://jupyter-client.readthedocs.io/en/stable/messaging.html#metadata)
+    that are used in async_kernel.
+
+    !!! Note
+        Metadata can be edited in Jupyter lab "Advanced tools" and Tags can be added using "common tools" in the [right side bar](https://jupyterlab.readthedocs.io/en/stable/user/interface.html#left-and-right-sidebar).
+    """
+
+    tags = "tags"
+    """The `tags` metadata key corresponds to is a list of strings. 
+    
+    The list can be edited by the user in a notebook.
+    see also: [Tags][async_kernel.typing.Tags].
+    """
+    timeout = "timeout"
+    """The `timeout` metadata key is used to specify a timeout for execution of the code.
+    
+    The value should be a floating point value of the timeout in seconds.
+    """
+
+
+class Tags(enum.StrEnum):
+    """Tags recognised by the kernel"""
+
+    suppress_error = "suppress-error"
+    """Ignore`stop_on_error` in context of the `execute request`."""
+    do_not_publish_error = "do-not-publish-error"
+    """Prevent the shell from publishing error messages in context of the `execute request`."""
+
+
 class MsgHeader(TypedDict):
     # https://jupyter-client.readthedocs.io/en/stable/messaging.html#message-header
     msg_id: str
@@ -69,7 +101,7 @@ class MsgHeader(TypedDict):
 class Message(TypedDict, Generic[T]):
     header: MsgHeader
     parent_header: MsgHeader
-    metadata: dict[str, Any]
+    metadata: Mapping[MetadataKeys | str, Any]
     content: T
     buffers: list[bytearray | bytes]
 

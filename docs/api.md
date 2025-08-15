@@ -16,10 +16,16 @@ show_submodules: true
 
 ## Utils
 
+Utility functions that are widely useful.
+
 ::: async_kernel.utils
 options:
 show_submodules: true
 
 ## main (command line handler)
 
-:::async_kernel.__main__.main
+::: async_kernel.__main__.main
+
+## types
+
+::: async_kernel.typing

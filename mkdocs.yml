@@ -8,6 +8,14 @@ copyright: "Copyright &copy;   2025-present"
 extra:
   version:
     provider: mike
+  consent:
+    title: Cookie consent
+    description: >-
+      We use cookies to recognize your repeated visits and preferences, as well
+      as to measure the effectiveness of our documentation and whether users
+      find what they're searching for. With your consent, you're helping us to
+      make our documentation better.
+
 extra_css:
   - stylesheets/extra.css
 theme:
@@ -17,6 +25,8 @@ theme:
     - navigation.tabs
     - navigation.tabs.sticky
     - content.code.copy
+    - content.action.edit
+    - content.action.view
     - toc.follow # https://squidfunk.github.io/mkdocs-material/setup/setting-up-navigation/?h=table#anchor-following
     - toc.integrate # https://squidfunk.github.io/mkdocs-material/setup/setting-up-navigation/?h=table#navigation-integration
     - navigation.top # https://squidfunk.github.io/mkdocs-material/setup/setting-up-navigation/?h=naviga#back-to-top-button
@@ -25,6 +35,8 @@ theme:
     - search.suggest # https://squidfunk.github.io/mkdocs-material/setup/setting-up-site-search/?h=search#search-suggestions
     - search.highlight # https://squidfunk.github.io/mkdocs-material/setup/setting-up-site-search/?h=search#search-highlighting
     - navigation.instant # https://squidfunk.github.io/mkdocs-material/setup/setting-up-navigation/?h=naviga#instant-loading
+  icon:
+    annotation: material/information-outline
   font:
     text: Noto Sans Cham
     code: Noto Sans Mono
@@ -49,9 +61,21 @@ theme:
         name: Switch to system preference
 plugins:
   - search
+  - open-in-new-tab
   - autorefs
   - mkdocs-jupyter:
       include_source: True
+      kernel_name: async-docs
+      execute: true
+      # include_requirejs: true
+      highlight_extra_classes: custom-css-classes
+      include: ["*.ipynb"]
+  # - privacy:
+  #     enabled: !ENV
+  #     links_attr_map:
+  #       target: _blank # sponsors only - https://squidfunk.github.io/mkdocs-material/plugins/privacy/?h=external+lin#external-links
+  # - open-in-new-tab # https://github.com/JakubAndrysek/mkdocs-open-in-new-tab
+  # add_icon: true
   - mkdocstrings:
       enabled: true
       # custom_templates: templates
@@ -121,11 +145,12 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Usage:
+      - Simple example: simple_example.ipynb
       - Execute mode: execute_mode.ipynb
       - Caller notebook: caller.ipynb
       - Command line: command_line.md
   - API: api.md
-  - Info:
+  - About:
       - Contributing: contributing.md
       - Changelog: changelog.md
       - License: license.md
