@@ -13,7 +13,7 @@ from jupyter_client.asynchronous.client import AsyncKernelClient
 import async_kernel.utils
 from async_kernel import Caller, Kernel
 from async_kernel.asyncshell import AsyncInteractiveShell
-from async_kernel.typing import ExecuteContent
+from async_kernel.typing import ExecuteContent, MsgType
 from tests.references import RMessage, references
 
 if TYPE_CHECKING:
@@ -102,7 +102,6 @@ async def execute(client: AsyncKernelClient, /, code="", clear_pub=True, metadat
             user_expressions={},
             allow_stdin=False,
             stop_on_error=True,
-            execute_mode=None,
         )
         | kwargs,
     )
@@ -157,17 +156,23 @@ async def clear_iopub(client, *, timeout=0.01):
     await assemble_output(client, timeout=timeout)
 
 
-async def send_shell_message(client: AsyncKernelClient, msg_type: str, content: Mapping[str, Any] | None = None):
+async def send_shell_message(
+    client: AsyncKernelClient, msg_type: MsgType, content: Mapping[str, Any] | None = None, reply=True
+):
     msg = client.session.msg(msg_type, content=dict(content) if content is not None else None)
     client.shell_channel.send(msg)
+    if not reply:
+        return {}
     return await get_reply(client, msg["header"]["msg_id"], channel="shell")
 
 
 async def send_control_message(
-    client: AsyncKernelClient, msg_type: str, content: Mapping[str, Any] | None = None, clear_pub=True
+    client: AsyncKernelClient, msg_type: MsgType, content: Mapping[str, Any] | None = None, clear_pub=True, reply=True
 ):
     msg = client.session.msg(msg_type, content=dict(content) if content is not None else None)
     client.control_channel.send(msg)
+    if not reply:
+        return {}
     return await get_reply(client, msg["header"]["msg_id"], channel="control", clear_pub=clear_pub)
 
 

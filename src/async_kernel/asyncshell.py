@@ -151,7 +151,7 @@ class AsyncInteractiveShell(InteractiveShell):
         """A timeout in context of the [run_cell_async][async_kernel.Kernel.AsyncInteractiveShell].
 
         See also:
-        
+
         - [async_kernel.typing.MetadataKeys.timeout][].
         """
         return self._execute_request_timeout.get()

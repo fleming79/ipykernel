@@ -9,6 +9,7 @@ import builtins
 import contextlib
 import contextvars
 import errno
+import functools
 import getpass
 import logging
 import os
@@ -42,11 +43,22 @@ from async_kernel.asyncshell import AsyncInteractiveShell
 from async_kernel.debugger import Debugger
 from async_kernel.iostream import OutStream
 from async_kernel.kernelspec import Backend, KernelName
-from async_kernel.typing import ExecuteContent, ExecuteMode, Job, MetadataKeys, MsgType, NoValue, SocketID, Tags
+from async_kernel.typing import (
+    CODE_MODE_MAPPINGS,
+    ExecuteContent,
+    HandlerType,
+    Job,
+    MetadataKeys,
+    MsgType,
+    NoValue,
+    RunMode,
+    SocketID,
+    Tags,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Generator
-    from types import CoroutineType, FrameType
+    from types import FrameType
 
     from anyio.abc import TaskStatus
     from IPython.core.interactiveshell import ExecutionResult
@@ -57,7 +69,7 @@ if TYPE_CHECKING:
 __all__ = ["Kernel", "KernelInterruptError"]
 
 
-def error_to_dict(error: BaseException):
+def error_to_dict(error: BaseException) -> dict[str, str | list[str]]:
     """Convert the error to a dict.
 
     ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#request-reply
@@ -130,6 +142,13 @@ def bind_socket(
     msg = f"Failed to bind {socket} for {transport=}" + (f" to {port=}!" if port else "!")
     raise RuntimeError(msg) from e
 
+@functools.cache
+def wrap_handler(run_handler:Callable[[HandlerType, Job]], handler:HandlerType) -> HandlerType:
+
+    async def queued_handler(job: Job) -> None:
+        await run_handler(handler, job)
+    return queued_handler
+
 
 class KernelInterruptError(InterruptedError):
     "Raised to interrupt the kernel."
@@ -183,9 +202,7 @@ class Kernel(ConnectionFileMixin):
     _stop_on_error_time: float = 0
     _interrupts: Container[set[Callable[[], object]]] = Set()
     _sockets: Dict[SocketID, zmq.Socket] = Dict()
-    message_handlers: Dict[Literal[SocketID.shell, SocketID.control], dict[MsgType, Callable[[Job], CoroutineType]]] = (
-        Dict()
-    )
+    message_handlers: Dict[Literal[SocketID.shell, SocketID.control], dict[MsgType, HandlerType]] = Dict()
     _execution_count = Int(0)
     anyio_backend = UseEnum(Backend)
     help_links = Tuple()
@@ -212,6 +229,7 @@ class Kernel(ConnectionFileMixin):
             return  # Only initialize once
         super().__init__(**kwargs)
         self.message_handlers[SocketID.shell] = {
+            MsgType.execute_request: self.execute_request,
             MsgType.kernel_info_request: self.kernel_info_request,
             MsgType.comm_info_request: self.comm_info_request,
             MsgType.interrupt_request: self.interrupt_request,
@@ -474,7 +492,7 @@ class Kernel(ConnectionFileMixin):
     async def _receive_msg_loop(
         self, socket_id: Literal[SocketID.control, SocketID.shell], *, task_status: TaskStatus[None]
     ) -> None:
-        """Receive shell and control messages over the socket and call [`process_job`][async_kernel.Kernel.process_job]."""
+        """Receive shell and control messages over zmq sockets."""
         if (
             sys.platform == "win32"
             and sniffio.current_async_library() == "asyncio"
@@ -515,11 +533,8 @@ class Kernel(ConnectionFileMixin):
             except (zmq.ContextTerminated, self.CancelledError):
                 return
 
-    async def _run_handler(self, handler: Callable[[Job], CoroutineType] | None, job: Job) -> None:
+    async def _run_handler(self, handler: HandlerType, job: Job) -> None:
         self._job_var.set(job)
-        if not handler:
-            self.log.error("Unknown message type: %r", job["msg"]["header"])
-            return
         try:
             self._publish_status("busy", job)
             await handler(job)
@@ -608,9 +623,8 @@ class Kernel(ConnectionFileMixin):
             ident=job["ident"],
         )
         if msg:
-            self.log.debug(
-                "send_reply: '%s' msg_id: %s %s", msg["msg_type"], job["msg"]["header"]["msg_id"], msg["content"]
-            )
+            self.log.debug("*** _send_reply %s*** %s", job['socket_id'], msg)
+
 
     def _input_request(self, prompt: str, *, password=False) -> Any:
         job = self.job
@@ -636,36 +650,46 @@ class Kernel(ConnectionFileMixin):
                 raise KernelInterruptError
         return self.session.recv(socket)[1]["content"]["value"]  # pyright: ignore[reportOptionalSubscript]
 
-    async def handle_message_request(self, job: Job) -> None:
+    async def handle_message_request(self, job: Job, /) -> None:
         """The main handler for all shell and control messages.
 
         Args:
             job: The packed [message][async_kernel.typing.Message] for handling.
         """
-        match job["msg"]["header"]["msg_type"]:
-            case MsgType.execute_request:
-                if self.get_execute_mode(job) is ExecuteMode.queue:
-                    await Caller().queue_call(self.execute_request, job)
-                else:
-                    Caller().call_soon(self.execute_request, job)
-            case _ as msg_type:
-                await self._run_handler(self.message_handlers[job["socket_id"]].get(msg_type), job)
+        msg_type: MsgType = job["msg"]["header"]["msg_type"]
+        if not (handler := self.message_handlers[job["socket_id"]].get(msg_type)):
+            self.log.error("Unknown message type: %r", job["msg"]["header"])
+            return
+        func = wrap_handler(self._run_handler, handler)
+        match self.get_run_mode(job):
+            case RunMode.queue:
+                await Caller().queue_call(func, job)
+            case RunMode.thread:
+                Caller.to_thread(func, job)
+            case RunMode.task:
+                Caller().call_soon(func, job)
+            case RunMode.wait:
+                await func(job)
+
+
 
     @staticmethod
-    def get_execute_mode(job: Job[ExecuteContent]) -> ExecuteMode:
-        """Extract `ExecuteMode` from the job."""
-        if m := job["msg"]["content"].get("execute_mode"):
+    def get_run_mode(job: Job[Any]) -> RunMode:
+        """Determine `RunMode` from the job."""
+        if m := job.get("run_mode"):
             # Respect an existing mode
-            return ExecuteMode(m)
-        if (c := job["msg"]["content"]["code"].strip().split("\n")[0].strip()) in tuple(ExecuteMode):
-            mode = ExecuteMode(c)
-        else:
-            mode = ExecuteMode.queue
-        if (
-            job["msg"]["content"].get("silent", True) or (job["socket_id"] is SocketID.control)
-        ) and mode is ExecuteMode.queue:
-            mode = ExecuteMode.task
-        job["msg"]["content"]["execute_mode"] = mode
+            return RunMode(m)
+        msg_type = job["msg"]["header"]["msg_type"]
+        mode = RunMode.wait
+        content = job["msg"].get("content")
+        if msg_type == MsgType.execute_request:
+            if mode_ := CODE_MODE_MAPPINGS.get(content.get("code", "").strip().split("\n")[0].strip()):
+                mode = mode_
+            elif content.get("silent", True) or (job["socket_id"] is SocketID.control):
+                mode = RunMode.task
+            else:
+                mode = RunMode.queue
+        job["run_mode"] = mode
         return mode
 
     def topic(self, topic) -> bytes:
@@ -689,19 +713,15 @@ class Kernel(ConnectionFileMixin):
 
     async def execute_request(self, job: Job[ExecuteContent]) -> None:
         """Process the execute request."""
-        if (job["received_time"] < self._stop_on_error_time) and not job["msg"]["content"]["silent"]:
+        content = job["msg"]["content"]
+        if (job["received_time"] < self._stop_on_error_time) and not content.get("silent", False):
             self.log.info("Aborting execute_request: %s", job)
+            c_ = error_to_dict(RuntimeError("Aborting due to prior exception"))
+            c_ |= {"execution_count": self.execution_count}
             self._publish_status("busy", job)
-            content: dict[str, str | list[str]] = error_to_dict(RuntimeError("Aborting due to prior exception"))
-            content["execution_count"] = self.execution_count  # pyright: ignore[reportArgumentType]
-            self._send_reply(job, content)
+            self._send_reply(job, content=c_)
             self._publish_status("idle", job)
             return
-        await self._run_handler(self._execute_request_handler, job)
-
-    async def _execute_request_handler(self, job: Job[ExecuteContent]) -> None:
-        """Perform the actual execute_request."""
-        content = job["msg"]["content"]
         metadata = job["msg"].get("metadata") or {}
         if not (silent := content["silent"]):
             self._execution_count += 1
@@ -713,7 +733,7 @@ class Kernel(ConnectionFileMixin):
                 parent=job["msg"],
                 ident=self.topic("execute_input"),
             )
-        fut = (Caller.to_thread if self.get_execute_mode(job) is ExecuteMode.thread else Caller().call_soon)(
+        fut = (Caller.to_thread if self.get_run_mode(job) is RunMode.thread else Caller().call_soon)(
             self.shell.run_cell_async,
             raw_cell=content["code"],
             store_history=content.get("store_history", False),

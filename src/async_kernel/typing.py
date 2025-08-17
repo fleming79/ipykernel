@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import enum
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, ParamSpec, TypedDict, TypeVar, TypeVarTuple
+from collections.abc import Callable
+from types import CoroutineType
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NotRequired, ParamSpec, TypedDict, TypeVar, TypeVarTuple
 
 from typing_extensions import Sentinel
 
@@ -14,13 +16,15 @@ if TYPE_CHECKING:
     import zmq
 
 __all__ = [
+    "CODE_MODE_MAPPINGS",
+    "RUN_MODE_PREFIX",
     "DebugMessage",
-    "ExecuteMode",
     "Job",
     "Message",
     "MetadataKeys",
     "MsgHeader",
     "MsgType",
+    "RunMode",
     "SocketID",
     "Tags",
 ]
@@ -49,19 +53,25 @@ class SocketID(enum.StrEnum):
     ""
 
 
-EXECUTE_MODE_PREFIX: Final = "##"
-"The Prefix used for [ExecuteMode][async_kernel.typing.ExecuteMode] identifiers."
+RUN_MODE_PREFIX: Final = "##"  # "The Prefix used for [RunMode][async_kernel.typing.RunMode] identifiers."
 
 
-class ExecuteMode(enum.StrEnum):
-    "An Enum of the Execute modes available for altering how [execute requests](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute) are handled."
+class RunMode(enum.StrEnum):
+    "An Enum of the Run modes available for altering how jobs are(https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute) are handled."
 
-    queue = f"{EXECUTE_MODE_PREFIX}queue"
-    "Add to the execute_request queue (default)."
-    task = f"{EXECUTE_MODE_PREFIX}task"
+    queue = "queue"
+    "Add to the execute_request queue."
+    task = "task"
     "Execute as a task in the MainThread."
-    thread = f"{EXECUTE_MODE_PREFIX}thread"
+    thread = "thread"
     "Execute in a caller worker thread."
+    wait = "wait"
+    """Wait for the message to execute.
+
+    This blocks the message loop"""
+
+
+CODE_MODE_MAPPINGS: Final[dict[str, RunMode]] = {f"{RUN_MODE_PREFIX}{mode}": mode for mode in RunMode}
 
 
 class MsgType(enum.StrEnum):
@@ -132,15 +142,20 @@ class Tags(enum.StrEnum):
 
 
 class MsgHeader(TypedDict):
-    ""
+    "A [message header](https://jupyter-client.readthedocs.io/en/stable/messaging.html#message-header)."
 
-    # https://jupyter-client.readthedocs.io/en/stable/messaging.html#message-header
     msg_id: str
+    ""
     session: str
+    ""
     username: str
+    ""
     date: str
+    ""
     msg_type: MsgType
+    ""
     version: str
+    ""
 
 
 class Message(TypedDict, Generic[T]):
@@ -176,6 +191,8 @@ class Job(TypedDict, Generic[T]):
     ""
     received_time: float
     "The time the message was received."
+    run_mode: NotRequired[RunMode]
+    """The run mode."""
 
 
 class ExecuteContent(TypedDict):
@@ -184,7 +201,7 @@ class ExecuteContent(TypedDict):
     code: str
     "The code to execute."
     silent: bool
-    "Modifies how code is executed. See also [get_execute_mode][async_kernel.kernel.get_execute_mode]."
+    "Modifies how code is executed. See also [get_run_mode][async_kernel.kernel.get_run_mode]."
     store_history: bool
     "See ref."
     user_expressions: dict[str, str]
@@ -193,8 +210,7 @@ class ExecuteContent(TypedDict):
     "See ref."
     stop_on_error: bool
     "See ref."
-    execute_mode: ExecuteMode
-    """The execute mode. See also [get_execute_mode][async_kernel.kernel.get_execute_mode]."""
 
 
 DebugMessage = dict[str, Any]
+HandlerType = Callable[[Job], CoroutineType]
