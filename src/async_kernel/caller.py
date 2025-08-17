@@ -31,23 +31,24 @@ if TYPE_CHECKING:
 
     from async_kernel.typing import P
 
-__all__ = ["Caller", "Future", "FutureCancelledError"]
+__all__ = ["Caller", "Future", "FutureCancelledError", "InvalidStateError"]
 
 
 class FutureCancelledError(anyio.ClosedResourceError):
-    "Used to indicate a Future is cancelled."
+    "Used to indicate a `Future` is cancelled."
 
 
 class InvalidStateError(RuntimeError):
-    pass
+    "An invalid state of a [Future][async_kernel.caller.Future]."
 
 
 class Future(Awaitable[T]):
     """
-    A class representing a future result modelled on the asyncio class [`Future`](https://docs.python.org/3/library/asyncio-future.html#futures) .
+    A class representing a future result modelled on Asyncio's [`Future`](https://docs.python.org/3/library/asyncio-future.html#futures).
 
     This class provides an anyio compatible Future primitive. It is designed
-    to work with the Caller to enable thread-safe, event loop function calls.
+    to work with `Caller` to enable thread-safe calling, setting and awaiting
+    execution results.
     """
 
     __slots__ = [
@@ -104,9 +105,11 @@ class Future(Awaitable[T]):
         return self._result
 
     def set_result(self, value: T) -> None:
+        "Set the result (thread-safe using Caller)."
         self._set_value("result", value)
 
     def set_exception(self, exception: BaseException) -> None:
+        "Set the exception (thread-safe using Caller)."
         self._set_value("exception", exception)
 
     def _set_value(self, mode: Literal["result", "exception"], value) -> None:
@@ -133,7 +136,7 @@ class Future(Awaitable[T]):
                 Caller(self.thread).call_no_context(func=set_value)
             except RuntimeError:
                 msg = (
-                    f"The current thread is not {self.thread.name} and a caller does not exist for that thread either."
+                    f"The current thread is not {self.thread.name} and a `Caller` does not exist for that thread either."
                 )
                 raise RuntimeError(msg) from None
         else:
@@ -142,19 +145,24 @@ class Future(Awaitable[T]):
     def done(self) -> bool:
         """Return True if the Future is done.
 
-        Done means either that a result / exception are available."""
+        Done means either that a result / exception is available."""
         return self._event_done.is_set()
 
     def add_done_callback(self, fn: Callable[[Self], object]) -> None:
         """Add a callback for when the callback is done (not thread-safe).
+        
+        If the Future is already done it will be scheduled for calling.
 
         The result of the future and done callbacks are always called for the futures thread.
-        Callbacks are called in the reverse order in which they were added.
+        Callbacks are called in the reverse order in which they were added in the owning thread.
         """
-        self._done_callbacks.append(fn)
+        if not self.done():
+            self._done_callbacks.append(fn)
+        else:
+            self.get_caller().call_no_context(fn, self)
 
     def cancel(self) -> bool:
-        """Cancel the Future and schedule callbacks.
+        """Cancel the Future and schedule callbacks (thread-safe using Caller).
 
         Returns if it has been cancelled.
         """
@@ -168,10 +176,20 @@ class Future(Awaitable[T]):
         return self.cancelled()
 
     def cancelled(self) -> bool:
+        """Return True if the Future is cancelled."""
         return self._cancelled
 
     def exception(self) -> BaseException | None:
-        "Return the exception that was set on this Future."
+        """Return the exception that was set on the Future.
+        
+        If the Future has been cancelled, this method raises a [FutureCancelledError][async_kernel.caller.FutureCancelledError] exception.
+
+        If the Future isn’t done yet, this method raises an [InvalidStateError][async_kernel.caller.InvalidStateError] exception.
+        """
+        if self._cancelled:
+            raise FutureCancelledError
+        if not self.done():
+            raise InvalidStateError
         return self._exception
 
     def remove_done_callback(self, fn: Callable[[Self], object], /) -> int:
@@ -190,6 +208,10 @@ class Future(Awaitable[T]):
         if self._cancelled:
             scope.cancel()
         self._cancel_scope = scope
+
+    def get_caller(self) -> Caller:
+        "The the Caller the Future's thread corresponds."
+        return Caller(self.thread)
 
 
 class Caller:
@@ -519,13 +541,16 @@ class Caller:
         max_concurrent: NoValue | int = NoValue,  # pyright: ignore[reportInvalidTypeForm]
     ) -> AsyncGenerator[Future[T], Any]:
         """An iterator to get Futures as they complete.
-
-        Pass a generator should you wish to limit the number future jobs when calling to_thread/to_task etc.
-        Pass a set/list/tuple to ensure all get monitored at once.
-
         Args:
             items: Either a container with existing futures or generator of Futures.
-            max_concurrent: The maximum number of concurrent futures to monitor at a time. This is useful when `items` is a generator utilising Caller.to_thread. By default this will limit to `Caller.MAX_IDLE_POOL_INSTANCES`.
+            max_concurrent: The maximum number of concurrent futures to monitor at a time. 
+                This is useful when `items` is a generator utilising Caller.to_thread. 
+                By default this will limit to `Caller.MAX_IDLE_POOL_INSTANCES`.
+
+
+        !!! Tip:
+            1. Pass a generator should you wish to limit the number future jobs when calling to_thread/to_task etc.
+            2. Pass a set/list/tuple to ensure all get monitored at once.
         """
         event_future_ready = threading.Event()
         has_result: deque[Future[T]] = deque()
@@ -584,5 +609,9 @@ class Caller:
 
     @classmethod
     def all_callers(cls, active_only=True) -> list[Caller]:
-        "Get a list of the callers."
+        """A classmethod to get a list of the callers.
+        
+        Args:
+            active_only: Restrict the list to callers that are active (running in an async context).
+        """
         return [caller for caller in Caller._instances.values() if caller.active or not active_only]

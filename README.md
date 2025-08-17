@@ -19,7 +19,6 @@ Async kernel is designed to run [execute requests](https://jupyter-client.readth
 - [IPython](https://pypi.org/project/ipython/) shell for magic, code completions, etc
 - No tornado - instead using anyio's [`wait_readable`](https://anyio.readthedocs.io/en/stable/api.html#anyio.wait_readable) to wait for incoming messages on zmq sockets
 
-![Simple demo](https://github.com/user-attachments/assets/9a4935ba-6af8-4c9f-bc67-b256be368811)
 
 ## Installation
 
@@ -39,6 +38,9 @@ async-kernel add async-trio
 ```shell
 async-kernel -a async-trio
 ```
+
+[![Link to demo](https://github.com/user-attachments/assets/9a4935ba-6af8-4c9f-bc67-b256be368811)](https://fleming79.github.io/async-kernel/simple_example/ "Show demo notebook.")
+
 
 [^non-blocking-execution]: Shell messaging runs in a task separate to execute requests in the main thread. This means shell messages (including comms) can pass freely whilst an execute request is busy awaiting a result.
 

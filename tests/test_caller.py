@@ -3,6 +3,7 @@
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
 
+
 import contextlib
 import inspect
 import threading
@@ -18,7 +19,7 @@ import sniffio
 import zmq
 from anyio.abc import TaskStatus
 
-from async_kernel.caller import Caller, Future, FutureCancelledError
+from async_kernel.caller import Caller, Future, FutureCancelledError, InvalidStateError
 
 
 @pytest.fixture(scope="module", params=["asyncio", "trio"])
@@ -37,10 +38,13 @@ class TestFuture:
         fut = Future[int]()
         assert inspect.isawaitable(fut)
         done_called = False
+        after_done = anyio.Event()
 
         def callback(obj):
             nonlocal done_called
             assert obj is fut
+            if done_called:
+                after_done.set()
             done_called = True
 
         fut.add_done_callback(callback)
@@ -48,6 +52,11 @@ class TestFuture:
         result = await fut
         assert result == 42
         assert done_called
+        async with Caller(create=True):
+            fut.add_done_callback(callback)
+            await after_done.wait()
+
+
 
     async def test_set_and_wait_exception(self):
         fut = Future()
@@ -83,7 +92,8 @@ class TestFuture:
 
     async def test_set_result_after_exception_raises(self):
         fut = Future()
-        assert fut.exception() is None
+        with pytest.raises(InvalidStateError):
+            fut.exception()
         fut.set_exception(ValueError())
         assert isinstance(fut.exception(), ValueError)
         with pytest.raises(RuntimeError):
@@ -95,9 +105,12 @@ class TestFuture:
         with pytest.raises(RuntimeError):
             fut.set_exception(ValueError())
 
-    def test_cancel(self):
+    async def test_cancel(self):
         fut = Future()
         assert fut.cancel()
+        with pytest.raises(FutureCancelledError):
+            fut.exception()
+
 
     def test_error_from_non_thread(self):
         fut = Future(thread=threading.Thread())
@@ -421,4 +434,5 @@ class TestCaller:
                 await anyio.sleep(0)
                 tg.cancel_scope.cancel()
             await anyio.sleep(0)
-            assert isinstance(fut.exception(), FutureCancelledError)  # pyright: ignore[reportPossiblyUnboundVariable]
+            with pytest.raises(FutureCancelledError):
+                fut.exception()  # pyright: ignore[reportPossiblyUnboundVariable]

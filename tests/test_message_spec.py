@@ -257,6 +257,7 @@ async def test_stream(client):
 @pytest.mark.parametrize("clear", [True, False])
 async def test_display_data(client, clear: bool):
     # kernel.display_formatter
+    await utils.clear_iopub(client)
     msg_id, _ = await utils.execute(
         client, f"from IPython.display import display; display(1, clear={clear})", clear_pub=False
     )

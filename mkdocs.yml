@@ -4,6 +4,7 @@ site_author: ""
 site_url: https://fleming79.github.io/async-kernel/
 repo_name: fleming79/async-kernel
 repo_url: https://github.com/fleming79/async-kernel
+edit_uri: edit/main/docs/
 copyright: "Copyright &copy;   2025-present"
 extra:
   version:
@@ -35,6 +36,7 @@ theme:
     - search.suggest # https://squidfunk.github.io/mkdocs-material/setup/setting-up-site-search/?h=search#search-suggestions
     - search.highlight # https://squidfunk.github.io/mkdocs-material/setup/setting-up-site-search/?h=search#search-highlighting
     - navigation.instant # https://squidfunk.github.io/mkdocs-material/setup/setting-up-navigation/?h=naviga#instant-loading
+
   icon:
     annotation: material/information-outline
   font:
@@ -70,12 +72,16 @@ plugins:
       # include_requirejs: true
       highlight_extra_classes: custom-css-classes
       include: ["*.ipynb"]
+  - git-revision-date-localized:
+      type: timeago
+      enabled: !ENV [CI, false]      
+      enable_creation_date: true
+
   # - privacy:
   #     enabled: !ENV
   #     links_attr_map:
   #       target: _blank # sponsors only - https://squidfunk.github.io/mkdocs-material/plugins/privacy/?h=external+lin#external-links
   # - open-in-new-tab # https://github.com/JakubAndrysek/mkdocs-open-in-new-tab
-  # add_icon: true
   - mkdocstrings:
       enabled: true
       # custom_templates: templates
@@ -145,11 +151,27 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Usage:
-      - Simple example: simple_example.ipynb
-      - Execute mode: execute_mode.ipynb
-      - Caller notebook: caller.ipynb
-      - Command line: command_line.md
-  - API: api.md
+    - usage.md
+    - Notebooks:
+      - Overview: notebooks/overview.md
+      - Simple example: notebooks/simple_example.ipynb
+      - Execute mode: notebooks/execute_mode.ipynb
+      - Caller notebook: notebooks/caller.ipynb
+    - Command line: command_line.md
+  - Reference:
+      - reference/overview.md
+      - Caller & Future: 
+        - reference/caller.md
+      - Command prompt: 
+        - reference/main.md
+      - Kernel: 
+        - reference/kernel.md
+      - Async shell: 
+        - reference/asyncshell.md
+      - Types: 
+        - reference/typing.md
+      - Utils: 
+        - reference/utils.md
   - About:
       - Contributing: contributing.md
       - Changelog: changelog.md

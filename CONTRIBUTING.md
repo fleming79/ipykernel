@@ -1,6 +1,6 @@
 # Contributing
 
-This project is in development. Feel free to create an issue to provide feedback.
+This project is under active development. Feel free to create an issue to provide feedback.
 
 ## Development
 
@@ -74,7 +74,7 @@ mkdocs serve
 
 API documentation is included using [mkdocstrings](https://mkdocstrings.github.io/).
 
-Docstrings are written in [google format without types](https://mkdocstrings.github.io/griffe/reference/docstrings/?h=google#google-style).
+Docstrings are written in docstring format [google-notypes](https://mkdocstrings.github.io/griffe/reference/docstrings/?h=google#google-style).
 Typing information is included automatically by [griff](https://mkdocstrings.github.io/griffe).
 
 #### See also
@@ -91,6 +91,12 @@ These links are not relevant for docstrings.
 
 - [footnotes](https://squidfunk.github.io/mkdocs-material/reference/footnotes/#usage)
 - [tooltips](https://squidfunk.github.io/mkdocs-material/reference/tooltips/#usage)
+
+### Deploy manually
+
+```
+mkdocs gh-deploy --force
+```
 
 ## Releasing Async kernel
 

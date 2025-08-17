@@ -34,8 +34,9 @@ __all__ = ["AsyncDisplayHook", "AsyncDisplayPublisher", "AsyncInteractiveShell"]
 
 
 class AsyncDisplayHook(DisplayHook):
-    """A displayhook subclass that publishes data using ZeroMQ. This is intended
-    to work with an InteractiveShell instance. It sends a dict of different
+    """A displayhook subclass that publishes data using ZeroMQ.
+
+    This is intended to work with an InteractiveShell instance. It sends a dict of different
     representations of the object."""
 
     kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
@@ -43,27 +44,27 @@ class AsyncDisplayHook(DisplayHook):
 
     @property
     @override
-    def prompt_count(self):
+    def prompt_count(self) -> int:
         return self.kernel.execution_count
 
     @override
-    def start_displayhook(self):
+    def start_displayhook(self) -> None:
         """Start the display hook."""
         self.content = {}
 
     @override
-    def write_output_prompt(self):
+    def write_output_prompt(self) -> None:
         """Write the output prompt."""
         self.content["execution_count"] = self.prompt_count
 
     @override
-    def write_format_data(self, format_dict, md_dict=None):
+    def write_format_data(self, format_dict, md_dict=None) -> None:
         """Write format data to the message."""
         self.content["data"] = format_dict
         self.content["metadata"] = md_dict
 
     @override
-    def finish_displayhook(self):
+    def finish_displayhook(self) -> None:
         """Finish up all displayhook activities."""
         if self.content:
             self.kernel.iopub_send("display_data", content=self.content)
@@ -104,7 +105,7 @@ class AsyncDisplayPublisher(DisplayPublisher):
         )
 
     @override
-    def clear_output(self, wait=False):
+    def clear_output(self, wait=False) -> None:
         """Clear output associated with the current execution (cell).
 
         Args:
@@ -116,7 +117,7 @@ class AsyncDisplayPublisher(DisplayPublisher):
 
 
 class AsyncInteractiveShell(InteractiveShell):
-    """A subclass of InteractiveShell for ZMQ."""
+    """A modified IPython [InteractiveShell][IPython.core.interactiveshell.InteractiveShell] to work with [Async kernel][async_kernel.Kernel]."""
 
     displayhook_class = Type(AsyncDisplayHook)
     display_pub_class = Type(AsyncDisplayPublisher)
@@ -130,7 +131,7 @@ class AsyncInteractiveShell(InteractiveShell):
     _execute_request_timeout: ContextVar[float | None] = ContextVar("execute_request_timeout", default=None)
 
     @default("banner1")
-    def _default_banner1(self):
+    def _default_banner1(self) -> str:
         return (
             f"Python {sys.version}\n"
             f"Async kernel ({self.kernel.kernel_name})\n"
@@ -146,53 +147,59 @@ class AsyncInteractiveShell(InteractiveShell):
     autoindent = CBool(False)
 
     @property
-    def execute_request_timeout(self):
+    def execute_request_timeout(self) -> float | None:
+        """A timeout in context of the [run_cell_async][async_kernel.Kernel.AsyncInteractiveShell].
+
+        See also:
+        - [async_kernel.typing.MetadataKeys.timeout][].
+        - 
+        """
         return self._execute_request_timeout.get()
 
     @execute_request_timeout.setter
-    def execute_request_timeout(self, value: float | None):
+    def execute_request_timeout(self, value: float | None) -> None:
         self._execute_request_timeout.set(value)
 
     @observe("exit_now")
-    def _update_exit_now(self, _):
+    def _update_exit_now(self, _) -> None:
         """stop eventloop when exit_now fires"""
         if self.exit_now:
             self.kernel.stop()
 
-    def ask_exit(self):
+    def ask_exit(self) -> None:
         if self.kernel.raw_input("Are you sure you want to stop the kernel?\ny/[n]\n") == "y":
             self.exit_now = True
 
     @override
-    def init_create_namespaces(self, user_module=None, user_ns=None):
+    def init_create_namespaces(self, user_module=None, user_ns=None) -> None:
         return
 
     @override
-    def save_sys_module_state(self):
+    def save_sys_module_state(self) -> None:
         return
 
     @override
-    def init_sys_modules(self):
+    def init_sys_modules(self) -> None:
         return
 
     @property
     @override
-    def execution_count(self):
+    def execution_count(self) -> int:
         return self.kernel.execution_count
 
     @execution_count.setter
-    def execution_count(self, value):
+    def execution_count(self, value) -> None:
         return
 
     @property
     @override
-    def user_ns(self):
+    def user_ns(self) -> dict[Any, Any]:
         if not hasattr(self, "_user_ns"):
             self.user_ns = {}
         return self._user_ns
 
     @user_ns.setter
-    def user_ns(self, ns: dict):
+    def user_ns(self, ns: dict) -> None:
         assert hasattr(ns, "clear")
         assert isinstance(ns, dict)
         self._user_ns = ns
@@ -200,12 +207,12 @@ class AsyncInteractiveShell(InteractiveShell):
 
     @property
     @override
-    def user_global_ns(self):
+    def user_global_ns(self) -> dict[Any, Any]:
         return self.user_ns
 
     @property
     @override
-    def ns_table(self):
+    def ns_table(self) -> dict[str, dict[Any, Any] | dict[str, Any]]:
         return {"user_global": self.user_ns, "user_local": self.user_ns, "builtin": builtins.__dict__}
 
     @override
@@ -220,6 +227,11 @@ class AsyncInteractiveShell(InteractiveShell):
         preprocessing_exc_tuple: tuple | None = None,
         cell_id: str | None = None,
     ) -> ExecutionResult:
+        """Run a complete IPython cell asynchronously. 
+
+        This function runs [execute requests][async_kernel.Kernel.execute_request] for the kernel
+        wrapping [InteractiveShell][IPython.core.interactiveshell.InteractiveShell.run_cell_async].
+        """
         with anyio.fail_after(delay=self.execute_request_timeout):
             result: ExecutionResult = await super().run_cell_async(
                 raw_cell=raw_cell,
@@ -236,7 +248,7 @@ class AsyncInteractiveShell(InteractiveShell):
         return result
 
     @override
-    def _showtraceback(self, etype, evalue, stb):
+    def _showtraceback(self, etype, evalue, stb) -> None:
         if Tags.do_not_publish_error in async_kernel.utils.get_tags():
             return
         if self.execute_request_timeout is not None and etype is self.kernel.CancelledError:
@@ -247,22 +259,22 @@ class AsyncInteractiveShell(InteractiveShell):
         )
 
     @override
-    def init_magics(self):
+    def init_magics(self) -> None:
         """Initialize magics."""
         super().init_magics()
         self.register_magics(KernelMagics)
 
     @override
-    def enable_gui(self, gui=None):
+    def enable_gui(self, gui=None) -> None:
         pass
 
 
 @magics_class
 class KernelMagics(Magics):
-    """Kernel magics."""
+    """Extra magics for async kernel."""
 
     @line_magic
-    def connect_info(self, _):
+    def connect_info(self, _) -> None:
         """Print information for connecting other clients to this kernel."""
 
         kernel = async_kernel.Kernel()
@@ -285,7 +297,8 @@ class KernelMagics(Magics):
         )
 
     @line_magic
-    def callers(self, _):
+    def callers(self, _) -> None:
+        "Print a table of [Callers][async_kernel.Callers], indicating if it is acttive, protect and on the current thread."
         lines = ["\t".join(["Active", "Protected", "\t", "Name"]), "─" * 70]
         for caller in Caller.all_callers(active_only=False):
             symbol = "   ✓" if caller.active else "   ✗"

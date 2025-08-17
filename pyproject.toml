@@ -45,6 +45,7 @@ docs = ["mkdocs-material",
     "mkdocstrings[python]",
     "mkdocs-jupyter",
     "mkdocs-open-in-new-tab",
+    "mkdocs-git-revision-date-localized-plugin",
     "jupyterlab",
     "ipywidgets"
 ]
