@@ -3,7 +3,6 @@
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
 
-
 import contextlib
 import inspect
 import threading
@@ -55,8 +54,6 @@ class TestFuture:
         async with Caller(create=True):
             fut.add_done_callback(callback)
             await after_done.wait()
-
-
 
     async def test_set_and_wait_exception(self):
         fut = Future()
@@ -110,7 +107,6 @@ class TestFuture:
         assert fut.cancel()
         with pytest.raises(FutureCancelledError):
             fut.exception()
-
 
     def test_error_from_non_thread(self):
         fut = Future(thread=threading.Thread())
@@ -170,7 +166,7 @@ class TestCaller:
             assert (await fut) == args_kwargs
 
     async def test_anyio_to_thread(self):
-        # Test the call works from another thread
+        # Test the call works from an anyio thread
         async with Caller(create=True) as caller:
             assert caller.active
             assert caller in Caller.all_callers()
@@ -334,10 +330,39 @@ class TestCaller:
             with pytest.raises(FutureCancelledError):
                 await item
 
-    async def test_call_early(self, anyio_backend):
+    async def test__check_in_thread(self, anyio_backend):
+        Caller.to_thread(anyio.sleep, 0.1)
+        worker = next(iter(Caller.all_callers()))
+        assert not worker.protected
+        with pytest.raises(RuntimeError):
+            worker._check_in_thread()  # pyright: ignore[reportPrivateUsage]
+
+    async def test_execution_queue(self, anyio_backend):
+        results = []
+
+        async def my_func(a, b, c):
+            await anyio.sleep(0.01)
+            assert c == a + b
+            results.append(c)
+
+        async with Caller(create=True) as caller:
+            assert not caller.has_execution_queue(my_func)
+            assert not await caller.queue_close(my_func)
+            for i in range(4):
+                force = bool(i % 2)
+                results.clear()
+                await caller.queue_call(my_func, 0, 0, 0, max_buffer_size=i)
+                assert caller.has_execution_queue(my_func)
+                for j in range(1, 20):
+                    await caller.queue_call(my_func, 0, j, j)
+                assert await caller.queue_close(my_func, force=force)
+                if force:
+                    assert len(results) < 20, "Should exit early"
+                else:
+                    assert results == list(range(20)), "Should empty queue prior"
+
+    async def test_call_early(self, anyio_backend) -> None:
         caller = Caller(create=True)
-        with pytest.raises(RuntimeError, match=".*not currently open in an async context"):
-            caller.taskgroup  # noqa: B018
         fut = caller.call_soon(time.sleep, 0.1)
         await anyio.sleep(0.1)
         assert not fut.done()

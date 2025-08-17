@@ -151,8 +151,8 @@ class AsyncInteractiveShell(InteractiveShell):
         """A timeout in context of the [run_cell_async][async_kernel.Kernel.AsyncInteractiveShell].
 
         See also:
+        
         - [async_kernel.typing.MetadataKeys.timeout][].
-        - 
         """
         return self._execute_request_timeout.get()
 
@@ -227,7 +227,7 @@ class AsyncInteractiveShell(InteractiveShell):
         preprocessing_exc_tuple: tuple | None = None,
         cell_id: str | None = None,
     ) -> ExecutionResult:
-        """Run a complete IPython cell asynchronously. 
+        """Run a complete IPython cell asynchronously.
 
         This function runs [execute requests][async_kernel.Kernel.execute_request] for the kernel
         wrapping [InteractiveShell][IPython.core.interactiveshell.InteractiveShell.run_cell_async].

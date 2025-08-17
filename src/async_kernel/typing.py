@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import enum
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, ParamSpec, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, ParamSpec, TypedDict, TypeVar, TypeVarTuple
 
 from typing_extensions import Sentinel
 
@@ -13,7 +13,17 @@ if TYPE_CHECKING:
 
     import zmq
 
-__all__ = ["DebugMessage", "ExecuteMode", "Job", "Message", "MetadataKeys", "MsgHeader", "MsgType", "SocketID", "Tags"]
+__all__ = [
+    "DebugMessage",
+    "ExecuteMode",
+    "Job",
+    "Message",
+    "MetadataKeys",
+    "MsgHeader",
+    "MsgType",
+    "SocketID",
+    "Tags",
+]
 
 NoValue = Sentinel("NoValue")
 
@@ -21,10 +31,12 @@ NoValue = Sentinel("NoValue")
 T = TypeVar("T")
 D = TypeVar("D", bound=dict)
 P = ParamSpec("P")
+PosArgsT = TypeVarTuple("PosArgsT")
 
 
 class SocketID(enum.StrEnum):
     "Mapping of `Kernel.port_<id>` for sockets. [Ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#introduction)."
+
     heartbeat = "hb"
     ""
     shell = "shell"
@@ -40,6 +52,7 @@ class SocketID(enum.StrEnum):
 EXECUTE_MODE_PREFIX: Final = "##"
 "The Prefix used for [ExecuteMode][async_kernel.typing.ExecuteMode] identifiers."
 
+
 class ExecuteMode(enum.StrEnum):
     "An Enum of the Execute modes available for altering how [execute requests](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute) are handled."
 
@@ -53,9 +66,9 @@ class ExecuteMode(enum.StrEnum):
 
 class MsgType(enum.StrEnum):
     """An enumeration of Message `msg_type` for [shell and control messages]( https://jupyter-client.readthedocs.io/en/stable/messaging.html#messages-on-the-shell-router-dealer-channel).
-    
-    
-    
+
+
+
     [Control channel](https://jupyter-client.readthedocs.io/en/stable/messaging.html#messages-on-the-control-router-dealer-channel) only
     """
 
@@ -120,6 +133,7 @@ class Tags(enum.StrEnum):
 
 class MsgHeader(TypedDict):
     ""
+
     # https://jupyter-client.readthedocs.io/en/stable/messaging.html#message-header
     msg_id: str
     session: str
@@ -131,6 +145,7 @@ class MsgHeader(TypedDict):
 
 class Message(TypedDict, Generic[T]):
     "A [message](https://jupyter-client.readthedocs.io/en/stable/messaging.html#general-message-format)."
+
     header: MsgHeader
     "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#message-header)"
     parent_header: MsgHeader
@@ -165,6 +180,7 @@ class Job(TypedDict, Generic[T]):
 
 class ExecuteContent(TypedDict):
     "[Ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute).  see also: [Message][async_kernel.typing.Message]"
+
     code: str
     "The code to execute."
     silent: bool

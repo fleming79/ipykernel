@@ -20,7 +20,7 @@ import sniffio
 from typing_extensions import override
 from zmq import Context, Socket, SocketType
 
-from async_kernel.typing import NoValue, T
+from async_kernel.typing import NoValue, PosArgsT, T
 from async_kernel.utils import wait_thread_event
 
 if TYPE_CHECKING:
@@ -135,9 +135,7 @@ class Future(Awaitable[T]):
             try:
                 Caller(self.thread).call_no_context(func=set_value)
             except RuntimeError:
-                msg = (
-                    f"The current thread is not {self.thread.name} and a `Caller` does not exist for that thread either."
-                )
+                msg = f"The current thread is not {self.thread.name} and a `Caller` does not exist for that thread either."
                 raise RuntimeError(msg) from None
         else:
             set_value()
@@ -150,7 +148,7 @@ class Future(Awaitable[T]):
 
     def add_done_callback(self, fn: Callable[[Self], object]) -> None:
         """Add a callback for when the callback is done (not thread-safe).
-        
+
         If the Future is already done it will be scheduled for calling.
 
         The result of the future and done callbacks are always called for the futures thread.
@@ -181,10 +179,10 @@ class Future(Awaitable[T]):
 
     def exception(self) -> BaseException | None:
         """Return the exception that was set on the Future.
-        
+
         If the Future has been cancelled, this method raises a [FutureCancelledError][async_kernel.caller.FutureCancelledError] exception.
 
-        If the Future isn’t done yet, this method raises an [InvalidStateError][async_kernel.caller.InvalidStateError] exception.
+        If the Future isn't done yet, this method raises an [InvalidStateError][async_kernel.caller.InvalidStateError] exception.
         """
         if self._cancelled:
             raise FutureCancelledError
@@ -236,7 +234,9 @@ class Caller:
     _outstanding = 0
     _to_thread_pool: ClassVar[deque[Self]] = deque()
     _pool_instances: ClassVar[weakref.WeakSet[Self]] = weakref.WeakSet()
+    _executor_queue: dict
     MAX_IDLE_POOL_INSTANCES = 10
+    MAX_BUFFER_SIZE = 1000
     _taskgroup: TaskGroup | None = None
     _jobs: deque[tuple[contextvars.Context, tuple[Future, float, float, Callable, tuple, dict]] | Callable[[], Any]]
     _jobs_added: threading.Event
@@ -265,7 +265,9 @@ class Caller:
             inst._jobs = deque()
             inst._jobs_added = threading.Event()
             inst._protected = protected
+            inst._executor_queue = {}
             cls._instances[thread] = inst
+
         return inst
 
     @override
@@ -287,12 +289,11 @@ class Caller:
             await self.__stack.__aexit__(exc_type, exc_value, exc_tb)
 
     async def _server_loop(self, tg: TaskGroup, task_status: TaskStatus[None]) -> None:
-        thread = threading.current_thread()
         socket = Context.instance().socket(SocketType.PUB)
         socket.linger = 500
         socket.connect(self.iopub_url)
         try:
-            self.iopub_sockets[thread] = socket
+            self.iopub_sockets[self.thread] = socket
             task_status.started()
             while not self._stopped:
                 while len(self._jobs):
@@ -313,8 +314,8 @@ class Caller:
                 if not callable(job):
                     job[1][0].set_exception(FutureCancelledError())
             socket.close()
-            self.iopub_sockets.pop(thread, None)
-            self.taskgroup.cancel_scope.cancel()
+            self.iopub_sockets.pop(self.thread, None)
+            tg.cancel_scope.cancel()
 
     async def _wrap_call(
         self,
@@ -359,12 +360,15 @@ class Caller:
             else:
                 self.stop()
 
+    def _check_in_thread(self):
+        if self.thread is not threading.current_thread():
+            msg = "This function must be called from its own thread. Tip: Use `call_no_context` to call this method from another thread."
+            raise RuntimeError(msg)
+
     @property
-    def taskgroup(self) -> TaskGroup:
-        if tg := self._taskgroup:
-            return tg
-        msg = f"{self}  is not currently open in an async context."
-        raise RuntimeError(msg)
+    def protected(self) -> bool:
+        "Returns `True` when the instance is protected from stopping."
+        return self._protected
 
     @property
     def stopped(self) -> bool:
@@ -426,10 +430,70 @@ class Caller:
         self._jobs.append(functools.partial(func, *args, **kwargs))
         self._jobs_added.set()
 
-    @property
-    def protected(self) -> bool:
-        "Returns `True` when the instance is protected from stopping."
-        return self._protected
+    def has_execution_queue(self, func: Callable) -> bool:
+        "Returns True if an execution queue exists for `func`."
+        return func in self._executor_queue
+
+    async def queue_call(
+        self,
+        func: Callable[[*PosArgsT], Awaitable[Any]],
+        *args: *PosArgsT,
+        max_buffer_size: NoValue | int = NoValue,  # pyright: ignore[reportInvalidTypeForm]
+    ) -> None:
+        """Queues the execution of func with the given arguments (not thread-safe).
+
+        The args are added to a queue associated with the provided `func`. If queue does not already exist for
+        func, a new queue is created with a specified maximum buffer size. The arguments are then sent to the queue,
+        and an `execute_loop` coroutine is started to consume the queue and execute the function with the received
+        arguments.  Exceptions during execution are caught and logged.
+
+        Args:
+            func: The asynchronous function to execute.
+            *args: The arguments to pass to the function.
+            max_buffer_size: The maximum buffer size for the queue. If NoValue, defaults to [async_kernel.Caller.MAX_BUFFER_SIZE].
+
+        For usage see [handle_message_request][async_kernel.Kernel.handle_message_request].
+        """
+        self._check_in_thread()
+        if not self.has_execution_queue(func):
+            max_buffer_size = self.MAX_BUFFER_SIZE if max_buffer_size is NoValue else max_buffer_size
+            sender, queue = anyio.create_memory_object_stream[tuple[*PosArgsT]](max_buffer_size=max_buffer_size)
+
+            async def execute_loop():
+                try:
+                    with contextlib.suppress(anyio.get_cancelled_exc_class()):
+                        async with queue as receive_stream:
+                            async for args in receive_stream:
+                                try:
+                                    await func(*args)
+                                except Exception as e:
+                                    self.log.exception("Execution %f failed", func, exc_info=e)
+                finally:
+                    self._executor_queue.pop(execute_loop, None)
+
+            self._executor_queue[func] = {"queue": sender, "future": self.call_soon(execute_loop)}
+        await self._executor_queue[func]["queue"].send(args)
+
+    async def queue_close(self, func: Callable, *, force=False) -> bool:
+        """Close the execution queue associated with func (not thread-safe).
+
+        Args:
+            func: The queue of the function to close.
+            force: Shutdown without waiting pending tasks to complete.
+
+        Returns:
+            True if a queue was closed.
+        """
+        self._check_in_thread()
+        if queue_map := self._executor_queue.pop(func, None):
+            if force:
+                queue_map["future"].cancel()
+            else:
+                await queue_map["queue"].aclose()
+            with contextlib.suppress(FutureCancelledError):
+                await queue_map["future"]
+            return True
+        return False
 
     @classmethod
     def stop_all(cls, *, _stop_protected=False) -> None:
@@ -478,10 +542,6 @@ class Caller:
 
         Returns:
             A future that can be awaited for the  result of func.
-
-
-
-
         """
         caller = (
             cls._to_thread_pool.popleft()
@@ -541,12 +601,12 @@ class Caller:
         max_concurrent: NoValue | int = NoValue,  # pyright: ignore[reportInvalidTypeForm]
     ) -> AsyncGenerator[Future[T], Any]:
         """An iterator to get Futures as they complete.
+
         Args:
             items: Either a container with existing futures or generator of Futures.
-            max_concurrent: The maximum number of concurrent futures to monitor at a time. 
-                This is useful when `items` is a generator utilising Caller.to_thread. 
+            max_concurrent: The maximum number of concurrent futures to monitor at a time.
+                This is useful when `items` is a generator utilising Caller.to_thread.
                 By default this will limit to `Caller.MAX_IDLE_POOL_INSTANCES`.
-
 
         !!! Tip:
             1. Pass a generator should you wish to limit the number future jobs when calling to_thread/to_task etc.
@@ -610,7 +670,7 @@ class Caller:
     @classmethod
     def all_callers(cls, active_only=True) -> list[Caller]:
         """A classmethod to get a list of the callers.
-        
+
         Args:
             active_only: Restrict the list to callers that are active (running in an async context).
         """

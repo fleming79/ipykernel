@@ -199,6 +199,7 @@ class Kernel(ConnectionFileMixin):
         ["tcp", "ipc"] if sys.platform == "linux" else ["tcp"], default_value="tcp", config=True
     )
     cell_execute_timeout = Float(None, allow_none=True)
+    "A default timeout to apply to use for non-silent [execute requests][async_kernel.Kernel.execute_request]."
 
     def __new__(cls, **kwargs) -> Self:  # noqa: ARG004
         #  There is only one instance.
@@ -329,15 +330,15 @@ class Kernel(ConnectionFileMixin):
         if self.connection_file and Path(self.connection_file).exists():
             self.load_connection_file()
         try:
-            async with Caller(log=self.log, create=True, protected=True) as tc:
-                tg = tc.taskgroup
+            async with Caller(log=self.log, create=True, protected=True) as caller:
+                tg = caller._taskgroup  # pyright: ignore[reportPrivateUsage]
+                assert tg
                 await tg.start(self._wait_stopped)
                 try:
                     await tg.start(self._start_heartbeat)
                     await tg.start(self._start_stdin)
                     await tg.start(self._start_iopub_proxy)
                     await tg.start(self._start_control_loop)
-                    await tg.start(self._shell_execute_request_queue)
                     await tg.start(self._receive_msg_loop, SocketID.shell)
                     assert len(self._sockets) == len(SocketID)
                     if not self.connection_file:
@@ -450,7 +451,8 @@ class Kernel(ConnectionFileMixin):
 
     async def _start_control_loop(self, task_status: TaskStatus[None]) -> None:
         async def run_in_control_event_loop():
-            await caller.taskgroup.start(self._receive_msg_loop, SocketID.control)
+            assert caller._taskgroup  # pyright: ignore[reportPrivateUsage]
+            await caller._taskgroup.start(self._receive_msg_loop, SocketID.control)  # pyright: ignore[reportPrivateUsage]
             ready_event.set()
 
         self.control_thread_caller = caller = Caller.start_new(
@@ -496,7 +498,7 @@ class Kernel(ConnectionFileMixin):
                                 # Reset the frame to show the main thread is not blocked.
                                 self._last_interrupt_frame = None
                             self.log.debug("*** _receive_msg_loop %s*** %s", socket_id, msg)
-                            await self.map_message_to_handler(
+                            await self.handle_message_request(
                                 Job(
                                     socket_id=socket_id,
                                     socket=socket,
@@ -634,32 +636,18 @@ class Kernel(ConnectionFileMixin):
                 raise KernelInterruptError
         return self.session.recv(socket)[1]["content"]["value"]  # pyright: ignore[reportOptionalSubscript]
 
-    async def _shell_execute_request_queue(self, *, task_status: TaskStatus[None]) -> None:
-        self._execute_request_queue, queue = anyio.create_memory_object_stream[Job](max_buffer_size=1000)
-        with contextlib.suppress(self.CancelledError):
-            async with queue as receive_stream:
-                task_status.started()
-                async for job in receive_stream:
-                    await self.execute_request(job)
-
-    async def map_message_to_handler(self, job: Job) -> None:
-        """Maps the Job wrapped message to the handler based on the message type.
-
-        [Execute requests][async_kernel.types.MsgType.execute_request]
+    async def handle_message_request(self, job: Job) -> None:
+        """The main handler for all shell and control messages.
 
         Args:
-            job: A dictionary containing the message to be processed, including its
-                type, socket ID, and content.
-
-        Returns:
-            None
+            job: The packed [message][async_kernel.typing.Message] for handling.
         """
         match job["msg"]["header"]["msg_type"]:
             case MsgType.execute_request:
                 if self.get_execute_mode(job) is ExecuteMode.queue:
-                    await self._execute_request_queue.send(job)
+                    await Caller().queue_call(self.execute_request, job)
                 else:
-                    Caller().taskgroup.start_soon(self.execute_request, job)
+                    Caller().call_soon(self.execute_request, job)
             case _ as msg_type:
                 await self._run_handler(self.message_handlers[job["socket_id"]].get(msg_type), job)
 

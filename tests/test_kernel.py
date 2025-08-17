@@ -62,6 +62,13 @@ async def test_iopub(kernel, mode: Literal["direct", "proxy"]):
         ctx.term()
 
 
+async def test_execute_request_success(client):
+    reply = await utils.send_shell_message(client, "execute_request", {"code": "1 + 1", "silent": False})
+    assert reply["header"]["msg_type"] == "execute_reply"
+    assert reply["content"]["status"] == "ok"
+    await utils.clear_iopub(client)
+
+
 @pytest.mark.parametrize("quiet", [True, False])
 async def test_simple_print(kernel, client, quiet: bool):
     """simple print statement in kernel"""
@@ -210,13 +217,6 @@ async def test_message_order(client):
         reply = await client.get_shell_msg()
         assert reply["content"]["execution_count"] == i
         assert reply["parent_header"]["msg_id"] == msg_id
-    await utils.clear_iopub(client)
-
-
-async def test_execute_request_success(client):
-    reply = await utils.send_shell_message(client, "execute_request", {"code": "1 + 1", "silent": False})
-    assert reply["header"]["msg_type"] == "execute_reply"
-    assert reply["content"]["status"] == "ok"
     await utils.clear_iopub(client)
 
 
