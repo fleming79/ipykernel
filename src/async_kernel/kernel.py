@@ -171,10 +171,10 @@ class KernelInterruptError(InterruptedError):
 
 
 class Kernel(ConnectionFileMixin):
-    """An asynchronous kernel with an anyio backend providing an IPython AsyncInteractiveShell with zmq sockets.     
+    """An asynchronous kernel with an anyio backend providing an IPython AsyncInteractiveShell with zmq sockets.
 
     Only one instance will be created/run at a time. The instance can be obtained with `Kernel()`.
-    
+
     To start the kernel:
 
 
@@ -188,7 +188,7 @@ class Kernel(ConnectionFileMixin):
 
         See also:
 
-        - 
+        -
 
     === "Normal"
         ``` python
@@ -734,7 +734,7 @@ class Kernel(ConnectionFileMixin):
     async def run_handler(self, handler: HandlerType, job: Job) -> None:
         """Runs the handler in the context of the job/message sending the reply content if it is provided.
 
-        This method gets called for every valid request with the relevent handler.
+        This method gets called for every valid request with the relevant handler.
         """
         self._job_var.set(job)
         try:

@@ -18,7 +18,7 @@ from IPython.core.interactiveshell import ExecutionResult, InteractiveShell, Int
 from IPython.core.magic import Magics, line_magic, magics_class
 from jupyter_client.jsonutil import json_default
 from jupyter_core.paths import jupyter_runtime_dir
-from traitlets import CBool, Dict, Instance, Type, default, observe
+from traitlets import Dict, Instance, Type, default, observe
 from typing_extensions import override
 
 import async_kernel
@@ -124,8 +124,8 @@ class AsyncInteractiveShell(InteractiveShell):
         - Supports a soft timeout with the metadata {"timeout":<value in seconds>}[^1].
 
             [^1]: When the execution time exceeds the timeout value, the code execution will "move on".
-        - Not all features are support (see "not-supported" featues listed below).
-            
+        - Not all features are support (see "not-supported" features listed below).
+
     """
 
     displayhook_class = Type(AsyncDisplayHook)
@@ -158,7 +158,6 @@ class AsyncInteractiveShell(InteractiveShell):
             f"Async kernel ({self.kernel.kernel_name})\n"
             f"IPython shell {IPython.core.release.version}\n"
         )
-
 
     @property
     def kernel(self) -> Kernel:

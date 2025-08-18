@@ -105,7 +105,6 @@ def test_start_kernel_success(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Starting kernel" in out
     assert "Kernel stopped" in out
-    utils.clear_kernel()
 
 
 def test_start_kernel_failure(monkeypatch, capsys, mocker):
