@@ -155,7 +155,7 @@ nav:
     - Notebooks:
       - Overview: notebooks/overview.md
       - Simple example: notebooks/simple_example.ipynb
-      - Execute mode: notebooks/execute_mode.ipynb
+      - Execute mode: notebooks/run_mode.ipynb
       - Caller notebook: notebooks/caller.ipynb
     - Command line: command_line.md
   - Reference:

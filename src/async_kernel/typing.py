@@ -6,7 +6,7 @@ from __future__ import annotations
 import enum
 from collections.abc import Callable
 from types import CoroutineType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NotRequired, ParamSpec, TypedDict, TypeVar, TypeVarTuple
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, ParamSpec, TypedDict, TypeVar, TypeVarTuple
 
 from typing_extensions import Sentinel
 
@@ -64,6 +64,8 @@ class RunMode(enum.StrEnum):
     task = "task"
     "Execute as a task in the MainThread."
     thread = "thread"
+    "Execute in a caller worker thread."
+    thread_ = "thread"
     "Execute in a caller worker thread."
     wait = "wait"
     """Wait for the message to execute.
@@ -191,7 +193,7 @@ class Job(TypedDict, Generic[T]):
     ""
     received_time: float
     "The time the message was received."
-    run_mode: NotRequired[RunMode]
+    run_mode: RunMode
     """The run mode."""
 
 
@@ -201,15 +203,15 @@ class ExecuteContent(TypedDict):
     code: str
     "The code to execute."
     silent: bool
-    "Modifies how code is executed. See also [get_run_mode][async_kernel.kernel.get_run_mode]."
+    "See [Ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute)."
     store_history: bool
-    "See ref."
+    "See [Ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute)."
     user_expressions: dict[str, str]
-    "See ref."
+    "See [Ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute)."
     allow_stdin: bool
-    "See ref."
+    "See [Ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute)."
     stop_on_error: bool
-    "See ref."
+    "See [Ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute)."
 
 
 DebugMessage = dict[str, Any]

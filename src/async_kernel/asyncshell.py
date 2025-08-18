@@ -74,7 +74,6 @@ class AsyncDisplayHook(DisplayHook):
 class AsyncDisplayPublisher(DisplayPublisher):
     """A display publisher that publishes data using a ZeroMQ PUB socket."""
 
-    kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
     topic: ClassVar = b"display_data"
 
     @override
@@ -98,7 +97,7 @@ class AsyncDisplayPublisher(DisplayPublisher):
 
         [Reference](https://jupyter-client.readthedocs.io/en/stable/messaging.html#update-display-data)
         """
-        self.kernel.iopub_send(
+        async_kernel.Kernel().iopub_send(
             msg_or_type="update_display_data" if update else "display_data",
             content={"data": data, "metadata": metadata or {}, "transient": transient or {}} | kwargs,
             ident=self.topic,
@@ -113,7 +112,7 @@ class AsyncDisplayPublisher(DisplayPublisher):
                 instead waiting for the next display before clearing.
                 This reduces bounce during repeated clear & display loops.
         """
-        self.kernel.iopub_send(msg_or_type="clear_output", content={"wait": wait}, ident=self.topic)
+        async_kernel.Kernel().iopub_send(msg_or_type="clear_output", content={"wait": wait}, ident=self.topic)
 
 
 class AsyncInteractiveShell(InteractiveShell):
@@ -123,7 +122,6 @@ class AsyncInteractiveShell(InteractiveShell):
     display_pub_class = Type(AsyncDisplayPublisher)
     displayhook: Instance[AsyncDisplayHook]
     display_pub: Instance[AsyncDisplayPublisher]
-    kernel: Instance[Kernel] = Instance("async_kernel.Kernel", ())
     compiler_class = Type(XCachingCompiler)
     compile: Instance[XCachingCompiler]
     user_ns_hidden = Dict()
@@ -145,6 +143,11 @@ class AsyncInteractiveShell(InteractiveShell):
     # autoindent has no meaning in a zmqshell, and attempting to enable it
     # will print a warning in the absence of readline.
     autoindent = CBool(False)
+
+    @property
+    def kernel(self) -> Kernel:
+        "The current kernel."
+        return async_kernel.Kernel()
 
     @property
     def execute_request_timeout(self) -> float | None:

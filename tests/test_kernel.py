@@ -509,7 +509,7 @@ async def test_invalid_message(client, channel):
     f = utils.send_control_message if channel == "control" else utils.send_shell_message
     response = None
     with anyio.move_on_after(0.1):
-        response = await f(client, "test_invalid_message")
+        response = await f(client, "test_invalid_message")  # pyright: ignore[reportArgumentType]
     assert response is None
     await utils.clear_iopub(client)
 
@@ -527,15 +527,15 @@ async def test_invalid_message(client, channel):
         (f"{RUN_MODE_PREFIX}Task", False, SocketID.shell, RunMode.queue),
     ],
 )
-def test_get_run_mode_execute_request(code: str, silent: bool, socket_id, expected: RunMode):
+async def test_get_run_mode_execute_request(kernel:Kernel, code: str, silent: bool, socket_id, expected: RunMode):
     content = ExecuteContent(
         code=code, silent=silent, store_history=True, user_expressions={}, allow_stdin=False, stop_on_error=True
     )
     header = MsgHeader(msg_id="", session="", username="", date="", msg_type=MsgType.execute_request, version="1")
     msg = Message(header=header, parent_header=header, metadata={}, buffers=[], content=content)
     socket = cast("zmq.Socket[Any]", None)  # pyright: ignore[reportInvalidCast]
-    job = Job(msg=msg, socket_id=socket_id, ident=[b""], socket=socket, received_time=0.0)
-    mode = async_kernel.Kernel.get_run_mode(job)
+    job = Job(msg=msg, socket_id=socket_id, ident=[b""], socket=socket, received_time=0.0, run_mode=None)  # pyright: ignore[reportArgumentType]
+    _, mode = await kernel.get_handler_and_run_mode(job)
     assert mode is expected
     assert job.get("run_mode") is expected
 
