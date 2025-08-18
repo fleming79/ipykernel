@@ -4,11 +4,10 @@
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable
-from types import CoroutineType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, ParamSpec, TypedDict, TypeVar, TypeVarTuple
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Generic, Literal, ParamSpec, TypedDict, TypeVar, TypeVarTuple
 
-from typing_extensions import Sentinel
+from typing_extensions import Sentinel, override
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -16,8 +15,6 @@ if TYPE_CHECKING:
     import zmq
 
 __all__ = [
-    "CODE_MODE_MAPPINGS",
-    "RUN_MODE_PREFIX",
     "DebugMessage",
     "Job",
     "Message",
@@ -53,27 +50,60 @@ class SocketID(enum.StrEnum):
     ""
 
 
-RUN_MODE_PREFIX: Final = "##"  # "The Prefix used for [RunMode][async_kernel.typing.RunMode] identifiers."
-
-
 class RunMode(enum.StrEnum):
-    "An Enum of the Run modes available for altering how jobs are(https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute) are handled."
+    """An Enum of the [kernel run modes][async_kernel.Kernel.handle_message_request] available for
+    altering how message requests are run.
+
+    !!! note "Prefix '##'"
+
+        Run mode is matched for both mode without the prefix ("##").
+
+    !!! note "special usage"
+
+        Run mode can be used in [execute requests](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute).
+        Add it at the top line (or use the string equivalent "##<run mode>") of a code cell.
+    """
+
+    "The prefix for each run mode."
 
     queue = "queue"
-    "Add to the execute_request queue."
+    "The message for the [handler][async_kernel.typing.MsgType] is run sequentially with other messages that are queued."
     task = "task"
-    "Execute as a task in the MainThread."
+    "The message for the [handler][async_kernel.typing.MsgType] are run concurrently in task (starting immediately)."
     thread = "thread"
-    "Execute in a caller worker thread."
-    thread_ = "thread"
-    "Execute in a caller worker thread."
-    wait = "wait"
-    """Wait for the message to execute.
+    "Messages for the [handler][async_kernel.typing.MsgType] are run concurrently in a thread (starting immediately)."
+    direct = "direct"
+    """Run the handler directly as soon as it is received.
+    
+    !!! warning 
+    
+        **This mode blocks the message loop.** 
+        
+        Use this for short running messages that should be processed as soon as it is received.
+        """
 
-    This blocks the message loop"""
+    @override
+    def __str__(self):
+        return f"##{self.name}"
 
+    @override
+    def __eq__(self, value: object, /) -> bool:
+        return str(value) in (self.name, str(self), repr(self))
 
-CODE_MODE_MAPPINGS: Final[dict[str, RunMode]] = {f"{RUN_MODE_PREFIX}{mode}": mode for mode in RunMode}
+    @override
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    @classmethod
+    def get_mode(cls, code: str) -> RunMode | None:
+        "Get a RunMode from the code if it is found."
+        try:
+            if (code := code.strip().split("\n")[0].strip()).startswith("##"):
+                return RunMode(code.removeprefix("##"))
+            if code.startswith("RunMode."):
+                return RunMode(code.removeprefix("RunMode."))
+        except ValueError:
+            return None
 
 
 class MsgType(enum.StrEnum):
@@ -85,32 +115,32 @@ class MsgType(enum.StrEnum):
     """
 
     kernel_info_request = "kernel_info_request"
-    "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#kernel-info)"
+    "[async_kernel.Kernel.kernel_info_request][]"
     comm_info_request = "comm_info_request"
-    "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#comm-info)"
+    "[async_kernel.Kernel.comm_info_request][]"
     execute_request = "execute_request"
-    "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute)"
+    "[async_kernel.Kernel.execute_request][]"
     complete_request = "complete_request"
-    "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#completion)"
+    "[async_kernel.Kernel.complete_request][]"
     is_complete_request = "is_complete_request"
-    "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#code-completeness)"
+    "[async_kernel.Kernel.is_complete_request][]"
     inspect_request = "inspect_request"
-    "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#introspection)"
+    "[async_kernel.Kernel.inspect_request][]"
     history_request = "history_request"
-    "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#history)"
+    "[async_kernel.Kernel.history_request][]"
     comm_open = "comm_open"
-    "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#opening-a-comm)"
+    "[async_kernel.Kernel.comm_open][]"
     comm_msg = "comm_msg"
-    "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#comm-messages)"
+    "[async_kernel.Kernel.comm_msg][]"
     comm_close = "comm_close"
-    "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#tearing-down-comms)"
+    "[async_kernel.Kernel.comm_close][]"
     # Control
     interrupt_request = "interrupt_request"
-    "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#kernel-interrupt) (control only)"
+    "[async_kernel.Kernel.interrupt_request][]"
     shutdown_request = "shutdown_request"
-    "[ref](shutdown_request) (control only)"
+    "[async_kernel.Kernel.shutdown_request][]"
     debug_request = "debug_request"
-    "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#debug-request) (control only)"
+    "[async_kernel.Kernel.debug_request][]"
 
 
 class MetadataKeys(enum.StrEnum):
@@ -138,9 +168,12 @@ class Tags(enum.StrEnum):
     """Tags recognised by the kernel"""
 
     suppress_error = "suppress-error"
-    """Ignore`stop_on_error` in context of the `execute request`."""
-    do_not_publish_error = "do-not-publish-error"
-    """Prevent the shell from publishing error messages in context of the `execute request`."""
+    """Suppress exceptions for the code code cell.
+    
+    !!! note "Warning"
+    
+        The code block will return as 'ok' and there will be no message recorded.
+    """
 
 
 class MsgHeader(TypedDict):
@@ -169,7 +202,7 @@ class Message(TypedDict, Generic[T]):
     "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#parent-header)"
     metadata: Mapping[MetadataKeys | str, Any]
     "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#metadata)"
-    content: T
+    content: T | Content
     """[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#metadata)
     
     See also:
@@ -215,4 +248,5 @@ class ExecuteContent(TypedDict):
 
 
 DebugMessage = dict[str, Any]
-HandlerType = Callable[[Job], CoroutineType]
+Content = dict[str, Any]
+HandlerType = Callable[[Job], Awaitable[Content | None]]

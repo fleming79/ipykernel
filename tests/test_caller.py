@@ -138,15 +138,19 @@ class TestCaller:
             caller.call_later(is_called.set)
             await is_called.wait()
 
-    def test_caller_no_thread(self):
+    def test_no_thread(self):
         with pytest.raises(RuntimeError):
             Caller()
 
-    def test_caller_protected(self):
+    async def test_protected(self, anyio_backend):
         caller = Caller(create=True, protected=True)
         caller.stop()
         assert not caller.stopped
         caller.stop(force=True)
+
+    def test_no_backend_error(self, anyio_backend):
+        with pytest.raises(RuntimeError):
+            Caller(create=True)
 
     @pytest.mark.parametrize("args_kwargs", [((), {}), ((1, 2, 3), {"a": 10})])
     async def test_async(self, args_kwargs: tuple[tuple, dict]):
@@ -168,7 +172,7 @@ class TestCaller:
     async def test_anyio_to_thread(self):
         # Test the call works from an anyio thread
         async with Caller(create=True) as caller:
-            assert caller.active
+            assert caller.running
             assert caller in Caller.all_callers()
 
             def _in_thread():

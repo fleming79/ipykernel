@@ -114,7 +114,7 @@ async def execute(client: AsyncKernelClient, /, code="", clear_pub=True, metadat
     return msg_id, reply["content"]
 
 
-async def assemble_output(client: AsyncKernelClient, timeout=TIMEOUT):
+async def assemble_output(client: AsyncKernelClient, timeout=TIMEOUT, exit_at_idle=True):
     """Assemble stdout/err from an execution"""
     assert isinstance(client, AsyncKernelClient)
     stdout = ""
@@ -125,11 +125,12 @@ async def assemble_output(client: AsyncKernelClient, timeout=TIMEOUT):
             msg = await client.get_iopub_msg()
             msg_type = msg["msg_type"]
             content = msg["content"]
-            if not done:
-                done = bool(msg_type == "status" and content["execution_state"] == "idle")
-            if done and (stdout or stderr):
-                # idle message signals end of output
-                break
+            if exit_at_idle:
+                if not done:
+                    done = bool(msg_type == "status" and content["execution_state"] == "idle")
+                if done and (stdout or stderr):
+                    # idle message signals end of output
+                    break
             if msg["msg_type"] == "stream":
                 if content["name"] == "stdout":
                     stdout += content["text"]
@@ -153,7 +154,7 @@ async def wait_for_idle(client: AsyncKernelClient, *, wait=1.0):
 
 async def clear_iopub(client, *, timeout=0.01):
     "Ensure there are no further iopub messages waiting."
-    await assemble_output(client, timeout=timeout)
+    await assemble_output(client, timeout=timeout, exit_at_idle=False)
 
 
 async def send_shell_message(

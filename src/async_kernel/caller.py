@@ -20,6 +20,7 @@ import sniffio
 from typing_extensions import override
 from zmq import Context, Socket, SocketType
 
+from async_kernel.kernelspec import Backend
 from async_kernel.typing import NoValue, PosArgsT, T
 from async_kernel.utils import wait_thread_event
 
@@ -133,7 +134,7 @@ class Future(Awaitable[T]):
 
         if threading.current_thread() is not self.thread:
             try:
-                Caller(self.thread).call_no_context(func=set_value)
+                Caller(thread=self.thread).call_no_context(set_value)
             except RuntimeError:
                 msg = f"The current thread is not {self.thread.name} and a `Caller` does not exist for that thread either."
                 raise RuntimeError(msg) from None
@@ -170,7 +171,7 @@ class Future(Awaitable[T]):
                 if threading.current_thread() is self.thread:
                     scope.cancel()
                 else:
-                    Caller(self.thread).call_no_context(self.cancel)
+                    Caller(thread=self.thread).call_no_context(self.cancel)
         return self.cancelled()
 
     def cancelled(self) -> bool:
@@ -209,7 +210,7 @@ class Future(Awaitable[T]):
 
     def get_caller(self) -> Caller:
         "The the Caller the Future's thread corresponds."
-        return Caller(self.thread)
+        return Caller(thread=self.thread)
 
 
 class Caller:
@@ -226,40 +227,69 @@ class Caller:
     provides methods to start, stop, and query the status of the caller.
     """
 
+    MAX_IDLE_POOL_INSTANCES = 10
+    "The number of `pool` instances to leave idle (See also[to_thread][async_kernel.Caller.to_thread])."
+    MAX_BUFFER_SIZE = 1000
+    "The default  maximum_buffer_size used in [queue_call][async_kernel.Caller.queue_call]."
     _instances: ClassVar[dict[threading.Thread, Self]] = {}
-    thread: threading.Thread
-    backend = ""
-    log: logging.LoggerAdapter[Any]
     __stack = None
     _outstanding = 0
     _to_thread_pool: ClassVar[deque[Self]] = deque()
     _pool_instances: ClassVar[weakref.WeakSet[Self]] = weakref.WeakSet()
     _executor_queue: dict
-    MAX_IDLE_POOL_INSTANCES = 10
-    MAX_BUFFER_SIZE = 1000
     _taskgroup: TaskGroup | None = None
     _jobs: deque[tuple[contextvars.Context, tuple[Future, float, float, Callable, tuple, dict]] | Callable[[], Any]]
     _jobs_added: threading.Event
     _stopped = False
     _protected = False
-    active = False
+    _running = False
+    thread: threading.Thread
+    "The thread in which the caller will run."
+    backend: Backend
+    "The `anyio` backend the caller is running in."
+    log: logging.LoggerAdapter[Any]
+    ""
     iopub_sockets: ClassVar[weakref.WeakKeyDictionary[threading.Thread, Socket]] = weakref.WeakKeyDictionary()
     iopub_url: ClassVar = "inproc://iopub"
 
     def __new__(
         cls,
-        thread: threading.Thread | None = None,
         *,
+        thread: threading.Thread | None = None,
         log: logging.LoggerAdapter | None = None,
         create=False,
         protected=False,
     ) -> Self:
+        """Create the `Caller` instance for the current thread or retrieve an existing instance
+            by passing the thread.
+
+        The caller provides a way to execute synchronous code in a separate
+        thread, and to call asynchronous code from synchronous code.
+
+        Args:
+            thread:
+            log: Logger to use for logging messages.
+            create: Whether to create a new instance if one does not exist for the current thread.
+            protected : Whether the caller is protected from having its event loop closed.
+
+        Returns
+        -------
+        Caller
+            The `Caller` instance for the current thread.
+
+        Raises
+        ------
+        RuntimeError
+            If `create` is False and a `Caller` instance does not exist.
+        """
+
         thread = thread or threading.current_thread()
         if not (inst := cls._instances.get(thread)):
             if not create:
                 msg = f"A caller is not provided for {thread=}"
                 raise RuntimeError(msg)
             inst = super().__new__(cls)
+            inst.backend = Backend(sniffio.current_async_library())
             inst.thread = thread
             inst.log = log or logging.LoggerAdapter(logging.getLogger())
             inst._jobs = deque()
@@ -267,7 +297,6 @@ class Caller:
             inst._protected = protected
             inst._executor_queue = {}
             cls._instances[thread] = inst
-
         return inst
 
     @override
@@ -277,7 +306,7 @@ class Caller:
     async def __aenter__(self) -> Self:
         self._cancelled_exception_class = anyio.get_cancelled_exc_class()
         async with contextlib.AsyncExitStack() as stack:
-            self.active = True
+            self._running = True
             self._taskgroup = tg = await stack.enter_async_context(anyio.create_task_group())
             await tg.start(self._server_loop, tg)
             self.__stack = stack.pop_all()
@@ -309,7 +338,7 @@ class Caller:
                     self._jobs_added.clear()
                 await wait_thread_event(self._jobs_added)
         finally:
-            self.active = False
+            self._running = False
             for job in self._jobs:
                 if not callable(job):
                     job[1][0].set_exception(FutureCancelledError())
@@ -367,15 +396,21 @@ class Caller:
 
     @property
     def protected(self) -> bool:
-        "Returns `True` when the instance is protected from stopping."
+        "Returns `True` if the caller is protected from stopping."
         return self._protected
 
     @property
+    def running(self):
+        "Returns `True` when the caller is available to run requests."
+        return self._running
+
+    @property
     def stopped(self) -> bool:
+        "Returns  `True` if the caller is stopped."
         return self._stopped
 
     def stop(self, *, force=False) -> None:
-        """Stop the caller cancelling all pending tasks and close the thread.
+        """Stop the caller, cancelling all pending tasks and close the thread.
 
         If the instance is protected, this is no-op unless force is used.
         """
@@ -409,7 +444,7 @@ class Caller:
         self._outstanding += 1
         return fut
 
-    def call_soon(self, func: Callable[P, T | Awaitable[T]], *args: P.args, **kwargs: P.kwargs) -> Future[T]:
+    def call_soon(self, func: Callable[P, T | Awaitable[T]], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
         """Schedule func to be called in this instances event loop using the current contextvars context.
 
         Args:
@@ -419,7 +454,7 @@ class Caller:
         """
         return self.call_later(func, 0.0, *args, **kwargs)
 
-    def call_no_context(self, func: Callable[P, Any], *args: P.args, **kwargs: P.kwargs) -> None:
+    def call_no_context(self, func: Callable[P, Any], /, *args: P.args, **kwargs: P.kwargs) -> None:
         """Call func in the thread event loop.
 
         Args:
@@ -437,10 +472,11 @@ class Caller:
     async def queue_call(
         self,
         func: Callable[[*PosArgsT], Awaitable[Any]],
+        /,
         *args: *PosArgsT,
         max_buffer_size: NoValue | int = NoValue,  # pyright: ignore[reportInvalidTypeForm]
     ) -> None:
-        """Queues the execution of func with the given arguments (not thread-safe).
+        """Queue the execution of func in queue specific to the function (not thread-safe).
 
         The args are added to a queue associated with the provided `func`. If queue does not already exist for
         func, a new queue is created with a specified maximum buffer size. The arguments are then sent to the queue,
@@ -451,8 +487,6 @@ class Caller:
             func: The asynchronous function to execute.
             *args: The arguments to pass to the function.
             max_buffer_size: The maximum buffer size for the queue. If NoValue, defaults to [async_kernel.Caller.MAX_BUFFER_SIZE].
-
-        For usage see [handle_message_request][async_kernel.Kernel.handle_message_request].
         """
         self._check_in_thread()
         if not self.has_execution_queue(func):
@@ -474,7 +508,7 @@ class Caller:
             self._executor_queue[func] = {"queue": sender, "future": self.call_soon(execute_loop)}
         await self._executor_queue[func]["queue"].send(args)
 
-    async def queue_close(self, func: Callable, *, force=False) -> bool:
+    async def queue_close(self, func: Callable, *, force: bool = False) -> bool:
         """Close the execution queue associated with func (not thread-safe).
 
         Args:
@@ -496,8 +530,12 @@ class Caller:
         return False
 
     @classmethod
-    def stop_all(cls, *, _stop_protected=False) -> None:
-        "A classmethod to stop all un-protected instances."
+    def stop_all(cls, *, _stop_protected: bool = False) -> None:
+        """A classmethod to stop all un-protected callers.
+
+        Args:
+            _stop_protected: A private argument to shutdown protected instances.
+        """
         for caller in tuple(reversed(cls._instances.values())):
             caller.stop(force=_stop_protected)
 
@@ -531,8 +569,8 @@ class Caller:
         Args:
             name: The name of the `Caller`. A new `Caller` is created if an instance corresponding to name  [^notes].
 
-                [^notes]:  'MainThread' is special name that applies to the main thread and
-                    will raise a runtime error if a Caller does not exist for the main thread.
+                [^notes]:  'MainThread' is special name corresponding to the main thread.
+                    A `RuntimeError` will be raised if a Caller does not exist for the main thread.
 
             func: The function to call. If it returns an awaitable, the awaitable will be awaited.
                 Passing a coroutine as `func` discourage, but will be awaited.
@@ -668,10 +706,10 @@ class Caller:
                 fut.cancel()
 
     @classmethod
-    def all_callers(cls, active_only=True) -> list[Caller]:
+    def all_callers(cls, running_only: bool = True) -> list[Caller]:
         """A classmethod to get a list of the callers.
 
         Args:
-            active_only: Restrict the list to callers that are active (running in an async context).
+            running_only: Restrict the list to callers that are active (running in an async context).
         """
-        return [caller for caller in Caller._instances.values() if caller.active or not active_only]
+        return [caller for caller in Caller._instances.values() if caller._running or not running_only]

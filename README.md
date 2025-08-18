@@ -8,15 +8,14 @@
 
 Async kernel is a Python [Jupyter kernel](https://docs.jupyter.org/en/latest/projects/kernels.html#kernels-programming-languages) that runs in an [anyio](https://pypi.org/project/anyio/) event loop.
 
-Async kernel is designed to run [execute requests](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute) outside the shell message loop to prevent dead locks when waiting for a response via the shell message loop.
 
 ## Highlights
-
+- Asynchronous
 - Comms is not blocked during cell execution[^non-blocking-execution]
-- Concurrent cell execution in tasks or cells [^run-concurrent]
+- Concurrent code execution [^run-concurrent]
 - [Debugger client](https://jupyterlab.readthedocs.io/en/latest/user/debugger.html#debugger)
 - Configurable backend - "asyncio" (default) or "trio backend" [^config-backend]
-- [IPython](https://pypi.org/project/ipython/) shell for magic, code completions, etc
+- [IPython](https://pypi.org/project/ipython/) shell for magic, code completions, and history
 - No tornado - instead using anyio's [`wait_readable`](https://anyio.readthedocs.io/en/stable/api.html#anyio.wait_readable) to wait for incoming messages on zmq sockets
 
 
@@ -32,7 +31,6 @@ To add a kernel spec for `trio`[^config-backend].
 
 ```shell
 pip install trio
-async-kernel add async-trio
 ```
 
 ```shell

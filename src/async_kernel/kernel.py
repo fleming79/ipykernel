@@ -44,7 +44,7 @@ from async_kernel.debugger import Debugger
 from async_kernel.iostream import OutStream
 from async_kernel.kernelspec import Backend, KernelName
 from async_kernel.typing import (
-    CODE_MODE_MAPPINGS,
+    Content,
     ExecuteContent,
     HandlerType,
     Job,
@@ -69,7 +69,7 @@ if TYPE_CHECKING:
 __all__ = ["Kernel", "KernelInterruptError"]
 
 
-def error_to_dict(error: BaseException, /) -> dict[str, str | list[str]]:
+def error_to_content(error: BaseException, /) -> Content:
     """Convert the error to a dict.
 
     ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#request-reply
@@ -145,10 +145,16 @@ def bind_socket(
 
 @functools.cache
 def wrap_handler(run_handler: Callable[[HandlerType, Job]], handler: HandlerType) -> HandlerType:
-    """Wraps the handler with run_handler (cached).
+    """Wraps a handler function to be executed by a runner function.
 
-    This is used by [get_handler_and_run_mode][async_kernel.Kernel.get_handler_and_run_mode] to wrap
-    the calling of message handlers ([message types][async_kernel.typing.MsgType]) with the [run handler][async_kernel.Kernel._run_handler].
+    This function takes a runner function and a handler function as input and returns a new handler function.
+    The new handler function, when called, will execute the original handler function using the provided runner function.
+    This allows for customization of how handlers are executed, such as running them in a separate thread or process.
+    Args:
+        run_handler: A callable that takes a handler and a job as input and executes the handler with the job.
+        handler: The handler function to be wrapped.
+    Returns:
+        A new handler function that will execute the original handler function using the provided runner function.
     """
 
     async def queued_handler(job: Job) -> None:
@@ -165,38 +171,48 @@ class KernelInterruptError(InterruptedError):
 
 
 class Kernel(ConnectionFileMixin):
-    """An asynchronous kernel with an anyio backend providing an IPython AsyncInteractiveShell with zmq sockets.
+    """An asynchronous kernel with an anyio backend providing an IPython AsyncInteractiveShell with zmq sockets.     
 
-    To start the kernel.
+    Only one instance will be created/run at a time. The instance can be obtained with `Kernel()`.
+    
+    To start the kernel:
 
-    === Shell
 
-    At the command prompt.
+    === "Shell"
 
-    ``` shell
-    async-kernel -f .
-    ```
+        At the command prompt.
 
-    === Normal
+        ``` shell
+        async-kernel -f .
+        ```
+
+        See also:
+
+        - 
+
+    === "Normal"
         ``` python
         from async_kernel.__main__ import main
 
         main()
         ```
 
-    === Direct
+    === "start (`classmethod`)"
 
         ``` python
         Kernel.start()
         ```
 
-    === Asynchronously inside anyio event loop.
+    === "Asynchronously inside anyio event loop"
 
         ``` python
         kernel = Kernel()
         async with kernel.start_in_context():
             await anyio.sleep_forever()
-    ```
+        ```
+        ???+ tip
+
+            This is a convenient way to start a kernel for debugging.
 
     """
 
@@ -239,20 +255,20 @@ class Kernel(ConnectionFileMixin):
             return  # Only initialize once
         super().__init__(**kwargs)
         self.message_handlers[SocketID.shell] = {
-            MsgType.kernel_info_request: (self.kernel_info_request, RunMode.wait),
-            MsgType.comm_info_request: (self.comm_info_request, RunMode.wait),
+            MsgType.kernel_info_request: (self.kernel_info_request, RunMode.direct),
+            MsgType.comm_info_request: (self.comm_info_request, RunMode.direct),
             MsgType.execute_request: (self.execute_request, RunMode.queue),
-            MsgType.interrupt_request: (self.interrupt_request, RunMode.wait),
+            MsgType.interrupt_request: (self.interrupt_request, RunMode.direct),
             MsgType.complete_request: (self.complete_request, RunMode.thread),
             MsgType.is_complete_request: (self.is_complete_request, RunMode.thread),
             MsgType.inspect_request: (self.inspect_request, RunMode.thread),
             MsgType.history_request: (self.history_request, RunMode.thread),
-            MsgType.comm_open: (self.comm_open, RunMode.wait),
+            MsgType.comm_open: (self.comm_open, RunMode.direct),
             MsgType.comm_msg: (self.comm_msg, RunMode.task),
-            MsgType.comm_close: (self.comm_close, RunMode.wait),
+            MsgType.comm_close: (self.comm_close, RunMode.direct),
         }
         self.message_handlers[SocketID.control] = self.message_handlers[SocketID.shell] | {
-            MsgType.shutdown_request: (self.shutdown_request, RunMode.wait),
+            MsgType.shutdown_request: (self.shutdown_request, RunMode.direct),
             MsgType.debug_request: (self.debug_request, RunMode.task),
         }
         sys.excepthook = self.excepthook
@@ -386,6 +402,7 @@ class Kernel(ConnectionFileMixin):
                 finally:
                     self.stop()
         finally:
+            AsyncInteractiveShell.clear_instance()
             Context.instance().term()
 
     def _signal_handler(self, signum, frame: FrameType | None) -> None:
@@ -503,62 +520,6 @@ class Kernel(ConnectionFileMixin):
             pass
         Caller.stop_all(_stop_protected=True)
 
-    async def _receive_msg_loop(
-        self, socket_id: Literal[SocketID.control, SocketID.shell], *, task_status: TaskStatus[None]
-    ) -> None:
-        """Receive shell and control messages over zmq sockets."""
-        if (
-            sys.platform == "win32"
-            and sniffio.current_async_library() == "asyncio"
-            and (policy := asyncio.get_event_loop_policy())
-            and policy.__class__.__name__ == "WindowsProactorEventLoopPolicy"
-        ):
-            from anyio._core._asyncio_selector_thread import get_selector  # noqa: PLC0415
-
-            utils.mark_thread_pydev_do_not_trace(get_selector()._thread)  # pyright: ignore[reportPrivateUsage]
-        socket: Socket[Literal[SocketType.ROUTER]] = Context.instance().socket(SocketType.ROUTER)
-        with self._bind_socket(socket_id, socket):
-            try:
-                task_status.started()
-                while True:
-                    while socket.get(SocketOption.EVENTS) & PollEvent.POLLIN:  # pyright: ignore[reportOperatorIssue]
-                        try:
-                            ident, msg = self.session.recv(socket, copy=False)
-                            assert ident
-                            assert msg
-                            if socket_id == SocketID.shell:
-                                # Reset the frame to show the main thread is not blocked.
-                                self._last_interrupt_frame = None
-                            self.log.debug("*** _receive_msg_loop %s*** %s", socket_id, msg)
-                            await self.handle_message_request(
-                                Job(
-                                    socket_id=socket_id,
-                                    socket=socket,
-                                    ident=ident,
-                                    msg=msg,  # pyright: ignore[reportArgumentType]
-                                    received_time=time.monotonic(),
-                                    run_mode=None,  #  pyright: ignore[reportArgumentType]. This value is set by `get_handler_and_run_mode`.
-                                )
-                            )
-                        except Exception as e:
-                            self.log.debug("Bad message on %s: %s", socket_id, e)
-                            continue
-                        await anyio.sleep(0)
-                    await anyio.wait_readable(socket)
-            except (zmq.ContextTerminated, self.CancelledError):
-                return
-
-    async def _run_handler(self, handler: HandlerType, job: Job) -> None:
-        self._job_var.set(job)
-        try:
-            self._publish_status(job, "busy")
-            await handler(job)
-        except Exception as e:
-            self._send_reply(job, error_to_dict(e))
-            self.log.exception("Exception in message handler:", exc_info=e)
-        finally:
-            self._publish_status(job, "idle")
-
     @contextlib.contextmanager
     def _bind_socket(self, socket_id: SocketID, socket: zmq.Socket) -> Generator[None, Any, None]:
         """Bind a zmq.Socket storing a reference to the socket and the port
@@ -584,7 +545,7 @@ class Kernel(ConnectionFileMixin):
     def iopub_send(
         self,
         msg_or_type: dict[str, Any] | str,
-        content: dict[str, Any] | None = None,
+        content: Content | None = None,
         metadata: dict[str, Any] | None = None,
         parent: dict[str, Any] | None | NoValue = NoValue,  # pyright: ignore[reportInvalidTypeForm]
         ident: bytes | list[bytes] | None = None,
@@ -668,6 +629,51 @@ class Kernel(ConnectionFileMixin):
         """prefixed topic for IOPub messages"""
         return (f"kernel.{topic}").encode()
 
+    async def _receive_msg_loop(
+        self, socket_id: Literal[SocketID.control, SocketID.shell], *, task_status: TaskStatus[None]
+    ) -> None:
+        """Receive shell and control messages over zmq sockets."""
+        if (
+            sys.platform == "win32"
+            and sniffio.current_async_library() == "asyncio"
+            and (policy := asyncio.get_event_loop_policy())
+            and policy.__class__.__name__ == "WindowsProactorEventLoopPolicy"
+        ):
+            from anyio._core._asyncio_selector_thread import get_selector  # noqa: PLC0415
+
+            utils.mark_thread_pydev_do_not_trace(get_selector()._thread)  # pyright: ignore[reportPrivateUsage]
+        socket: Socket[Literal[SocketType.ROUTER]] = Context.instance().socket(SocketType.ROUTER)
+        with self._bind_socket(socket_id, socket):
+            try:
+                task_status.started()
+                while True:
+                    while socket.get(SocketOption.EVENTS) & PollEvent.POLLIN:  # pyright: ignore[reportOperatorIssue]
+                        try:
+                            ident, msg = self.session.recv(socket, copy=False)
+                            assert ident
+                            assert msg
+                            if socket_id == SocketID.shell:
+                                # Reset the frame to show the main thread is not blocked.
+                                self._last_interrupt_frame = None
+                            self.log.debug("*** _receive_msg_loop %s*** %s", socket_id, msg)
+                            await self.handle_message_request(
+                                Job(
+                                    socket_id=socket_id,
+                                    socket=socket,
+                                    ident=ident,
+                                    msg=msg,  # pyright: ignore[reportArgumentType]
+                                    received_time=time.monotonic(),
+                                    run_mode=None,  #  pyright: ignore[reportArgumentType]. This value is set by `get_handler_and_run_mode`.
+                                )
+                            )
+                        except Exception as e:
+                            self.log.debug("Bad message on %s: %s", socket_id, e)
+                            continue
+                        await anyio.sleep(0)
+                    await anyio.wait_readable(socket)
+            except (zmq.ContextTerminated, self.CancelledError):
+                return
+
     async def handle_message_request(self, job: Job, /) -> None:
         """The main handler for all shell and control messages.
 
@@ -685,7 +691,7 @@ class Kernel(ConnectionFileMixin):
                 Caller.to_thread(handler, job)
             case RunMode.task:
                 Caller().call_soon(handler, job)
-            case RunMode.wait:
+            case RunMode.direct:
                 await handler(job)
 
     async def get_handler_and_run_mode(self, job: Job) -> tuple[HandlerType, RunMode]:
@@ -715,21 +721,38 @@ class Kernel(ConnectionFileMixin):
             mode = mode_from_header
         elif job["msg"]["header"]["msg_type"] == MsgType.execute_request:
             content = job["msg"].get("content", {})
-            if mode_ := CODE_MODE_MAPPINGS.get(content.get("code", "").strip().split("\n")[0].strip()):
+            if mode_ := RunMode.get_mode(content.get("code", "")):
                 mode = mode_
             elif content.get("silent", True) or (job["socket_id"] is SocketID.control):
                 mode = RunMode.task
             else:
                 mode = RunMode.queue
         job["run_mode"] = mode
-        return wrap_handler(self._run_handler, handler), mode
+        self.log.debug("%s  %s run mode %s for %s", job["socket_id"], mode, msg_type, handler)
+        return wrap_handler(self.run_handler, handler), mode
 
-    async def kernel_info_request(self, job: Job) -> None:
-        """Handle a kernel info request."""
-        self._send_reply(job, self.kernel_info)
+    async def run_handler(self, handler: HandlerType, job: Job) -> None:
+        """Runs the handler in the context of the job/message sending the reply content if it is provided.
 
-    async def comm_info_request(self, job: Job) -> None:
-        """Handle a comm info request."""
+        This method gets called for every valid request with the relevent handler.
+        """
+        self._job_var.set(job)
+        try:
+            self._publish_status(job, "busy")
+            if (content := await handler(job)) is not None:
+                self._send_reply(job, content)
+        except Exception as e:
+            self._send_reply(job, error_to_content(e))
+            self.log.exception("Exception in message handler:", exc_info=e)
+        finally:
+            self._publish_status(job, "idle")
+
+    async def kernel_info_request(self, job: Job[Content]) -> Content:
+        """Handle a ke[rnel info request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#kernel-info)."""
+        return self.kernel_info
+
+    async def comm_info_request(self, job: Job[Content]) -> Content:
+        """Handle a [comm info request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#comm-info)."""
         c = job["msg"]["content"]
         target_name = c.get("target_name", None)
         comms = {
@@ -737,19 +760,20 @@ class Kernel(ConnectionFileMixin):
             for (k, v) in tuple(self.comm_manager.comms.items())
             if v.target_name == target_name or target_name is None
         }
-        self._send_reply(job, {"comms": comms})
+        return {"comms": comms}
 
-    async def execute_request(self, job: Job[ExecuteContent]) -> None:
-        """Process the execute request."""
+    async def execute_request(self, job: Job[ExecuteContent]) -> Content:
+        """Handle a [execute request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute)."""
         c = job["msg"]["content"]
-        if (job["received_time"] < self._stop_on_error_time) and not c.get("silent", False):
+        if (
+            job["run_mode"] is RunMode.queue
+            and (job["received_time"] < self._stop_on_error_time)
+            and not c.get("silent", False)
+        ):
             self.log.info("Aborting execute_request: %s", job)
-            c_ = error_to_dict(RuntimeError("Aborting due to prior exception"))
-            c_ |= {"execution_count": self.execution_count}
-            self._publish_status(job, "busy")
-            self._send_reply(job, c_)
-            self._publish_status(job, "idle")
-            return
+            return error_to_content(RuntimeError("Aborting due to prior exception")) | {
+                "execution_count": self.execution_count
+            }
         metadata = job["msg"].get("metadata") or {}
         if not (silent := c["silent"]):
             self._execution_count += 1
@@ -773,8 +797,12 @@ class Kernel(ConnectionFileMixin):
         if not silent:
             self._interrupts.add(fut.cancel)
             fut.add_done_callback(lambda fut: self._interrupts.discard(fut.cancel))
-        result: ExecutionResult = await fut
-        err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError()
+        try:
+            result: ExecutionResult = await fut
+            err = result.error_before_exec or result.error_in_exec if result else KernelInterruptError()
+        except Exception as e:
+            # A safeguard to catch exceptions not caught by the shell.
+            err = e
         if (err) and (
             (Tags.suppress_error in metadata.get("tags", ()))  # 1.
             or (isinstance(err, self.CancelledError) and (self.shell.execute_request_timeout is not None))  # 2.
@@ -783,20 +811,20 @@ class Kernel(ConnectionFileMixin):
             # 1. tag
             # 2. timeout
             err = None
-        err_content = {
+        content = {
             "status": "error" if err else "ok",
             "execution_count": self.execution_count,
             "user_expressions": self.shell.user_expressions(c.get("user_expressions", {})),
         }
         if err:
-            err_content |= error_to_dict(err)
-            if not silent and c.get("stop_on_error"):
+            content |= error_to_content(err)
+            if (not silent) and c.get("stop_on_error"):
                 self._stop_on_error_time = time.monotonic()
                 self.log.info("An error occurred in a non-silent execution request")
-        self._send_reply(job, err_content)
+        return content
 
-    async def complete_request(self, job: Job[dict[str, Any]]) -> None:
-        """Handle a [completion request][async_kernel.typing.complete_request]."""
+    async def complete_request(self, job: Job[Content]) -> Content:
+        """Handle a [completion request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#completion)."""
         c = job["msg"]["content"]
         code: str = c["code"]
         cursor_pos = c.get("cursor_pos") or len(code)
@@ -814,43 +842,42 @@ class Kernel(ConnectionFileMixin):
         ]
         s, e = completions[0].start, completions[0].end if completions else (cursor_pos, cursor_pos)
         matches = [c.text for c in completions]
-        matches = {
+        return {
             "matches": matches,
             "cursor_end": e,
             "cursor_start": s,
             "metadata": {"_jupyter_types_experimental": comps},
         }
-        self._send_reply(job, matches)
 
-    async def is_complete_request(self, job: Job) -> None:
-        """Handle an [is_complete request][async_kernel.typing.is_complete_request]."""
+    async def is_complete_request(self, job: Job[Content]) -> Content:
+        """Handle a [is_complete request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#code-completeness)."""
         status, indent_spaces = self.shell.input_transformer_manager.check_complete(job["msg"]["content"]["code"])
-        reply_content = {"status": status}
+        content = {"status": status}
         if status == "incomplete":
-            reply_content["indent"] = " " * indent_spaces
-        self._send_reply(job, reply_content)
+            content["indent"] = " " * indent_spaces
+        return content
 
-    async def inspect_request(self, job: Job[dict[str, Any]]) -> None:
-        """Handle an [inspect request][async_kernel.typing.inspect_request]."""
+    async def inspect_request(self, job: Job[Content]) -> Content:
+        """Handle a [inspect request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#introspection)."""
         c = job["msg"]["content"]
         detail_level = int(c.get("detail_level", 0))
         omit_sections = set(c.get("omit_sections", []))
         name = token_at_cursor(c["code"], c["cursor_pos"])
-        reply_content: dict[str, Any] = {"status": "ok"}
-        reply_content["data"] = {}
-        reply_content["metadata"] = {}
+        content: dict[str, Any] = {"status": "ok"}
+        content["data"] = {}
+        content["metadata"] = {}
         try:
             bundle = self.shell.object_inspect_mime(name, detail_level=detail_level, omit_sections=omit_sections)
-            reply_content["data"].update(bundle)
+            content["data"].update(bundle)
             if not self.shell.enable_html_pager:
-                reply_content["data"].pop("text/html")
-            reply_content["found"] = True
+                content["data"].pop("text/html")
+            content["found"] = True
         except KeyError:
-            reply_content["found"] = False
-        self._send_reply(job, reply_content)
+            content["found"] = False
+        return content
 
-    async def history_request(self, job: Job[dict[str, Any]]) -> None:
-        """Handle a [history request][async_kernel.typing.history_request]."""
+    async def history_request(self, job: Job[Content]) -> Content:
+        """Handle a [history request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#history)."""
         c = job["msg"]["content"]
         history_manager = self.shell.history_manager
         assert history_manager
@@ -866,22 +893,22 @@ class Kernel(ConnectionFileMixin):
             )
         else:
             hist = []
-        self._send_reply(job, {"history": list(hist)})
+        return {"history": list(hist)}
 
-    async def comm_open(self, job: Job) -> None:
-        """Handle a [comm open request][async_kernel.typing.comm_open]."""
+    async def comm_open(self, job: Job[Content]) -> None:
+        """Handle a [comm open request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#opening-a-comm)."""
         self.comm_manager.comm_open(stream=job["socket"], ident=job["ident"], msg=job["msg"])  # pyright: ignore[reportArgumentType]
 
-    async def comm_msg(self, job: Job) -> None:
-        """Handle a [comm msg request][async_kernel.typing.comm_msg]."""
+    async def comm_msg(self, job: Job[Content]) -> None:
+        """Handle a [comm msg request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#comm-messages)."""
         self.comm_manager.comm_msg(stream=job["socket"], ident=job["ident"], msg=job["msg"])  # pyright: ignore[reportArgumentType]
 
-    async def comm_close(self, job: Job) -> None:
-        """Handle a [comm close request][async_kernel.typing.comm_close]."""
+    async def comm_close(self, job: Job[Content]) -> None:
+        """Handle a [comm close request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#tearing-down-comms)."""
         self.comm_manager.comm_close(stream=job["socket"], ident=job["ident"], msg=job["msg"])  # pyright: ignore[reportArgumentType]
 
-    async def interrupt_request(self, job: Job) -> None:
-        """Handle a [interrupt request][async_kernel.typing.interrupt_request]."""
+    async def interrupt_request(self, job: Job[Content]) -> Content:
+        """Handle a [interrupt request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#kernel-interrupt) (control only)."""
         self._interrupt_requested = True
         if sys.platform == "win32":
             signal.raise_signal(signal.SIGINT)
@@ -890,18 +917,17 @@ class Kernel(ConnectionFileMixin):
             os.kill(os.getpid(), signal.SIGINT)
         for interrupter in tuple(self._interrupts):
             interrupter()
-        self._send_reply(job)
+        return {}
 
-    async def shutdown_request(self, job: Job) -> None:
-        """Handle a [shutdown request][async_kernel.typing.shutdown_request]."""
+    async def shutdown_request(self, job: Job[Content]) -> Content:
+        """Handle a [shutdown request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#kernel-shutdown) (control only)."""
         await self.debugger.disconnect()
-        self._send_reply(job, {"status": "ok", "restart": job["msg"]["content"].get("restart", False)})
-        self.stop()
+        Caller().call_no_context(self.stop)
+        return {"status": "ok", "restart": job["msg"]["content"].get("restart", False)}
 
-    async def debug_request(self, job: Job) -> None:
-        """Handle a [debug request][async_kernel.typing.debug_request]."""
-        content = await self.debugger.process_request(job["msg"]["content"])
-        self._send_reply(job, content)
+    async def debug_request(self, job: Job[Content]) -> Content:
+        """Handle a [debug request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#debug-request) (control only)."""
+        return await self.debugger.process_request(job["msg"]["content"])
 
     def excepthook(self, etype, evalue, tb) -> None:
         """Handle an exception."""

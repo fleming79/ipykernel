@@ -74,7 +74,7 @@ plugins:
       include: ["*.ipynb"]
   - git-revision-date-localized:
       type: timeago
-      enabled: !ENV [CI, false]      
+      enabled: !ENV [CI, false]
       enable_creation_date: true
 
   # - privacy:
@@ -92,6 +92,7 @@ plugins:
           paths: [src, docs/snippets]
           inventories:
             - https://docs.python.org/3/objects.inv
+            - https://ipython.readthedocs.io/en/stable/objects.inv
           options:
             docstring_options:
               ignore_init_summary: true
@@ -151,27 +152,27 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Usage:
-    - usage.md
-    - Notebooks:
-      - Overview: notebooks/overview.md
-      - Simple example: notebooks/simple_example.ipynb
-      - Execute mode: notebooks/run_mode.ipynb
-      - Caller notebook: notebooks/caller.ipynb
-    - Command line: command_line.md
+      - usage.md
+      - Notebooks:
+          - Overview: notebooks/overview.md
+          - Simple example: notebooks/simple_example.ipynb
+          - Execute mode: notebooks/run_mode.ipynb
+          - Caller notebook: notebooks/caller.ipynb
+      - Commands: commands.md
   - Reference:
       - reference/overview.md
-      - Caller & Future: 
-        - reference/caller.md
-      - Command prompt: 
-        - reference/main.md
-      - Kernel: 
-        - reference/kernel.md
-      - Async shell: 
-        - reference/asyncshell.md
-      - Types: 
-        - reference/typing.md
-      - Utils: 
-        - reference/utils.md
+      - Caller & Future:
+          - reference/caller.md
+      - Command prompt:
+          - reference/main.md
+      - Kernel:
+          - reference/kernel.md
+      - Async shell:
+          - reference/asyncshell.md
+      - Types:
+          - reference/typing.md
+      - Utils:
+          - reference/utils.md
   - About:
       - Contributing: contributing.md
       - Changelog: changelog.md

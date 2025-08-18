@@ -18,17 +18,7 @@ import zmq
 import async_kernel.utils
 from async_kernel.caller import Caller
 from async_kernel.comm import Comm
-from async_kernel.typing import (
-    RUN_MODE_PREFIX,
-    ExecuteContent,
-    Job,
-    Message,
-    MsgHeader,
-    MsgType,
-    RunMode,
-    SocketID,
-    Tags,
-)
+from async_kernel.typing import ExecuteContent, Job, Message, MsgHeader, MsgType, RunMode, SocketID, Tags
 from tests import utils
 
 if TYPE_CHECKING:
@@ -94,13 +84,11 @@ async def test_simple_print(kernel, client, quiet: bool):
         await utils.clear_iopub(client)
 
 
-@pytest.mark.parametrize("mode", ["kernel_timeout", "metadata", "metadata-do-not-publish-error"])
+@pytest.mark.parametrize("mode", ["kernel_timeout", "metadata"])
 async def test_execute_kernel_timeout(client, kernel: Kernel, mode: str):
     kernel.cell_execute_timeout = 0.1 if "kernel" in mode else None
     last_stop_time = kernel._stop_on_error_time  # pyright: ignore[reportPrivateUsage]
     metadata: dict[str, float | list] = {"timeout": 0.1}
-    if "do-not-publish-error" in mode:
-        metadata["tags"] = ["do-not-publish-error"]
     try:
         code = "\n".join(["import anyio", "await anyio.sleep_forever()"])
         msg_id, content = await utils.execute(client, code=code, metadata=metadata, clear_pub=False)
@@ -108,9 +96,8 @@ async def test_execute_kernel_timeout(client, kernel: Kernel, mode: str):
         assert content["status"] == "ok"
         await utils.check_pub_message(client, msg_id, execution_state="busy")
         await utils.check_pub_message(client, msg_id, msg_type="execute_input")
-        if "do-not-publish-error" not in mode:
-            expected = {"traceback": [], "ename": "TimeoutError", "evalue": "Cell execute timeout"}
-            await utils.check_pub_message(client, msg_id, msg_type="error", **expected)
+        expected = {"traceback": [], "ename": "TimeoutError", "evalue": "Cell execute timeout"}
+        await utils.check_pub_message(client, msg_id, msg_type="error", **expected)
         await utils.check_pub_message(client, msg_id, execution_state="idle")
     finally:
         kernel.cell_execute_timeout = None
@@ -227,33 +214,46 @@ async def test_message_order(client):
         reply = await client.get_shell_msg()
         assert reply["content"]["execution_count"] == i
         assert reply["parent_header"]["msg_id"] == msg_id
-    await utils.clear_iopub(client)
+    await utils.clear_iopub(client, timeout=0.2)
 
 
 async def test_execute_request_error_tag_ignore_error(client):
     metadata = {"tags": [Tags.suppress_error]}
-    _, content = await utils.execute(client, "ignore error", metadata=metadata)
+    msg_id, content = await utils.execute(
+        client, "This error should be suppressed...", metadata=metadata, clear_pub=False
+    )
+    await utils.check_pub_message(client, msg_id, execution_state="busy")
+    await utils.check_pub_message(client, msg_id, msg_type="execute_input")
+    await utils.check_pub_message(client, msg_id, execution_state="idle")
     assert content["status"] == "ok"
-    await utils.clear_iopub(client)
 
 
-async def test_execute_request_error(client):
-    reply = await utils.send_shell_message(
-        client, MsgType.execute_request, {"code": "some invalid code", "silent": False}
-    )
+@pytest.mark.parametrize("run_mode", RunMode)
+@pytest.mark.parametrize(
+    "code",
+    [
+        "some invalid code",
+        "\n".join(
+            [
+                "from async_kernel.caller import FutureCancelledError",
+                "async def fail():",
+                "    raise FutureCancelledError",
+                "await fail()",
+            ]
+        ),
+    ],
+)
+async def test_execute_request_error(client, code: str, run_mode: RunMode):
+    reply = await utils.send_shell_message(client, MsgType.execute_request, {"code": code, "silent": False})
     assert reply["header"]["msg_type"] == "execute_reply"
     assert reply["content"]["status"] == "error"
     await utils.clear_iopub(client)
 
 
-async def test_execute_request_stop_on_error(client, kernel):
-    kernel._stop_on_error_time = time.monotonic() + 10
-    reply = await utils.send_shell_message(
-        client, MsgType.execute_request, {"code": "some invalid code", "silent": False}
-    )
-    assert reply["header"]["msg_type"] == "execute_reply"
-    assert reply["content"]["status"] == "error"
-    kernel._stop_on_error_time = 0
+async def test_execute_request_stop_on_error(client):
+    client.execute("import anyio;anyio.sleep(0.1);stop-here")
+    _, content = await utils.execute(client)
+    assert content["evalue"] == "Aborting due to prior exception"
 
 
 async def test_complete_request(client):
@@ -355,7 +355,7 @@ async def test_interrupt_request_blocking_exec_request(subprocess_kernels_client
 
 async def test_interrupt_request_blocking_task(subprocess_kernels_client):
     code = f"""
-    {RUN_MODE_PREFIX}{RunMode.task}
+    {RunMode.task}
     time.sleep(100)
     """
     client = subprocess_kernels_client
@@ -476,7 +476,7 @@ async def test_shell_can_set_namespace(kernel):
 @pytest.mark.parametrize("mode", RunMode)
 async def test_header_mode(client, mode: RunMode):
     code = f"""
-{RUN_MODE_PREFIX}{mode}
+{mode}
 import time
 time.sleep(0.1)
 print("{mode.name}")
@@ -517,17 +517,18 @@ async def test_invalid_message(client, channel):
 @pytest.mark.parametrize(
     ("code", "silent", "socket_id", "expected"),
     [
-        (f"{RUN_MODE_PREFIX}{RunMode.task}", False, SocketID.shell, RunMode.task),
-        (f" {RUN_MODE_PREFIX}{RunMode.task}", False, SocketID.shell, RunMode.task),
+        (f"{RunMode.task}", False, SocketID.shell, RunMode.task),
+        (f" {RunMode.task}", False, SocketID.shell, RunMode.task),
         ("print(1)", False, SocketID.shell, RunMode.queue),
         ("", True, SocketID.shell, RunMode.task),
-        (f"{RUN_MODE_PREFIX}{RunMode.thread}\nprint('hello')", False, SocketID.shell, RunMode.thread),
+        (f"{RunMode.thread}\nprint('hello')", False, SocketID.shell, RunMode.thread),
         ("", False, SocketID.control, RunMode.task),
-        (f"{RUN_MODE_PREFIX}threads", False, SocketID.shell, RunMode.queue),
-        (f"{RUN_MODE_PREFIX}Task", False, SocketID.shell, RunMode.queue),
+        ("threads", False, SocketID.shell, RunMode.queue),
+        ("Task", False, SocketID.shell, RunMode.queue),
+        ("RunMode.direct", False, SocketID.shell, RunMode.direct),
     ],
 )
-async def test_get_run_mode_execute_request(kernel:Kernel, code: str, silent: bool, socket_id, expected: RunMode):
+async def test_get_run_mode_execute_request(kernel: Kernel, code: str, silent: bool, socket_id, expected: RunMode):
     content = ExecuteContent(
         code=code, silent=silent, store_history=True, user_expressions={}, allow_stdin=False, stop_on_error=True
     )
@@ -538,4 +539,3 @@ async def test_get_run_mode_execute_request(kernel:Kernel, code: str, silent: bo
     _, mode = await kernel.get_handler_and_run_mode(job)
     assert mode is expected
     assert job.get("run_mode") is expected
-

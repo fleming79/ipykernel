@@ -24,7 +24,7 @@ from typing_extensions import override
 import async_kernel
 from async_kernel.caller import Caller
 from async_kernel.compiler import XCachingCompiler
-from async_kernel.typing import Tags
+from async_kernel.typing import Content, Tags
 
 if TYPE_CHECKING:
     from async_kernel.kernel import Kernel
@@ -79,11 +79,11 @@ class AsyncDisplayPublisher(DisplayPublisher):
     @override
     def publish(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
-        data,
-        metadata=None,
+        data: Content,
+        metadata: dict | None = None,
         *,
-        transient=None,
-        update=False,
+        transient: dict | None = None,
+        update: bool = False,
         **kwargs,
     ) -> None:
         """Publish a display-data message.
@@ -104,7 +104,7 @@ class AsyncDisplayPublisher(DisplayPublisher):
         )
 
     @override
-    def clear_output(self, wait=False) -> None:
+    def clear_output(self, wait: bool = False) -> None:
         """Clear output associated with the current execution (cell).
 
         Args:
@@ -116,7 +116,17 @@ class AsyncDisplayPublisher(DisplayPublisher):
 
 
 class AsyncInteractiveShell(InteractiveShell):
-    """A modified IPython [InteractiveShell][IPython.core.interactiveshell.InteractiveShell] to work with [Async kernel][async_kernel.Kernel]."""
+    """An [IPython InteractiveShell][IPython.core.interactiveshell.InteractiveShell] modified to work with [Async kernel][async_kernel.Kernel].
+
+    !!! note "Notable differences"
+
+        - All [execute requests][async_kernel.Kernel.execute_request] are run asynchronously.
+        - Supports a soft timeout with the metadata {"timeout":<value in seconds>}[^1].
+
+            [^1]: When the execution time exceeds the timeout value, the code execution will "move on".
+        - Not all features are support (see "not-supported" featues listed below).
+            
+    """
 
     displayhook_class = Type(AsyncDisplayHook)
     display_pub_class = Type(AsyncDisplayPublisher)
@@ -127,6 +137,19 @@ class AsyncInteractiveShell(InteractiveShell):
     user_ns_hidden = Dict()
     _main_mod_cache = Dict()
     _execute_request_timeout: ContextVar[float | None] = ContextVar("execute_request_timeout", default=None)
+    run_cell = None  # pyright: ignore[reportAssignmentType]
+    "**not-supported**"
+    should_run_async = None  # pyright: ignore[reportAssignmentType]
+    loop_runner_map = None
+    "**not-supported**"
+    loop_runner = None
+    "**not-supported**"
+    debug = None
+    "**not-supported**"
+    readline_use = False
+    "**not-supported**"
+    autoindent = False
+    "**not-supported**"
 
     @default("banner1")
     def _default_banner1(self) -> str:
@@ -136,13 +159,6 @@ class AsyncInteractiveShell(InteractiveShell):
             f"IPython shell {IPython.core.release.version}\n"
         )
 
-    # Override the traitlet in the parent class, because there's no point using
-    # readline for the kernel. Can be removed when the readline code is moved
-    # to the terminal frontend.
-    readline_use = CBool(False)
-    # autoindent has no meaning in a zmqshell, and attempting to enable it
-    # will print a warning in the absence of readline.
-    autoindent = CBool(False)
 
     @property
     def kernel(self) -> Kernel:
@@ -151,7 +167,7 @@ class AsyncInteractiveShell(InteractiveShell):
 
     @property
     def execute_request_timeout(self) -> float | None:
-        """A timeout in context of the [run_cell_async][async_kernel.Kernel.AsyncInteractiveShell].
+        """A timeout in context of the [run_cell_async][async_kernel.asyncshell.AsyncInteractiveShell].
 
         See also:
 
@@ -252,7 +268,7 @@ class AsyncInteractiveShell(InteractiveShell):
 
     @override
     def _showtraceback(self, etype, evalue, stb) -> None:
-        if Tags.do_not_publish_error in async_kernel.utils.get_tags():
+        if Tags.suppress_error in async_kernel.utils.get_tags():
             return
         if self.execute_request_timeout is not None and etype is self.kernel.CancelledError:
             etype, evalue, stb = TimeoutError, "Cell execute timeout", []
@@ -301,10 +317,10 @@ class KernelMagics(Magics):
 
     @line_magic
     def callers(self, _) -> None:
-        "Print a table of [Callers][async_kernel.Callers], indicating if it is acttive, protect and on the current thread."
-        lines = ["\t".join(["Active", "Protected", "\t", "Name"]), "─" * 70]
-        for caller in Caller.all_callers(active_only=False):
-            symbol = "   ✓" if caller.active else "   ✗"
+        "Print a table of [Callers][async_kernel.Caller], indicating its status including:  -running - protected - on the current thread."
+        lines = ["\t".join(["Running", "Protected", "\t", "Name"]), "─" * 70]
+        for caller in Caller.all_callers(running_only=False):
+            symbol = "   ✓" if caller.running else "   ✗"
             current_thread: Literal["← current thread", ""] = "← current thread" if caller is Caller() else ""
             protected = "   🔐" if caller.protected else ""
             lines.append("\t".join([symbol, protected, "", caller.thread.name, current_thread]))

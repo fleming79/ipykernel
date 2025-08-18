@@ -107,7 +107,7 @@ def main(wait_exit_context=anyio.sleep_forever) -> None:
         else:
             sys.exit(0)
         finally:
-            print("\nKernel stopped: ", kernel.connection_file)
+            print("Kernel stopped: ", kernel.connection_file)
 
 
 if __name__ == "__main__":
