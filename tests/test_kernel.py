@@ -251,7 +251,7 @@ async def test_execute_request_error(client, code: str, run_mode: RunMode):
 
 
 async def test_execute_request_stop_on_error(client):
-    client.execute("import anyio;anyio.sleep(0.1);stop-here")
+    client.execute("import anyio;await anyio.sleep(0.1);stop-here")
     _, content = await utils.execute(client)
     assert content["evalue"] == "Aborting due to prior exception"
 
@@ -528,7 +528,7 @@ async def test_invalid_message(client, channel):
         ("RunMode.direct", False, SocketID.shell, RunMode.direct),
     ],
 )
-async def test_get_run_mode_execute_request(kernel: Kernel, code: str, silent: bool, socket_id, expected: RunMode):
+async def test_get_run_mode(kernel: Kernel, code: str, silent: bool, socket_id, expected: RunMode):
     content = ExecuteContent(
         code=code, silent=silent, store_history=True, user_expressions={}, allow_stdin=False, stop_on_error=True
     )
@@ -536,6 +536,5 @@ async def test_get_run_mode_execute_request(kernel: Kernel, code: str, silent: b
     msg = Message(header=header, parent_header=header, metadata={}, buffers=[], content=content)
     socket = cast("zmq.Socket[Any]", None)  # pyright: ignore[reportInvalidCast]
     job = Job(msg=msg, socket_id=socket_id, ident=[b""], socket=socket, received_time=0.0, run_mode=None)  # pyright: ignore[reportArgumentType]
-    _, mode = await kernel.get_handler_and_run_mode(job)
+    mode = kernel.get_run_mode(socket_id, MsgType.execute_request, job=job)
     assert mode is expected
-    assert job.get("run_mode") is expected

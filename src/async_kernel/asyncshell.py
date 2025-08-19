@@ -7,7 +7,6 @@ import builtins
 import json
 import pathlib
 import sys
-from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 import anyio
@@ -22,6 +21,7 @@ from traitlets import Dict, Instance, Type, default, observe
 from typing_extensions import override
 
 import async_kernel
+from async_kernel import utils
 from async_kernel.caller import Caller
 from async_kernel.compiler import XCachingCompiler
 from async_kernel.typing import Content, Tags
@@ -97,7 +97,7 @@ class AsyncDisplayPublisher(DisplayPublisher):
 
         [Reference](https://jupyter-client.readthedocs.io/en/stable/messaging.html#update-display-data)
         """
-        async_kernel.Kernel().iopub_send(
+        utils.get_kernel().iopub_send(
             msg_or_type="update_display_data" if update else "display_data",
             content={"data": data, "metadata": metadata or {}, "transient": transient or {}} | kwargs,
             ident=self.topic,
@@ -112,7 +112,7 @@ class AsyncDisplayPublisher(DisplayPublisher):
                 instead waiting for the next display before clearing.
                 This reduces bounce during repeated clear & display loops.
         """
-        async_kernel.Kernel().iopub_send(msg_or_type="clear_output", content={"wait": wait}, ident=self.topic)
+        utils.get_kernel().iopub_send(msg_or_type="clear_output", content={"wait": wait}, ident=self.topic)
 
 
 class AsyncInteractiveShell(InteractiveShell):
@@ -136,7 +136,7 @@ class AsyncInteractiveShell(InteractiveShell):
     compile: Instance[XCachingCompiler]
     user_ns_hidden = Dict()
     _main_mod_cache = Dict()
-    _execute_request_timeout: ContextVar[float | None] = ContextVar("execute_request_timeout", default=None)
+
     run_cell = None  # pyright: ignore[reportAssignmentType]
     "**not-supported**"
     should_run_async = None  # pyright: ignore[reportAssignmentType]
@@ -162,21 +162,7 @@ class AsyncInteractiveShell(InteractiveShell):
     @property
     def kernel(self) -> Kernel:
         "The current kernel."
-        return async_kernel.Kernel()
-
-    @property
-    def execute_request_timeout(self) -> float | None:
-        """A timeout in context of the [run_cell_async][async_kernel.asyncshell.AsyncInteractiveShell].
-
-        See also:
-
-        - [async_kernel.typing.MetadataKeys.timeout][].
-        """
-        return self._execute_request_timeout.get()
-
-    @execute_request_timeout.setter
-    def execute_request_timeout(self, value: float | None) -> None:
-        self._execute_request_timeout.set(value)
+        return utils.get_kernel()
 
     @observe("exit_now")
     def _update_exit_now(self, _) -> None:
@@ -250,7 +236,7 @@ class AsyncInteractiveShell(InteractiveShell):
         This function runs [execute requests][async_kernel.Kernel.execute_request] for the kernel
         wrapping [InteractiveShell][IPython.core.interactiveshell.InteractiveShell.run_cell_async].
         """
-        with anyio.fail_after(delay=self.execute_request_timeout):
+        with anyio.fail_after(delay=utils.get_execute_request_timeout()):
             result: ExecutionResult = await super().run_cell_async(
                 raw_cell=raw_cell,
                 store_history=store_history,
@@ -269,7 +255,7 @@ class AsyncInteractiveShell(InteractiveShell):
     def _showtraceback(self, etype, evalue, stb) -> None:
         if Tags.suppress_error in async_kernel.utils.get_tags():
             return
-        if self.execute_request_timeout is not None and etype is self.kernel.CancelledError:
+        if utils.get_execute_request_timeout() is not None and etype is self.kernel.CancelledError:
             etype, evalue, stb = TimeoutError, "Cell execute timeout", []
         self.kernel.iopub_send(
             msg_or_type="error",
@@ -294,14 +280,11 @@ class KernelMagics(Magics):
     @line_magic
     def connect_info(self, _) -> None:
         """Print information for connecting other clients to this kernel."""
-
-        kernel = async_kernel.Kernel()
+        kernel = utils.get_kernel()
         connection_file = pathlib.Path(kernel.connection_file)
-
         # if it's in the default dir, truncate to basename
         if jupyter_runtime_dir() == str(connection_file.parent):
             connection_file = connection_file.name
-
         info = kernel.get_connection_info()
         print(
             json.dumps(info, indent=2, default=json_default),

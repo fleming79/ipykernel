@@ -238,8 +238,8 @@ class Caller:
     _pool_instances: ClassVar[weakref.WeakSet[Self]] = weakref.WeakSet()
     _executor_queue: dict
     _taskgroup: TaskGroup | None = None
-    _jobs: deque[tuple[contextvars.Context, tuple[Future, float, float, Callable, tuple, dict]] | Callable[[], Any]]
-    _jobs_added: threading.Event
+    _callers: deque[tuple[contextvars.Context, tuple[Future, float, float, Callable, tuple, dict]] | Callable[[], Any]]
+    _callers_added: threading.Event
     _stopped = False
     _protected = False
     _running = False
@@ -292,8 +292,8 @@ class Caller:
             inst.backend = Backend(sniffio.current_async_library())
             inst.thread = thread
             inst.log = log or logging.LoggerAdapter(logging.getLogger())
-            inst._jobs = deque()
-            inst._jobs_added = threading.Event()
+            inst._callers = deque()
+            inst._callers_added = threading.Event()
             inst._protected = protected
             inst._executor_queue = {}
             cls._instances[thread] = inst
@@ -325,8 +325,8 @@ class Caller:
             self.iopub_sockets[self.thread] = socket
             task_status.started()
             while not self._stopped:
-                while len(self._jobs):
-                    job = self._jobs.popleft()
+                while len(self._callers):
+                    job = self._callers.popleft()
                     if isinstance(job, Callable):
                         try:
                             job()
@@ -335,11 +335,11 @@ class Caller:
                     else:
                         context, args = job
                         context.run(tg.start_soon, self._wrap_call, *args)
-                    self._jobs_added.clear()
-                await wait_thread_event(self._jobs_added)
+                    self._callers_added.clear()
+                await wait_thread_event(self._callers_added)
         finally:
             self._running = False
-            for job in self._jobs:
+            for job in self._callers:
                 if not callable(job):
                     job[1][0].set_exception(FutureCancelledError())
             socket.close()
@@ -417,7 +417,7 @@ class Caller:
         if self._protected and not force:
             return
         self._stopped = True
-        self._jobs_added.set()
+        self._callers_added.set()
         self._instances.pop(self.thread, None)
         if self in self._to_thread_pool:
             self._to_thread_pool.remove(self)
@@ -439,8 +439,8 @@ class Caller:
         if threading.current_thread() is self.thread and (tg := self._taskgroup):
             tg.start_soon(self._wrap_call, fut, time.monotonic(), delay, func, args, kwargs)
         else:
-            self._jobs.append((contextvars.copy_context(), (fut, time.monotonic(), delay, func, args, kwargs)))
-            self._jobs_added.set()
+            self._callers.append((contextvars.copy_context(), (fut, time.monotonic(), delay, func, args, kwargs)))
+            self._callers_added.set()
         self._outstanding += 1
         return fut
 
@@ -462,8 +462,8 @@ class Caller:
             *args: Arguments to use with func.
             **kwargs: Keyword arguments to use with func.
         """
-        self._jobs.append(functools.partial(func, *args, **kwargs))
-        self._jobs_added.set()
+        self._callers.append(functools.partial(func, *args, **kwargs))
+        self._callers_added.set()
 
     def has_execution_queue(self, func: Callable) -> bool:
         "Returns True if an execution queue exists for `func`."

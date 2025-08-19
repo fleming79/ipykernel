@@ -6,25 +6,38 @@ from __future__ import annotations
 import contextlib
 import sys
 import threading
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 import anyio
 import anyio.to_thread
 
 import async_kernel
+from async_kernel.typing import Message, MetadataKeys
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from async_kernel.kernel import Kernel
+    from async_kernel.typing import Job
+
 __all__ = [
     "do_not_debug_this_thread",
+    "get_execute_request_timeout",
+    "get_execution_count",
+    "get_job",
     "get_metadata",
+    "get_parent",
     "get_tags",
     "mark_thread_pydev_do_not_trace",
     "wait_thread_event",
 ]
 
 LAUNCHED_BY_DEBUGPY = "debugpy" in sys.modules
+
+_job_var = ContextVar("job")
+_execution_count_var: ContextVar[int] = ContextVar("execution_count")
+_execute_request_timeout: ContextVar[float | None] = ContextVar("execute_request_timeout", default=None)
 
 
 def mark_thread_pydev_do_not_trace(thread: threading.Thread, name="", *, remove=False):
@@ -62,11 +75,45 @@ async def wait_thread_event(event: threading.Event):
         event.set()
 
 
-def get_metadata() -> Mapping[str, Any]:
-    "Gets metadata from current [`Job`][async_kernel.typing.Job] context if there is one."
-    return (async_kernel.Kernel().job.get("msg") or {}).get("metadata") or {}
+def get_kernel() -> Kernel:
+    "Get the current kernel."
+    return async_kernel.Kernel()
 
 
-def get_tags() -> list[str]:
-    "Gets the list of tags from current [`Job`][async_kernel.typing.Job] context if there is one."
+def get_job() -> Job[dict] | dict:
+    "Get the job for the current context."
+    try:
+        return _job_var.get()
+    except Exception:
+        return {}
+
+
+def get_parent(job: Job | None = None, /) -> Message[dict[str, Any]] | None:
+    "Get the [parent message]() for the current context."
+    return (job or get_job()).get("msg")
+
+
+def get_metadata(job: Job | None = None, /) -> Mapping[str, Any]:
+    "Gets [metadata]() for the current context."
+    return (job or get_job().get("msg") or {}).get("metadata") or {}
+
+
+def get_tags(job: Job | None = None, /) -> list[str]:
+    "Gets the [tags]() for the current context."
     return get_metadata().get("tags") or []
+
+
+def get_execute_request_timeout(job: Job | None = None, /) -> float | None:
+    "Gets the execute_request_timeout for the current context."
+    try:
+        if timeout := get_metadata(job).get(MetadataKeys.timeout):
+            return float(timeout)
+        return get_kernel().cell_execute_timeout
+    except Exception:
+        return None
+
+
+def get_execution_count() -> int:
+    "Gets the execution count for the current context, defaults to the current kernel count."
+
+    return _execution_count_var.get(None) or async_kernel.Kernel()._execution_count  # pyright: ignore[reportPrivateUsage]

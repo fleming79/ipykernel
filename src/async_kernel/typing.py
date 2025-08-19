@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DebugMessage",
     "Job",
+    "KernelConcurrencyMode",
     "Message",
     "MetadataKeys",
     "MsgHeader",
@@ -104,6 +105,11 @@ class RunMode(enum.StrEnum):
                 return RunMode(code.removeprefix("RunMode."))
         except ValueError:
             return None
+
+
+class KernelConcurrencyMode(enum.StrEnum):
+    default = "default"
+    direct = "direct"
 
 
 class MsgType(enum.StrEnum):
