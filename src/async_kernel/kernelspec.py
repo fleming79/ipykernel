@@ -1,4 +1,4 @@
-"""The IPython kernel spec for Jupyter"""
+"""Add and remove kernel specifications for Jupyter."""
 
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
@@ -10,7 +10,6 @@ import importlib.util
 import json
 import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 from jupyter_client.kernelspec import KernelSpec, _is_valid_kernel_name  # pyright: ignore[reportPrivateUsage]
@@ -19,7 +18,7 @@ from jupyter_client.kernelspec import KernelSpec, _is_valid_kernel_name  # pyrig
 RESOURCES = Path(__file__).parent.joinpath("resources")
 
 
-__all__ = ["Backend", "KernelName", "make_argv", "write_kernel_spec"]
+__all__ = ["Backend", "KernelName", "get_kernel_dir", "make_argv", "write_kernel_spec"]
 
 
 class Backend(enum.StrEnum):
@@ -37,19 +36,20 @@ def make_argv(
     *,
     connection_file="{connection_file}",
     kernel_name: KernelName | str = KernelName.asyncio,
-    klass="async_kernel.Kernel",
+    kernel_factory="async_kernel.Kernel",
     fullpath=True,
     **kwargs,
-):
-    """
-    Constructs the argument vector (argv) for launching a Python kernel module.
-    The backend is determined from the kernel_name. The default backend `asyncio` will
-    be used unless the kernel_name contains 'trio' (case-insensitive). where a trio backend.
+) -> list[str]:
+    """Constructs the argument vector (argv) for launching a Python kernel module.
+
+    The backend is determined from the kernel_name. If the kernel_name contains 'trio'
+    (case-insensitive)a trio backend will be used otherwise an 'asyncio' backend is used.
 
     Args:
-        connection_file (str): The path to the connection file. Defaults to "{connection_file}".
-        klass (str): The string import path to a Kernel.
-        kernel_name (KernelName or str): The name of the kernel to use.
+        connection_file: The path to the connection file.
+        kernel_factory: The string import path to a callable that creates the kernel.
+        kernel_name: The name of the kernel to use.
+        fullpath: If True the full path to the executable is used, otherwise 'python' is used.
     kwargs:
         Additional settings to use on the instance of the Kernel.
         kwargs are converted to key/value pairs, keys will be prefixed with '--'.
@@ -63,7 +63,7 @@ def make_argv(
     """
     python = sys.executable if fullpath else "python"
     argv = [python, "-m", "async_kernel", "-f", connection_file]
-    for k, v in ({"klass": klass, "kernel_name": kernel_name} | kwargs).items():
+    for k, v in ({"kernel_factory": kernel_factory, "kernel_name": kernel_name} | kwargs).items():
         argv.extend((f"--{k}", str(v)))
     return argv
 
@@ -71,7 +71,7 @@ def make_argv(
 def write_kernel_spec(
     path: Path | str | None = None,
     *,
-    klass="async_kernel.Kernel",
+    kernel_factory="async_kernel.Kernel",
     connection_file="{connection_file}",
     kernel_name: KernelName | str = KernelName.asyncio,
     fullpath=False,
@@ -79,22 +79,34 @@ def write_kernel_spec(
     **kwargs,
 ) -> Path:
     """
-    Write a kernel spec directory to `path/kernel_name`.
+    Write a kernel spec directory to `path` for launching a kernel.
 
-    If `path` is not specified, a temporary directory is created.
-    The path to the kernelspec is always returned.
+    The kernel spec will always call async_kernel.__main__.main which is designed
+    to enable launching of customised kernels.
 
-    **kwargs:
-        kwargs are passed to make_argv for additional runtime configuration of the kernel.
+    Args:
+        connection_file: The path to the connection file.
+        kernel_factory: The string import path to a callable that creates the kernel.
+        kernel_name: The name of the kernel to use.
+        fullpath: If True the full path to the executable is used, otherwise 'python' is used.
+        display_name: The display name for Jupyter to use for the kernel. The default is `"Python ({kernel_name})"`.
+
+    kwargs:
+        Additional settings to use on the instance of the Kernel.
+        kwargs are converted to key/value pairs, keys will be prefixed with '--'.
+        The kwargs should correspond to settings to set prior to starting. kwargs
+        are set on the
+        instance by eval on the value.
+        keys that correspond to an attribute on the kernel instance are not used.
     """
     assert _is_valid_kernel_name(kernel_name)
-    path = Path(path) if path else Path(tempfile.mkdtemp(suffix="_kernels")) / kernel_name
+    path = Path(path) if path else get_kernel_dir() / kernel_name
     # stage resources
     path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(RESOURCES, path, dirs_exist_ok=True)
     spec = KernelSpec()
     spec.argv = make_argv(
-        klass=klass,
+        kernel_factory=kernel_factory,
         connection_file=connection_file,
         kernel_name=kernel_name,
         fullpath=fullpath,
@@ -110,3 +122,8 @@ def write_kernel_spec(
     with path.joinpath("kernel.json").open("w") as f:
         json.dump(spec.to_dict(), f, indent=1)
     return path
+
+
+def get_kernel_dir() -> Path:
+    "The path to where kernel specs are stored for Jupyter."
+    return Path(sys.prefix) / "share/jupyter/kernels"

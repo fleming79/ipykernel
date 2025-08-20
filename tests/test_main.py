@@ -1,5 +1,6 @@
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
+
 from __future__ import annotations
 
 import json
@@ -38,7 +39,7 @@ def test_prints_help_when_no_args(monkeypatch, capsys):
 
 def test_add_kernel(monkeypatch, fake_kernel_dir: pathlib.Path, capsys):
     monkeypatch.setattr(
-        sys, "argv", ["prog", "-a", "async-trio", "--display_name", "my kernel", "--klass", "my.custom.class"]
+        sys, "argv", ["prog", "-a", "async-trio", "--display_name", "my kernel", "--kernel_factory", "my.custom.class"]
     )
     main.main()
     out = capsys.readouterr().out
@@ -54,7 +55,7 @@ def test_add_kernel(monkeypatch, fake_kernel_dir: pathlib.Path, capsys):
             "async_kernel",
             "-f",
             "{connection_file}",
-            "--klass",
+            "--kernel_factory",
             "my.custom.class",
             "--kernel_name",
             "async-trio",
@@ -103,7 +104,7 @@ def test_start_kernel_success(monkeypatch, capsys):
     assert started
     out = capsys.readouterr().out
     assert "Starting kernel" in out
-    utils.clear_kernel()
+    assert "Kernel stopped" in out
 
 
 def test_start_kernel_failure(monkeypatch, capsys, mocker):

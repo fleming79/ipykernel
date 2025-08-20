@@ -68,6 +68,9 @@ async def test_debugger(subprocess_kernels_client):
     assert reply["status"] == "ok"
     assert reply["success"]
 
+    reply = await send_debug_request(client, "configurationDone")
+    assert reply["status"] == "ok"
+
     # Debugger needs to be stopped on a breakpoint
     # The steps below expect the 'debugger' to be in a various state (stopped or running)
     code = """

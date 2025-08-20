@@ -13,6 +13,7 @@ from jupyter_client.asynchronous.client import AsyncKernelClient
 import async_kernel.utils
 from async_kernel.kernel import Kernel
 from async_kernel.kernelspec import KernelName, make_argv
+from async_kernel.typing import ExecuteContent, Job, Message, MsgHeader, MsgType, SocketID
 from tests import utils
 
 if TYPE_CHECKING:
@@ -31,7 +32,6 @@ if sys.platform.startswith("win"):
 @pytest.hookimpl
 def pytest_configure(config):
     os.environ["PYTEST_TIMEOUT"] = str(1e6) if async_kernel.utils.LAUNCHED_BY_DEBUGPY else str(utils.TIMEOUT)
-    os.environ["MPLBACKEND"] = utils.MATPLOTLIB_INLINE_BACKEND
 
 
 @pytest.fixture(scope="module")
@@ -47,17 +47,14 @@ def transport():
 @pytest.fixture(scope="module")
 async def kernel(anyio_backend, transport: str, tmp_path_factory):
     # Set a blank connection_file
-    utils.clear_kernel()
     connection_file = tmp_path_factory.mktemp("async_kernel") / "temp_connection.json"
     os.environ["IPYTHONDIR"] = str(tmp_path_factory.mktemp("ipython_config"))
     kernel = Kernel()
     kernel.connection_file = str(connection_file.resolve())
+    os.environ["MPLBACKEND"] = utils.MATPLOTLIB_INLINE_BACKEND  # Set this implicitly
     kernel.transport = transport
-    try:
-        async with kernel.start_in_context():
-            yield kernel
-    finally:
-        utils.clear_kernel()
+    async with kernel.start_in_context():
+        yield kernel
 
 
 @pytest.fixture(scope="module")
@@ -109,3 +106,14 @@ async def subprocess_kernels_client(anyio_backend, tmp_path_factory, kernel_name
             process.kill()
 
     assert not connection_file.exists(), "cleanup_connection_file not called by atexit ..."
+
+
+@pytest.fixture
+def job() -> Job[ExecuteContent]:
+    "An execute dummy job"
+    content = ExecuteContent(
+        code="", silent=True, store_history=True, user_expressions={}, allow_stdin=False, stop_on_error=True
+    )
+    header = MsgHeader(msg_id="", session="", username="", date="", msg_type=MsgType.execute_request, version="1")
+    msg = Message(header=header, parent_header=header, metadata={}, buffers=[], content=content)
+    return Job(msg=msg, socket_id=SocketID.shell, ident=[b""], socket=None, received_time=0.0, run_mode=None)  # pyright: ignore[ reportArgumentType]

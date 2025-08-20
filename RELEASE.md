@@ -10,7 +10,7 @@ The recommended way to make a release is to use [`jupyter_releaser`](https://jup
 
 - Run the following:
 
-```bash
+```shell
 export VERSION=<version>
 pip install pipx
 pipx run hatch version $VERSION

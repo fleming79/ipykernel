@@ -5,11 +5,12 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import pathlib
 import threading
 import time
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import anyio
 import pytest
@@ -18,8 +19,12 @@ import zmq
 import async_kernel.utils
 from async_kernel.caller import Caller
 from async_kernel.comm import Comm
-from async_kernel.typing import EXECUTE_MODE_PREFIX, ExecuteContent, ExecuteMode, Job, SocketID
+from async_kernel.compiler import murmur2_x86
+from async_kernel.typing import ExecuteContent, Job, MsgType, RunMode, SocketID, Tags
 from tests import utils
+
+if TYPE_CHECKING:
+    from async_kernel.kernel import Kernel
 
 
 @pytest.mark.parametrize("mode", ["direct", "proxy"])
@@ -59,6 +64,13 @@ async def test_iopub(kernel, mode: Literal["direct", "proxy"]):
         ctx.term()
 
 
+async def test_execute_request_success(client):
+    reply = await utils.send_shell_message(client, MsgType.execute_request, {"code": "1 + 1", "silent": False})
+    assert reply["header"]["msg_type"] == "execute_reply"
+    assert reply["content"]["status"] == "ok"
+    await utils.clear_iopub(client)
+
+
 @pytest.mark.parametrize("quiet", [True, False])
 async def test_simple_print(kernel, client, quiet: bool):
     """simple print statement in kernel"""
@@ -74,9 +86,28 @@ async def test_simple_print(kernel, client, quiet: bool):
         await utils.clear_iopub(client)
 
 
+@pytest.mark.parametrize("mode", ["kernel_timeout", "metadata"])
+async def test_execute_kernel_timeout(client, kernel: Kernel, mode: str):
+    kernel.cell_execute_timeout = 0.1 if "kernel" in mode else None
+    last_stop_time = kernel._stop_on_error_time  # pyright: ignore[reportPrivateUsage]
+    metadata: dict[str, float | list] = {"timeout": 0.1}
+    try:
+        code = "\n".join(["import anyio", "await anyio.sleep_forever()"])
+        msg_id, content = await utils.execute(client, code=code, metadata=metadata, clear_pub=False)
+        assert last_stop_time == kernel._stop_on_error_time, "Should not cause cancellation"  # pyright: ignore[reportPrivateUsage]
+        assert content["status"] == "ok"
+        await utils.check_pub_message(client, msg_id, execution_state="busy")
+        await utils.check_pub_message(client, msg_id, msg_type="execute_input")
+        expected = {"traceback": [], "ename": "TimeoutError", "evalue": "Cell execute timeout"}
+        await utils.check_pub_message(client, msg_id, msg_type="error", **expected)
+        await utils.check_pub_message(client, msg_id, execution_state="idle")
+    finally:
+        kernel.cell_execute_timeout = None
+
+
 async def test_bad_message(client):
-    client.shell_channel.socket.send(b"")
-    client.control_channel.socket.send(b"")
+    await utils.send_shell_message(client, "bad_message", reply=False)  # pyright: ignore[reportArgumentType]
+    await utils.send_control_message(client, "bad_message", reply=False)  # pyright: ignore[reportArgumentType]
     await utils.execute(client, "")
 
 
@@ -108,7 +139,7 @@ async def test_input(
     assert content["prompt"] == theprompt
     # interrupt
     if test_mode == "interrupt":
-        await utils.send_control_message(client, "interrupt_request")
+        await utils.send_control_message(client, MsgType.interrupt_request)
         reply = await utils.get_reply(client, msg_id, clear_pub=False)
         assert reply["content"]["status"] == "error"
         return
@@ -185,38 +216,49 @@ async def test_message_order(client):
         reply = await client.get_shell_msg()
         assert reply["content"]["execution_count"] == i
         assert reply["parent_header"]["msg_id"] == msg_id
-    await utils.clear_iopub(client)
+    await utils.clear_iopub(client, timeout=0.2)
 
 
-async def test_execute_request_success(client):
-    reply = await utils.send_shell_message(client, "execute_request", {"code": "1 + 1", "silent": False})
-    assert reply["header"]["msg_type"] == "execute_reply"
-    assert reply["content"]["status"] == "ok"
-    await utils.clear_iopub(client)
+async def test_execute_request_error_tag_ignore_error(client):
+    metadata = {"tags": [Tags.suppress_error]}
+    await utils.execute(client, "stop - suppress me", metadata=metadata, clear_pub=False)
+    stdout, _ = await utils.assemble_output(client)
+    assert "⚠" in stdout
+    await utils.clear_iopub(client, timeout=0.1)
 
 
-async def test_execute_request_error(client):
-    reply = await utils.send_shell_message(client, "execute_request", {"code": "some invalid code", "silent": False})
+@pytest.mark.parametrize("run_mode", RunMode)
+@pytest.mark.parametrize(
+    "code",
+    [
+        "some invalid code",
+        """
+        from async_kernel.caller import FutureCancelledError,
+        async def fail():,
+            raise FutureCancelledError,
+        await fail()""",
+    ],
+)
+async def test_execute_request_error(client, code: str, run_mode: RunMode):
+    reply = await utils.send_shell_message(client, MsgType.execute_request, {"code": code, "silent": False})
     assert reply["header"]["msg_type"] == "execute_reply"
     assert reply["content"]["status"] == "error"
     await utils.clear_iopub(client)
 
 
-async def test_execute_request_stop_on_error(client, kernel):
-    kernel._stop_on_error_time = time.monotonic() + 10
-    reply = await utils.send_shell_message(client, "execute_request", {"code": "some invalid code", "silent": False})
-    assert reply["header"]["msg_type"] == "execute_reply"
-    assert reply["content"]["status"] == "error"
-    kernel._stop_on_error_time = 0
+async def test_execute_request_stop_on_error(client):
+    client.execute("import anyio;await anyio.sleep(0.1);stop-here")
+    _, content = await utils.execute(client)
+    assert content["evalue"] == "Aborting due to prior exception"
 
 
 async def test_complete_request(client):
-    reply = await utils.send_shell_message(client, "complete_request", {"code": "hello", "cursor_pos": 0})
+    reply = await utils.send_shell_message(client, MsgType.complete_request, {"code": "hello", "cursor_pos": 0})
     assert reply["header"]["msg_type"] == "complete_reply"
 
 
 async def test_inspect_request(client):
-    reply = await utils.send_shell_message(client, "inspect_request", {"code": "hello", "cursor_pos": 0})
+    reply = await utils.send_shell_message(client, MsgType.inspect_request, {"code": "hello", "cursor_pos": 0})
     assert reply["header"]["msg_type"] == "inspect_reply"
 
 
@@ -225,24 +267,26 @@ async def test_history_request(client, kernel):
     # assert kernel.shell.history_manager
 
     # kernel.shell.history_manager.db = DummyDB()
-    reply = await utils.send_shell_message(client, "history_request", {"hist_access_type": "", "output": "", "raw": ""})
-    assert reply["header"]["msg_type"] == "history_reply"
     reply = await utils.send_shell_message(
-        client, "history_request", {"hist_access_type": "tail", "output": "", "raw": ""}
+        client, MsgType.history_request, {"hist_access_type": "", "output": "", "raw": ""}
     )
     assert reply["header"]["msg_type"] == "history_reply"
     reply = await utils.send_shell_message(
-        client, "history_request", {"hist_access_type": "range", "output": "", "raw": ""}
+        client, MsgType.history_request, {"hist_access_type": "tail", "output": "", "raw": ""}
     )
     assert reply["header"]["msg_type"] == "history_reply"
     reply = await utils.send_shell_message(
-        client, "history_request", {"hist_access_type": "search", "output": "", "raw": ""}
+        client, MsgType.history_request, {"hist_access_type": "range", "output": "", "raw": ""}
+    )
+    assert reply["header"]["msg_type"] == "history_reply"
+    reply = await utils.send_shell_message(
+        client, MsgType.history_request, {"hist_access_type": "search", "output": "", "raw": ""}
     )
     assert reply["header"]["msg_type"] == "history_reply"
 
 
 async def test_comm_info_request(client):
-    reply = await utils.send_shell_message(client, "comm_info_request")
+    reply = await utils.send_shell_message(client, MsgType.comm_info_request)
     assert reply["header"]["msg_type"] == "comm_info_reply"
 
 
@@ -257,22 +301,22 @@ async def test_comm_open_msg_close(client, kernel, mocker):
     # open a comm
     with anyio.move_on_after(0.1):
         await utils.send_shell_message(
-            client, "comm_open", {"content": {}, "comm_id": "comm id", "target_name": "my target"}
+            client, MsgType.comm_open, {"content": {}, "comm_id": "comm id", "target_name": "my target"}
         )
     assert isinstance(comm, Comm)
     comm = cast("Comm", comm)
-    reply = await utils.send_shell_message(client, "comm_info_request")
+    reply = await utils.send_shell_message(client, MsgType.comm_info_request)
     assert reply["header"]["msg_type"] == "comm_info_reply"
     assert reply["content"]["comms"].get("comm id") == {"target_name": "my target"}
 
     msg_received = mocker.patch.object(comm, "handle_msg")
     with anyio.move_on_after(0.1):
-        await utils.send_shell_message(client, "comm_msg", {"comm_id": comm.comm_id})
+        await utils.send_shell_message(client, MsgType.comm_msg, {"comm_id": comm.comm_id})
     assert msg_received.call_count == 1
     # close comm
     closed = mocker.patch.object(comm, "handle_close")
     with anyio.move_on_after(0.1):
-        await utils.send_shell_message(client, "comm_close", {"comm_id": comm.comm_id})
+        await utils.send_shell_message(client, MsgType.comm_close, {"comm_id": comm.comm_id})
     assert closed.call_count == 1
     kernel.comm_manager.unregister_target("my target", cb)
 
@@ -280,7 +324,7 @@ async def test_comm_open_msg_close(client, kernel, mocker):
 async def test_interrupt_request(client, kernel):
     event = threading.Event()
     kernel._interrupts.add(event.set)
-    reply = await utils.send_control_message(client, "interrupt_request")
+    reply = await utils.send_control_message(client, MsgType.interrupt_request)
     assert reply["header"]["msg_type"] == "interrupt_reply"
     assert reply["content"] == {"status": "ok"}
     assert event.is_set()
@@ -290,7 +334,7 @@ async def test_interrupt_request_async_request(subprocess_kernels_client):
     client = subprocess_kernels_client
     msg_id = client.execute("await anyio.sleep(100)")
     await anyio.sleep(0.1)
-    reply = await utils.send_control_message(client, "interrupt_request")
+    reply = await utils.send_control_message(client, MsgType.interrupt_request)
     reply = await utils.get_reply(client, msg_id)
     assert reply["content"]["status"] == "error"
 
@@ -299,39 +343,28 @@ async def test_interrupt_request_blocking_exec_request(subprocess_kernels_client
     client = subprocess_kernels_client
     msg_id = client.execute("import time;time.sleep(100)")
     await anyio.sleep(0.1)
-    reply = await utils.send_control_message(client, "interrupt_request")
+    reply = await utils.send_control_message(client, MsgType.interrupt_request)
     reply = await utils.get_reply(client, msg_id)
     assert reply["content"]["status"] == "error"
-    assert reply["content"]["ename"] == "KernelInterruptError"
+    assert reply["content"]["ename"] == "FutureCancelledError"
 
 
 async def test_interrupt_request_blocking_task(subprocess_kernels_client):
     code = """
-async def test():
     import time
-    from async_kernel.kernel import KernelInterruptError
-    started.set()
-    await anyio.sleep(0.01)
-    try:
-        time.sleep(100)
-    except KernelInterruptError:
-        print("KernelInterruptError")
-    print("Failed")
-import anyio
-started = anyio.Event()
-from async_kernel import Caller
-Caller().call_soon(test)
-await started.wait()
-"""
+    from async_kernel import Caller
+    await Caller().call_soon(time.sleep, 100)
+    """
     client = subprocess_kernels_client
-    _, reply = await utils.execute(client, code)
-    assert reply["status"] == "ok"
-    await anyio.sleep(0.011)
+    msg_id = client.execute(code, reply=False)
+    await utils.check_pub_message(client, msg_id, execution_state="busy")
+    await utils.check_pub_message(client, msg_id, msg_type="execute_input")
+    await anyio.sleep(0.2)
     for _ in range(2):  # Blocking calls in tasks need to be interrupted twice
-        await utils.send_control_message(client, "interrupt_request", clear_pub=False)
-    stdout, _ = await utils.assemble_output(client, timeout=1)
-    assert "KernelInterruptError" in stdout
-    await utils.clear_iopub(client)
+        await utils.send_control_message(client, MsgType.interrupt_request)
+    reply = await utils.get_reply(client, msg_id)
+    assert reply["content"]["status"] == "error"
+    assert reply["content"]["ename"] == "FutureCancelledError"
 
 
 @pytest.mark.parametrize("response", ["y", ""])
@@ -345,7 +378,7 @@ async def test_user_exit(client, kernel, mocker, response: Literal["y", ""]):
 
 
 async def test_is_complete_request(client):
-    reply = await utils.send_shell_message(client, "is_complete_request", {"code": "hello"})
+    reply = await utils.send_shell_message(client, MsgType.is_complete_request, {"code": "hello"})
     assert reply["header"]["msg_type"] == "is_complete_reply"
 
 
@@ -357,14 +390,14 @@ async def test_debug_static(client, command: str, mocker):
         mocker.patch.object(async_kernel.utils, "LAUNCHED_BY_DEBUGPY", new=True)
         assert async_kernel.utils.LAUNCHED_BY_DEBUGPY
     reply = await utils.send_control_message(
-        client, "debug_request", {"type": "request", "seq": 1, "command": command, "arguments": {"code": code}}
+        client, MsgType.debug_request, {"type": "request", "seq": 1, "command": command, "arguments": {"code": code}}
     )
     assert reply["content"]["status"] == "ok"
     if command == "dumpCell":
         path = reply["content"]["body"]["sourcePath"]
         reply = await utils.send_control_message(
             client,
-            "debug_request",
+            MsgType.debug_request,
             {"type": "request", "seq": 1, "command": "source", "arguments": {"source": {"path": path}}},
         )
         assert reply["content"]["status"] == "ok"
@@ -378,7 +411,7 @@ async def test_debug_raises_no_socket(kernel):
 
 async def test_debug_not_connected(client):
     reply = await utils.send_control_message(
-        client, "debug_request", {"type": "request", "seq": 1, "command": "disconnect", "arguments": {}}
+        client, MsgType.debug_request, {"type": "request", "seq": 1, "command": "disconnect", "arguments": {}}
     )
     assert reply["content"]["status"] == "error"
     assert reply["content"]["evalue"] == "Debugy client not connected."
@@ -389,7 +422,7 @@ async def test_debug_static_richInspectVariables(client, variable_name):
     # These are tests on the debugger that don't required the debugger to be connected.
     reply = await utils.send_control_message(
         client,
-        "debug_request",
+        MsgType.debug_request,
         {
             "type": "request",
             "seq": 1,
@@ -438,8 +471,8 @@ async def test_shell_can_set_namespace(kernel):
     assert set(kernel.shell.user_ns) == {"Out", "_oh", "In", "exit", "_dh", "open", "get_ipython", "_ih", "quit"}
 
 
-@pytest.mark.parametrize("mode", ExecuteMode)
-async def test_header_mode(client, mode: ExecuteMode):
+@pytest.mark.parametrize("mode", RunMode)
+async def test_header_mode(client, mode: RunMode):
     code = f"""
 {mode}
 import time
@@ -474,35 +507,59 @@ async def test_invalid_message(client, channel):
     f = utils.send_control_message if channel == "control" else utils.send_shell_message
     response = None
     with anyio.move_on_after(0.1):
-        response = await f(client, "test_invalid_message")
+        response = await f(client, "test_invalid_message")  # pyright: ignore[reportArgumentType]
     assert response is None
     await utils.clear_iopub(client)
+
+
+async def test_kernel_get_handler(kernel: Kernel):
+    with pytest.raises(TypeError):
+        kernel.get_handler("invalid mode")  # pyright: ignore[reportArgumentType]
+    for msg_type in MsgType:
+        handler = kernel.get_handler(msg_type)
+        assert inspect.iscoroutinefunction(handler)
+        sig = inspect.signature(handler)
+        assert len(sig.parameters) == 1
+        param = sig.parameters["job"]
+        assert param.kind == param.POSITIONAL_ONLY
 
 
 @pytest.mark.parametrize(
     ("code", "silent", "socket_id", "expected"),
     [
-        (f"{ExecuteMode.task}", False, SocketID.shell, ExecuteMode.task),
-        (f" {ExecuteMode.task}", False, SocketID.shell, ExecuteMode.task),
-        ("print(1)", False, SocketID.shell, ExecuteMode.queue),
-        ("", True, SocketID.shell, ExecuteMode.task),
-        (f"{ExecuteMode.thread}\nprint('hello')", False, SocketID.shell, ExecuteMode.thread),
-        ("", False, SocketID.control, ExecuteMode.task),
-        (f"{EXECUTE_MODE_PREFIX}threads", False, SocketID.shell, ExecuteMode.queue),
-        (f"{EXECUTE_MODE_PREFIX}Task", False, SocketID.shell, ExecuteMode.queue),
+        (f"{RunMode.task}", False, SocketID.shell, RunMode.task),
+        (f" {RunMode.task}", False, SocketID.shell, RunMode.task),
+        ("print(1)", False, SocketID.shell, RunMode.queue),
+        ("", True, SocketID.shell, RunMode.task),
+        (f"{RunMode.thread}\nprint('hello')", False, SocketID.shell, RunMode.thread),
+        ("", False, SocketID.control, RunMode.task),
+        ("threads", False, SocketID.shell, RunMode.queue),
+        ("Task", False, SocketID.shell, RunMode.queue),
+        ("RunMode.blocking", False, SocketID.shell, RunMode.blocking),
     ],
 )
-def test_get_execute_mode(code: str, silent: bool, socket_id, expected: ExecuteMode):
-    content = ExecuteContent(
-        code=code,
-        silent=silent,
-        store_history=True,
-        user_expressions={},
-        allow_stdin=False,
-        stop_on_error=True,
-        execute_mode=None,
+async def test_get_run_mode(
+    kernel: Kernel, code: str, silent: bool, socket_id, expected: RunMode, job: Job[ExecuteContent]
+):
+    job["msg"]["content"]["code"] = code
+    job["msg"]["content"]["silent"] = silent
+    mode = kernel.get_run_mode(MsgType.execute_request, socket_id=socket_id, job=job)
+    assert mode is expected
+
+
+async def test_get_run_mode_tag(client):
+    metadata = {"tags": [RunMode.thread]}
+    _, content = await utils.execute(
+        client,
+        "from async_kernel import utils;run_mode=utils.get_job()['run_mode']",
+        metadata=metadata,
+        user_expressions={"run_mode": "run_mode"},
     )
-    job = Job(msg={"content": content}, socket_id=socket_id)  # pyright: ignore[reportCallIssue]
-    execute_mode = async_kernel.Kernel.get_execute_mode(job)
-    assert execute_mode is expected
-    assert job["msg"]["content"]["execute_mode"] is expected
+    assert content["status"] == "ok"
+    assert "thread" in content["user_expressions"]["run_mode"]["data"]["text/plain"]
+
+
+async def test_all_concurrency_run_modes(kernel):
+    data = kernel.all_concurrency_run_modes()
+    # Regen the hash as required
+    assert murmur2_x86(str(data), 1) == 417361055

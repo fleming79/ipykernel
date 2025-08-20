@@ -1,94 +1,109 @@
 # Contributing
 
-Welcome!
+This project is under active development. Feel free to create an issue to provide feedback.
 
-For contributing tips, follow the [Jupyter Contributing Guide](https://jupyter.readthedocs.io/en/latest/contributing/content-contributor.html).
-Please make sure to follow the [Jupyter Code of Conduct](https://github.com/jupyter/governance/blob/master/conduct/code_of_conduct.md).
+## Development
 
-## Installing ipykernel for development
+## Installation from source
 
-ipykernel is a pure Python package, so setting up for development is the same as most other Python projects:
+```shell
+git clone https://github.com/fleming79/async-kernel.git
+cd async-kernel
+uv venv -p python@311
+uv sync
+# Activate the environment
+```
 
-```bash
-# clone the repo
-git clone https://github.com/ipython/ipykernel
-cd ipykernel
-# do a 'development' or 'editable' install with pip:
-pip install -e .[test]
+### update packages
+
+```shell
+uv lock --upgrade
+```
+
+## Running tests
+
+```shell
+uv run pytest
+```
+
+## Running tests with coverage
+
+We are aiming for 100% code coverage on CI (Linux). Any new code should also update tests to maintain coverage.
+
+```shell
+uv run pytest -vv --cov
 ```
 
 ## Code Styling
 
-`ipykernel` has adopted automatic code formatting so you shouldn't
-need to worry too much about your code style.
-As long as your code is valid,
-the pre-commit hook should take care of how it should look.
-To install `pre-commit`, run the following::
+`Async kernel` uses ruff for code formatting. The pre-commit hook should take care of how it should look.
 
-```
+To install `pre-commit`, run the following:
+
+```shell
 pip install pre-commit
 pre-commit install
 ```
 
-You can invoke the pre-commit hook by hand at any time with::
+You can invoke the pre-commit hook by hand at any time with:
 
-```
+```shell
 pre-commit run
 ```
 
-which should run any autoformatting on your code
-and tell you about any errors it couldn't fix automatically.
-You may also install [black integration](https://github.com/psf/black#editor-integration)
-into your text editor to format code automatically.
+## Type checking
 
-If you have already committed files before setting up the pre-commit
-hook with `pre-commit install`, you can fix everything up using
-`pre-commit run --all-files`. You need to make the fixing commit
-yourself after that.
+Type checking is performed using [basedpyright](https://docs.basedpyright.com/).
 
-Some of the hooks only run on CI by default, but you can invoke them by
-running with the `--hook-stage manual` argument.
-
-## Releasing ipykernel
-
-Releasing ipykernel is _almost_ standard for a Python package:
-
-- set version for release
-- make and publish tag
-- publish release to PyPI
-- set version back to development
-
-The one extra step for ipykernel is that we need to make separate wheels for Python 2 and 3
-because the bundled kernelspec has different contents for Python 2 and 3. This
-affects only the 4.x branch of ipykernel as the 5+ version is only compatible
-Python 3.
-
-The full release process is available below:
-
-```bash
-# make sure version is set in ipykernel/_version.py
-VERSION="4.9.0"
-# commit the version and make a release tag
-git add ipykernel/_version.py
-git commit -m "release $VERSION"
-git tag -am "release $VERSION" $VERSION
-
-# push the changes to the repo
-git push
-git push --tags
-
-# publish the release to PyPI
-# note the extra `python2 setup.py bdist_wheel` for creating
-# the wheel for Python 2
-pip install --upgrade twine
-git clean -xfd
-python3 setup.py sdist bdist_wheel
-python2 setup.py bdist_wheel  # the extra step for the 4.x branch.
-twine upload dist/*
-
-# set the version back to '.dev' in ipykernel/_version.py
-# e.g. 4.10.0.dev if we just released 4.9.0
-git add ipykernel/_version.py
-git commit -m "back to dev"
-git push
+```shell
+basedpyright
 ```
+
+## Documentation
+
+Documentation is provided my [Material for MkDocs ](https://squidfunk.github.io/mkdocs-material/). To start up a server for editing locally:
+
+### Install
+
+```shell
+uv sync --group docs
+uv run async-kernel -a async-docs --cell_execute_timeout 0.1
+```
+
+### Serve locally
+
+```shell
+mkdocs serve 
+```
+
+### API / Docstrings
+
+API documentation is included using [mkdocstrings](https://mkdocstrings.github.io/).
+
+Docstrings are written in docstring format [google-notypes](https://mkdocstrings.github.io/griffe/reference/docstrings/?h=google#google-style).
+Typing information is included automatically by [griff](https://mkdocstrings.github.io/griffe).
+
+#### See also
+
+- [cross-referencing](https://mkdocstrings.github.io/usage/#cross-references)
+
+### Notebooks
+
+Notebooks are included in the documentation with the plugin [mkdocs-jupyter](https://github.com/danielfrg/mkdocs-jupyter).
+
+#### Useful links
+
+These links are not relevant for docstrings.
+
+- [footnotes](https://squidfunk.github.io/mkdocs-material/reference/footnotes/#usage)
+- [tooltips](https://squidfunk.github.io/mkdocs-material/reference/tooltips/#usage)
+
+### Deploy manually
+
+```shell
+mkdocs gh-deploy --force
+```
+
+## Releasing Async kernel
+
+TODO

@@ -2,22 +2,17 @@
 # Distributed under the terms of the Modified BSD License.
 
 import json
-import pathlib
 import shutil
 
 import pytest
 from jupyter_client.kernelspec import KernelSpec
 
-from async_kernel.kernelspec import RESOURCES, KernelName, write_kernel_spec
+from async_kernel.kernelspec import KernelName, write_kernel_spec
 
 
 @pytest.mark.parametrize("kernel_name", list(KernelName))
-def test_write_kernel_spec(kernel_name: KernelName):
-    path = write_kernel_spec(kernel_name=kernel_name)
-    if RESOURCES.exists():
-        for fname in RESOURCES.iterdir():
-            dst = path.joinpath(fname)
-            assert pathlib.Path(dst).exists()
+def test_write_kernel_spec(kernel_name: KernelName, tmp_path):
+    path = write_kernel_spec(tmp_path, kernel_name=kernel_name)
     kernel_json = path.joinpath("kernel.json")
     assert kernel_json.exists()
     with kernel_json.open("r") as f:

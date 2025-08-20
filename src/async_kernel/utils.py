@@ -4,84 +4,40 @@
 from __future__ import annotations
 
 import contextlib
-import errno
 import sys
 import threading
-import time
-import traceback
-from pathlib import Path
-from typing import Literal
+from contextvars import ContextVar
+from typing import TYPE_CHECKING, Any
 
 import anyio
 import anyio.to_thread
-from zmq import Socket, SocketType, ZMQError
 
-from async_kernel.typing import NoValue
+import async_kernel
+from async_kernel.typing import Message, MetadataKeys
 
-__all__ = ["bind_socket", "do_not_debug_this_thread", "mark_thread_pydev_do_not_trace", "wait_thread_event"]
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from async_kernel.kernel import Kernel
+    from async_kernel.typing import Job
+
+__all__ = [
+    "do_not_debug_this_thread",
+    "get_execute_request_timeout",
+    "get_execution_count",
+    "get_job",
+    "get_metadata",
+    "get_parent",
+    "get_tags",
+    "mark_thread_pydev_do_not_trace",
+    "wait_thread_event",
+]
 
 LAUNCHED_BY_DEBUGPY = "debugpy" in sys.modules
 
-
-def bind_socket(
-    socket: Socket[SocketType],
-    transport: Literal["tcp", "ipc"],
-    ip: str,
-    port: int = 0,
-    max_attempts: int | NoValue = NoValue,  # pyright: ignore[reportInvalidTypeForm]
-) -> int:
-    """Bind the socket to a port using the settings.
-
-    max_attempts: The maximum number of attempts to bind the socket. If un-specified,
-    defaults to 100 if port missing, else 2 attempts.
-    """
-
-    def _try_bind_socket(port: int):
-        if transport == "tcp":
-            if not port:
-                port = socket.bind_to_random_port(f"tcp://{ip}")
-            else:
-                socket.bind(f"tcp://{ip}:{port}")
-        elif transport == "ipc":
-            if not port:
-                port = 1
-                while True:
-                    port = port + 1
-                    path = f"{ip}-{port}"
-                    if not Path(path).exists():
-                        break
-            else:
-                path = f"{ip}-{port}"
-            socket.bind(f"ipc://{path}")
-        return port
-
-    if transport == "ipc":
-        ip = Path(ip).as_posix()
-    if socket.TYPE == SocketType.ROUTER:
-        # ref: https://github.com/ipython/ipykernel/issues/270
-        socket.router_handover = 1
-    try:
-        win_in_use = errno.WSAEADDRINUSE  # type: ignore[attr-defined]
-    except AttributeError:
-        win_in_use = None
-    # Try up to 100 times to bind a port when in conflict to avoid
-    # infinite attempts in bad setups
-    if max_attempts is NoValue:
-        max_attempts = 2 if port else 100
-    e = None
-    for _ in range(max_attempts):
-        try:
-            return _try_bind_socket(port)
-        except ZMQError as e_:
-            # Raise if we have any error not related to socket binding
-            # 135: Protocol not supported
-            if e_.errno in {errno.EADDRINUSE, win_in_use, 135}:
-                e = e_
-                break
-            if port:
-                time.sleep(1)
-    msg = f"Failed to bind {socket} for {transport=}" + (f" to {port=}!" if port else "!")
-    raise RuntimeError(msg) from e
+_job_var = ContextVar("job")
+_execution_count_var: ContextVar[int] = ContextVar("execution_count")
+_execute_request_timeout: ContextVar[float | None] = ContextVar("execute_request_timeout", default=None)
 
 
 def mark_thread_pydev_do_not_trace(thread: threading.Thread, name="", *, remove=False):
@@ -119,14 +75,45 @@ async def wait_thread_event(event: threading.Event):
         event.set()
 
 
-def error_to_dict(error: BaseException):
-    """Convert the error to a dict.
+def get_kernel() -> Kernel:
+    "Get the current kernel."
+    return async_kernel.Kernel()
 
-    ref: https://jupyter-client.readthedocs.io/en/stable/messaging.html#request-reply
-    """
-    return {
-        "status": "error",
-        "ename": type(error).__name__,
-        "evalue": str(error),
-        "traceback": traceback.format_exception(error),
-    }
+
+def get_job() -> Job[dict] | dict:
+    "Get the job for the current context."
+    try:
+        return _job_var.get()
+    except Exception:
+        return {}
+
+
+def get_parent(job: Job | None = None, /) -> Message[dict[str, Any]] | None:
+    "Get the [parent message]() for the current context."
+    return (job or get_job()).get("msg")
+
+
+def get_metadata(job: Job | None = None, /) -> Mapping[str, Any]:
+    "Gets [metadata]() for the current context."
+    return (job or get_job()).get("msg", {}).get("metadata", {})
+
+
+def get_tags(job: Job | None = None, /) -> list[str]:
+    "Gets the [tags]() for the current context."
+    return get_metadata(job).get("tags", [])
+
+
+def get_execute_request_timeout(job: Job | None = None, /) -> float | None:
+    "Gets the execute_request_timeout for the current context."
+    try:
+        if timeout := get_metadata(job).get(MetadataKeys.timeout):
+            return float(timeout)
+        return get_kernel().cell_execute_timeout
+    except Exception:
+        return None
+
+
+def get_execution_count() -> int:
+    "Gets the execution count for the current context, defaults to the current kernel count."
+
+    return _execution_count_var.get(None) or async_kernel.Kernel()._execution_count  # pyright: ignore[reportPrivateUsage]

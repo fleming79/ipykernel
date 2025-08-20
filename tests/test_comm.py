@@ -103,4 +103,4 @@ async def test_comm_manager(kernel) -> None:
     manager.comm_close(None, None, msg)
     assert len(msgs) == 3
 
-    assert comm._closed
+    assert comm._closed  # pyright: ignore[reportPrivateUsage]
