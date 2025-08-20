@@ -23,7 +23,7 @@ uv lock --upgrade
 ## Running tests
 
 ```shell
-pytest
+uv run pytest
 ```
 
 ## Running tests with coverage
@@ -31,7 +31,7 @@ pytest
 We are aiming for 100% code coverage on CI (Linux). Any new code should also update tests to maintain coverage.
 
 ```shell
-pytest -vv --cov
+uv run pytest -vv --cov
 ```
 
 ## Code Styling
