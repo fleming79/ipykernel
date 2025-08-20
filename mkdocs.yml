@@ -26,8 +26,8 @@ theme:
     - navigation.tabs
     - navigation.tabs.sticky
     - content.code.copy
-    - content.action.edit
-    - content.action.view
+    # - content.action.edit edit source / view source # https://squidfunk.github.io/mkdocs-material/upgrade/?h=content+action#contentaction
+    # - content.action.view
     - toc.follow # https://squidfunk.github.io/mkdocs-material/setup/setting-up-navigation/?h=table#anchor-following
     # - toc.integrate # https://squidfunk.github.io/mkdocs-material/setup/setting-up-navigation/?h=table#navigation-integration
     - navigation.top # https://squidfunk.github.io/mkdocs-material/setup/setting-up-navigation/?h=naviga#back-to-top-button

@@ -14,6 +14,12 @@ uv sync
 # Activate the environment
 ```
 
+### update packages
+
+```shell
+uv lock --upgrade
+```
+
 ## Running tests
 
 ```shell
@@ -94,7 +100,7 @@ These links are not relevant for docstrings.
 
 ### Deploy manually
 
-```
+```shell
 mkdocs gh-deploy --force
 ```
 
