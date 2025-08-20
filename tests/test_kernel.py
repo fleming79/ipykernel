@@ -528,7 +528,7 @@ async def test_get_run_mode(
 ):
     job["msg"]["content"]["code"] = code
     job["msg"]["content"]["silent"] = silent
-    mode = kernel.get_run_mode(socket_id, MsgType.execute_request, job=job)
+    mode = kernel.get_run_mode(MsgType.execute_request, socket_id=socket_id, job=job)
     assert mode is expected
 
 

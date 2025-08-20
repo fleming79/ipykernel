@@ -20,7 +20,6 @@ import threading
 import time
 import traceback
 import uuid
-from collections.abc import Callable
 from contextlib import asynccontextmanager
 from logging import Logger, LoggerAdapter
 from pathlib import Path
@@ -59,7 +58,7 @@ from async_kernel.typing import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Generator
+    from collections.abc import AsyncGenerator, Callable, Generator, Iterable
     from types import CoroutineType, FrameType
 
     from anyio.abc import TaskStatus
@@ -609,7 +608,7 @@ class Kernel(ConnectionFileMixin):
             handler = self.get_handler(socket_id, msg_type)
         except (ValueError, TypeError):
             return
-        run_mode = self.get_run_mode(socket_id, msg_type, job=job)
+        run_mode = self.get_run_mode(msg_type, socket_id=socket_id, job=job)
         self.log.debug("%s  %s run mode %s handler: %s", socket_id, msg_type, run_mode, handler)
         job["run_mode"] = run_mode
         runner = _wrap_handler(self.run_handler, handler)
@@ -625,9 +624,9 @@ class Kernel(ConnectionFileMixin):
 
     def get_run_mode(
         self,
-        socket_id: SocketID,
         msg_type: MsgType,
         *,
+        socket_id: Literal[SocketID.shell, SocketID.control] = SocketID.shell,
         concurrency_mode: KernelConcurrencyMode | NoValue = NoValue,  # pyright: ignore[reportInvalidTypeForm]
         job: Job | None = None,
     ) -> RunMode:
@@ -683,6 +682,8 @@ class Kernel(ConnectionFileMixin):
 
     def all_concurrency_run_modes(
         self,
+        socket_ids: Iterable[Literal[SocketID.shell, SocketID.control]] = (SocketID.shell, SocketID.control),
+        msg_types: Iterable[MsgType] = MsgType,
     ) -> dict[
         Literal["SocketID", "KernelConcurrencyMode", "MsgType", "RunMode"],
         tuple[SocketID, KernelConcurrencyMode, MsgType, RunMode | None],
@@ -690,11 +691,11 @@ class Kernel(ConnectionFileMixin):
         """Generates a dictionary containing all combinations of SocketID, KernelConcurrencyMode, and MsgType,
         along with their corresponding RunMode (if available)."""
         data: list[Any] = []
-        for socket_id in [SocketID.shell, SocketID.control]:
+        for socket_id in socket_ids:
             for concurrency_mode in KernelConcurrencyMode:
-                for msg_type in MsgType:
+                for msg_type in msg_types:
                     try:
-                        mode = self.get_run_mode(socket_id, msg_type, concurrency_mode=concurrency_mode)
+                        mode = self.get_run_mode(msg_type, socket_id=socket_id, concurrency_mode=concurrency_mode)
                     except ValueError:
                         mode = None
                     data.append((socket_id, concurrency_mode, msg_type, mode))
