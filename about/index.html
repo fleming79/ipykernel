@@ -6,17 +6,13 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Async-kernel for Jupyter">
+        <meta name="description" content="Notes about contributing, changelog and development.">
       
       
       
-        <link rel="canonical" href="https://fleming79.github.io/async-kernel/command_line/">
+        <link rel="canonical" href="https://fleming79.github.io/async-kernel/about/">
       
       
-        <link rel="prev" href="../caller/">
-      
-      
-        <link rel="next" href="../api/">
       
       
       <link rel="icon" href="../assets/images/favicon.png">
@@ -24,7 +20,7 @@
     
     
       
-        <title>Command line - async-kernel</title>
+        <title>About - async-kernel</title>
       
     
     
@@ -47,12 +43,6 @@
       
     
     
-      
-        
-        
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Noto+Sans+Cham:300,300i,400,400i,700,700i%7CNoto+Sans+Mono:400,400i,700,700i&display=fallback">
-        <style>:root{--md-text-font:"Noto Sans Cham";--md-code-font:"Noto Sans Mono"}</style>
       
     
     
@@ -84,11 +74,6 @@
     <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
     <label class="md-overlay" for="__drawer"></label>
     <div data-md-component="skip">
-      
-        
-        <a href="#command-line" class="md-skip">
-          Skip to content
-        </a>
       
     </div>
     <div data-md-component="announce">
@@ -138,7 +123,7 @@ viewing the latest version.
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Command line
+              About
             
           </span>
         </div>
@@ -260,6 +245,8 @@ viewing the latest version.
   
   
     
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+    
   
   Home
 
@@ -272,20 +259,32 @@ viewing the latest version.
   
   
   
+  
     
+    
+      
+  
+  
   
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../simple_example/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../notebooks/" class="md-tabs__link">
           
   
+  
+    
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14 10h5.5L14 4.5zM5 3h10l6 6v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5c0-1.11.89-2 2-2m0 9v2h14v-2zm0 4v2h9v-2z"/></svg>
+    
   
   Usage
 
         </a>
       </li>
+    
+  
+
     
   
 
@@ -295,17 +294,20 @@ viewing the latest version.
   
   
   
-    <li class="md-tabs__item">
-      <a href="../api/" class="md-tabs__link">
-        
+    
+    
+      <li class="md-tabs__item">
+        <a href="../reference/" class="md-tabs__link">
+          
   
   
     
   
-  API
+  Reference
 
-      </a>
-    </li>
+        </a>
+      </li>
+    
   
 
       
@@ -320,6 +322,8 @@ viewing the latest version.
         <a href="../contributing/" class="md-tabs__link">
           
   
+  
+    
   
   About
 
@@ -355,9 +359,7 @@ viewing the latest version.
   
 
 
-  
-
-<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
     <a href=".." title="async-kernel" class="md-nav__button md-logo" aria-label="async-kernel" data-md-component="logo">
       
@@ -393,6 +395,8 @@ viewing the latest version.
         
   
   
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+  
   <span class="md-ellipsis">
     Home
     
@@ -408,29 +412,30 @@ viewing the latest version.
       
   
   
-    
   
   
-  
-    
-    
     
     
       
         
+      
         
+      
+    
+    
+    
       
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
             
   
   
@@ -443,7 +448,7 @@ viewing the latest version.
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Usage
@@ -456,8 +461,72 @@ viewing the latest version.
   
   
   
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../notebooks/" class="md-nav__link ">
+              
+  
+  
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14 10h5.5L14 4.5zM5 3h10l6 6v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5c0-1.11.89-2 2-2m0 9v2h14v-2zm0 4v2h9v-2z"/></svg>
+  
+  <span class="md-ellipsis">
+    Notebooks
+    
+  </span>
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2_1" id="__nav_2_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_1">
+            <span class="md-nav__icon md-icon"></span>
+            Notebooks
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
     <li class="md-nav__item">
-      <a href="../simple_example/" class="md-nav__link">
+      <a href="../notebooks/simple_example/" class="md-nav__link">
         
   
   
@@ -480,12 +549,12 @@ viewing the latest version.
   
   
     <li class="md-nav__item">
-      <a href="../execute_mode/" class="md-nav__link">
+      <a href="../notebooks/run_mode/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Execute mode
+    Concurrency
     
   </span>
   
@@ -503,7 +572,136 @@ viewing the latest version.
   
   
     <li class="md-nav__item">
-      <a href="../caller/" class="md-nav__link">
+      <a href="../notebooks/caller/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Caller
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Commands
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../reference/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    Reference
+    
+  </span>
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/caller/" class="md-nav__link">
         
   
   
@@ -523,104 +721,112 @@ viewing the latest version.
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    Command line
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../reference/main/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Command line
+    Main
     
   </span>
   
 
       </a>
-      
-        
+    </li>
+  
 
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+              
+            
+              
+                
   
   
   
+  
+    <li class="md-nav__item">
+      <a href="../reference/kernel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Kernel
     
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
   
   
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#add-a-kernel-spec" class="md-nav__link">
-    <span class="md-ellipsis">
-      Add a kernel spec
-    </span>
-  </a>
   
-    <nav class="md-nav" aria-label="Add a kernel spec">
-      <ul class="md-nav__list">
+  
+    <li class="md-nav__item">
+      <a href="../reference/asyncshell/" class="md-nav__link">
         
-          <li class="md-nav__item">
-  <a href="#configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration
-    </span>
-  </a>
   
-</li>
+  
+  <span class="md-ellipsis">
+    Asyncshell
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/typing/" class="md-nav__link">
         
-      </ul>
-    </nav>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#remove-a-kernel-spec" class="md-nav__link">
-    <span class="md-ellipsis">
-      Remove a kernel spec
-    </span>
-  </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#start-a-kernel" class="md-nav__link">
-    <span class="md-ellipsis">
-      Start a kernel
-    </span>
-  </a>
+  <span class="md-ellipsis">
+    Typing
+    
+  </span>
   
-</li>
-      
-    </ul>
+
+      </a>
+    </li>
   
-</nav>
-      
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Utils
+    
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -639,29 +845,15 @@ viewing the latest version.
   
   
   
-    <li class="md-nav__item">
-      <a href="../api/" class="md-nav__link">
+    
+    
+      
         
-  
-  
-  <span class="md-ellipsis">
-    API
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-    
       
+        
       
-  
-  
-  
-  
-    
+        
+      
     
     
     
@@ -779,6 +971,22 @@ viewing the latest version.
               </div>
             
             
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
           
           
             <div class="md-content" data-md-component="content">
@@ -788,7 +996,7 @@ viewing the latest version.
 
 
   
-    <a href="https://github.com/fleming79/async-kernel/edit/master/docs/command_line.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/fleming79/async-kernel/edit/main/docs/about/index.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -797,66 +1005,25 @@ viewing the latest version.
     
       
     
-    <a href="https://github.com/fleming79/async-kernel/raw/master/docs/command_line.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/fleming79/async-kernel/raw/main/docs/about/index.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="command-line">Command line<a class="headerlink" href="#command-line" title="Permanent link">&para;</a></h1>
-<p><code>async-kernel</code> (and alias <code>async_kernel</code>) is provided as a system executable.</p>
-<p><strong>Options:</strong></p>
-<ul>
-<li><a href="#start-a-kernel">Start a kernel</a></li>
-<li><a href="#add-a-kernel-spec">Add kernel spec</a></li>
-<li><a href="#remove-a-kernel-spec">Remove</a></li>
-</ul>
-<h2 id="add-a-kernel-spec">Add a kernel spec<a class="headerlink" href="#add-a-kernel-spec" title="Permanent link">&para;</a></h2>
-<p>Use the argument <code>-a</code> followed by the kernel name to add a new kernel spec.
-Include 'trio' in the kernel name to use a 'trio' backend. Any valid kernel name is
-allowed do not include whitespace in the kernel name. Recommended kernel names are</p>
-<ul>
-<li>'async': Default kernel that is installed that provides a the default 'asyncio' backend.</li>
-<li>'async-trio': A trio backend. Note: trio must be installed separately.</li>
-</ul>
-<p>Add a trio kernel spec.</p>
-<div class="highlight"><pre><span></span><code><span class="go">async-kernel -a async-trio</span>
-</code></pre></div>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-</div>
-<div class="highlight"><pre><span></span><code>To modify how the kernel start see [Start a kernel](#start-a-kernel) for configuration options.
-</code></pre></div>
-<h3 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h3>
-<p>Additional configuration of the kernel spec is supported by passing the each parameter
-prefixed with '--' followed by the value.</p>
-<p>The parameters are first used with creating the kernel spec.</p>
-<h2 id="remove-a-kernel-spec">Remove a kernel spec<a class="headerlink" href="#remove-a-kernel-spec" title="Permanent link">&para;</a></h2>
-<p>You can remove any kernel spec that is listed. Call <code>async-kernel</code> with no arguments to see a list of the installed kernels.</p>
-<div class="highlight"><pre><span></span><code>async-kernel
-</code></pre></div>
-<p>If you added the custom kernel spec above, you can remove it with:</p>
-<div class="highlight"><pre><span></span><code>async-kernel<span class="w"> </span>-r<span class="w"> </span>async-trio-custom
-</code></pre></div>
-<h2 id="start-a-kernel">Start a kernel<a class="headerlink" href="#start-a-kernel" title="Permanent link">&para;</a></h2>
-<p>To start a kernel from the command prompt, use the argument <code>-f</code>.</p>
-<p>This will start the default kernel (async).</p>
-<div class="highlight"><pre><span></span><code>async-kernel<span class="w"> </span>-f<span class="w"> </span>.
-</code></pre></div>
-<p>Additional settings can be passed as arguments.</p>
-<div class="highlight"><pre><span></span><code>async-kernel<span class="w"> </span>-f<span class="w"> </span>.<span class="w"> </span>--kernel_name<span class="w"> </span>async-trio-custom<span class="w"> </span>--display_name<span class="w"> </span><span class="s1">&#39;My custom kernel&#39;</span><span class="w"> </span>--quiet<span class="w"> </span>False
-</code></pre></div>
-<p>The call above will start a new kernel with a 'trio' backend. The quiet setting is
-a parameter that gets set on kernel. Parameters of this type are converted using [eval]
-prior to setting.</p>
-<p>For further detail, see the api for the command line handler [main][async_kernel.<strong>main</strong>.main].</p>
+  <h1>About</h1>
 
 
 
 
 
 
+
+
+
+  
+  
 
 
 
@@ -881,44 +1048,6 @@ prior to setting.</p>
       
         <footer class="md-footer">
   
-    
-      
-      <nav class="md-footer__inner md-grid" aria-label="Footer" >
-        
-          
-          <a href="../caller/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Caller">
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
-            </div>
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Previous
-              </span>
-              <div class="md-ellipsis">
-                Caller
-              </div>
-            </div>
-          </a>
-        
-        
-          
-          <a href="../api/" class="md-footer__link md-footer__link--next" aria-label="Next: API">
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Next
-              </span>
-              <div class="md-ellipsis">
-                API
-              </div>
-            </div>
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
-            </div>
-          </a>
-        
-      </nav>
     
   
   <div class="md-footer-meta md-typeset">
@@ -1009,7 +1138,7 @@ prior to setting.</p>
     
     
       
-      <script id="__config" type="application/json">{"base": "..", "features": ["navigation.tabs", "navigation.tabs.sticky", "content.code.copy", "content.action.edit", "content.action.view", "toc.follow", "toc.integrate", "navigation.top", "header.autohide", "navigation.footer", "search.suggest", "search.highlight", "navigation.instant"], "search": "../assets/javascripts/workers/search.d50fe291.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"base": "..", "features": ["navigation.tabs", "navigation.tabs.sticky", "content.code.copy", "content.action.edit", "content.action.view", "toc.follow", "navigation.top", "header.autohide", "navigation.footer", "search.suggest", "search.highlight", "navigation.instant", "navigation.indexes"], "search": "../assets/javascripts/workers/search.d50fe291.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
     
     
       <script src="../assets/javascripts/bundle.50899def.min.js"></script>

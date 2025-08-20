@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://fleming79.github.io/async-kernel/contributing/">
+        <link rel="canonical" href="https://fleming79.github.io/async-kernel/commands/">
       
       
-        <link rel="prev" href="../reference/utils/">
+        <link rel="prev" href="../notebooks/caller/">
       
       
-        <link rel="next" href="../changelog/">
+        <link rel="next" href="../reference/">
       
       
       <link rel="icon" href="../assets/images/favicon.png">
@@ -24,7 +24,7 @@
     
     
       
-        <title>Contributing - async-kernel</title>
+        <title>Commands - async-kernel</title>
       
     
     
@@ -80,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#contributing" class="md-skip">
+        <a href="#command-line" class="md-skip">
           Skip to content
         </a>
       
@@ -132,7 +132,7 @@ viewing the latest version.
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Contributing
+              Commands
             
           </span>
         </div>
@@ -268,6 +268,8 @@ viewing the latest version.
   
   
   
+    
+  
   
     
     
@@ -275,10 +277,12 @@ viewing the latest version.
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
+      <li class="md-tabs__item md-tabs__item--active">
         <a href="../notebooks/" class="md-tabs__link">
           
   
@@ -324,13 +328,11 @@ viewing the latest version.
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="./" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../contributing/" class="md-tabs__link">
           
   
   
@@ -423,8 +425,10 @@ viewing the latest version.
       
   
   
+    
   
   
+  
     
     
       
@@ -436,17 +440,20 @@ viewing the latest version.
     
     
       
+        
+        
+      
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
             
   
   
@@ -459,7 +466,7 @@ viewing the latest version.
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Usage
@@ -611,10 +618,32 @@ viewing the latest version.
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../commands/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Commands
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -625,6 +654,68 @@ viewing the latest version.
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#add-a-kernel-spec" class="md-nav__link">
+    <span class="md-ellipsis">
+      Add a kernel spec
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Add a kernel spec">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#remove-a-kernel-spec" class="md-nav__link">
+    <span class="md-ellipsis">
+      Remove a kernel spec
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#start-a-kernel" class="md-nav__link">
+    <span class="md-ellipsis">
+      Start a kernel
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -854,10 +945,8 @@ viewing the latest version.
       
   
   
-    
   
   
-  
     
     
       
@@ -871,20 +960,17 @@ viewing the latest version.
     
     
       
-        
-        
-      
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
             
   
   
@@ -897,7 +983,7 @@ viewing the latest version.
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             About
@@ -908,32 +994,10 @@ viewing the latest version.
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    Contributing
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
         
   
   
@@ -944,194 +1008,6 @@ viewing the latest version.
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#development" class="md-nav__link">
-    <span class="md-ellipsis">
-      Development
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#installation-from-source" class="md-nav__link">
-    <span class="md-ellipsis">
-      Installation from source
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Installation from source">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#update-packages" class="md-nav__link">
-    <span class="md-ellipsis">
-      update packages
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#running-tests" class="md-nav__link">
-    <span class="md-ellipsis">
-      Running tests
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#running-tests-with-coverage" class="md-nav__link">
-    <span class="md-ellipsis">
-      Running tests with coverage
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#code-styling" class="md-nav__link">
-    <span class="md-ellipsis">
-      Code Styling
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#type-checking" class="md-nav__link">
-    <span class="md-ellipsis">
-      Type checking
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#documentation" class="md-nav__link">
-    <span class="md-ellipsis">
-      Documentation
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Documentation">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#install" class="md-nav__link">
-    <span class="md-ellipsis">
-      Install
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#serve-locally" class="md-nav__link">
-    <span class="md-ellipsis">
-      Serve locally
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#api-docstrings" class="md-nav__link">
-    <span class="md-ellipsis">
-      API / Docstrings
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="API / Docstrings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
-    <span class="md-ellipsis">
-      See also
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#notebooks" class="md-nav__link">
-    <span class="md-ellipsis">
-      Notebooks
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Notebooks">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#useful-links" class="md-nav__link">
-    <span class="md-ellipsis">
-      Useful links
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deploy-manually" class="md-nav__link">
-    <span class="md-ellipsis">
-      Deploy manually
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#releasing-async-kernel" class="md-nav__link">
-    <span class="md-ellipsis">
-      Releasing Async kernel
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1217,28 +1093,19 @@ viewing the latest version.
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#development" class="md-nav__link">
+  <a href="#add-a-kernel-spec" class="md-nav__link">
     <span class="md-ellipsis">
-      Development
+      Add a kernel spec
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#installation-from-source" class="md-nav__link">
-    <span class="md-ellipsis">
-      Installation from source
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Installation from source">
+    <nav class="md-nav" aria-label="Add a kernel spec">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#update-packages" class="md-nav__link">
+  <a href="#configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      update packages
+      Configuration
     </span>
   </a>
   
@@ -1250,135 +1117,18 @@ viewing the latest version.
 </li>
       
         <li class="md-nav__item">
-  <a href="#running-tests" class="md-nav__link">
+  <a href="#remove-a-kernel-spec" class="md-nav__link">
     <span class="md-ellipsis">
-      Running tests
+      Remove a kernel spec
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#running-tests-with-coverage" class="md-nav__link">
+  <a href="#start-a-kernel" class="md-nav__link">
     <span class="md-ellipsis">
-      Running tests with coverage
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#code-styling" class="md-nav__link">
-    <span class="md-ellipsis">
-      Code Styling
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#type-checking" class="md-nav__link">
-    <span class="md-ellipsis">
-      Type checking
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#documentation" class="md-nav__link">
-    <span class="md-ellipsis">
-      Documentation
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Documentation">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#install" class="md-nav__link">
-    <span class="md-ellipsis">
-      Install
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#serve-locally" class="md-nav__link">
-    <span class="md-ellipsis">
-      Serve locally
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#api-docstrings" class="md-nav__link">
-    <span class="md-ellipsis">
-      API / Docstrings
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="API / Docstrings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
-    <span class="md-ellipsis">
-      See also
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#notebooks" class="md-nav__link">
-    <span class="md-ellipsis">
-      Notebooks
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Notebooks">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#useful-links" class="md-nav__link">
-    <span class="md-ellipsis">
-      Useful links
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deploy-manually" class="md-nav__link">
-    <span class="md-ellipsis">
-      Deploy manually
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#releasing-async-kernel" class="md-nav__link">
-    <span class="md-ellipsis">
-      Releasing Async kernel
+      Start a kernel
     </span>
   </a>
   
@@ -1400,7 +1150,7 @@ viewing the latest version.
 
 
   
-    <a href="https://github.com/fleming79/async-kernel/edit/main/docs/contributing.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/fleming79/async-kernel/edit/main/docs/commands.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1409,76 +1159,60 @@ viewing the latest version.
     
       
     
-    <a href="https://github.com/fleming79/async-kernel/raw/main/docs/contributing.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/fleming79/async-kernel/raw/main/docs/commands.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="contributing">Contributing<a class="headerlink" href="#contributing" title="Permanent link">&para;</a></h1>
-<p>This project is under active development. Feel free to create an issue to provide feedback.</p>
-<h2 id="development">Development<a class="headerlink" href="#development" title="Permanent link">&para;</a></h2>
-<h2 id="installation-from-source">Installation from source<a class="headerlink" href="#installation-from-source" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/fleming79/async-kernel.git
-<span class="nb">cd</span><span class="w"> </span>async-kernel
-uv<span class="w"> </span>venv<span class="w"> </span>-p<span class="w"> </span>python@311
-uv<span class="w"> </span>sync
-<span class="c1"># Activate the environment</span>
-</code></pre></div>
-<h3 id="update-packages">update packages<a class="headerlink" href="#update-packages" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>lock<span class="w"> </span>--upgrade
-</code></pre></div>
-<h2 id="running-tests">Running tests<a class="headerlink" href="#running-tests" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>pytest
-</code></pre></div>
-<h2 id="running-tests-with-coverage">Running tests with coverage<a class="headerlink" href="#running-tests-with-coverage" title="Permanent link">&para;</a></h2>
-<p>We are aiming for 100% code coverage on CI (Linux). Any new code should also update tests to maintain coverage.</p>
-<div class="highlight"><pre><span></span><code>pytest<span class="w"> </span>-vv<span class="w"> </span>--cov
-</code></pre></div>
-<h2 id="code-styling">Code Styling<a class="headerlink" href="#code-styling" title="Permanent link">&para;</a></h2>
-<p><code>Async kernel</code> uses ruff for code formatting. The pre-commit hook should take care of how it should look.</p>
-<p>To install <code>pre-commit</code>, run the following:</p>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>pre-commit
-pre-commit<span class="w"> </span>install
-</code></pre></div>
-<p>You can invoke the pre-commit hook by hand at any time with:</p>
-<div class="highlight"><pre><span></span><code>pre-commit<span class="w"> </span>run
-</code></pre></div>
-<h2 id="type-checking">Type checking<a class="headerlink" href="#type-checking" title="Permanent link">&para;</a></h2>
-<p>Type checking is performed using <a href="https://docs.basedpyright.com/">basedpyright</a>.</p>
-<div class="highlight"><pre><span></span><code>basedpyright
-</code></pre></div>
-<h2 id="documentation">Documentation<a class="headerlink" href="#documentation" title="Permanent link">&para;</a></h2>
-<p>Documentation is provided my <a href="https://squidfunk.github.io/mkdocs-material/">Material for MkDocs </a>. To start up a server for editing locally:</p>
-<h3 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>sync<span class="w"> </span>--group<span class="w"> </span>docs
-uv<span class="w"> </span>run<span class="w"> </span>async-kernel<span class="w"> </span>-a<span class="w"> </span>async-docs<span class="w"> </span>--cell_execute_timeout<span class="w"> </span><span class="m">0</span>.1
-</code></pre></div>
-<h3 id="serve-locally">Serve locally<a class="headerlink" href="#serve-locally" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>mkdocs<span class="w"> </span>serve<span class="w"> </span>
-</code></pre></div>
-<h3 id="api-docstrings">API / Docstrings<a class="headerlink" href="#api-docstrings" title="Permanent link">&para;</a></h3>
-<p>API documentation is included using <a href="https://mkdocstrings.github.io/">mkdocstrings</a>.</p>
-<p>Docstrings are written in docstring format <a href="https://mkdocstrings.github.io/griffe/reference/docstrings/?h=google#google-style">google-notypes</a>.
-Typing information is included automatically by <a href="https://mkdocstrings.github.io/griffe">griff</a>.</p>
-<h4 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h4>
+<h1 id="command-line">Command line<a class="headerlink" href="#command-line" title="Permanent link">&para;</a></h1>
+<p><code>async-kernel</code> (and alias <code>async_kernel</code>) is provided as a system executable.</p>
+<p><strong>Options:</strong></p>
 <ul>
-<li><a href="https://mkdocstrings.github.io/usage/#cross-references">cross-referencing</a></li>
+<li><a href="#start-a-kernel">Start a kernel</a></li>
+<li><a href="#add-a-kernel-spec">Add kernel spec</a></li>
+<li><a href="#remove-a-kernel-spec">Remove</a></li>
 </ul>
-<h3 id="notebooks">Notebooks<a class="headerlink" href="#notebooks" title="Permanent link">&para;</a></h3>
-<p>Notebooks are included in the documentation with the plugin <a href="https://github.com/danielfrg/mkdocs-jupyter">mkdocs-jupyter</a>.</p>
-<h4 id="useful-links">Useful links<a class="headerlink" href="#useful-links" title="Permanent link">&para;</a></h4>
-<p>These links are not relevant for docstrings.</p>
+<h2 id="add-a-kernel-spec">Add a kernel spec<a class="headerlink" href="#add-a-kernel-spec" title="Permanent link">&para;</a></h2>
+<p>Use the argument <code>-a</code> followed by the kernel name to add a new kernel spec.
+Include 'trio' in the kernel name to use a 'trio' backend. Any valid kernel name is
+allowed do not include whitespace in the kernel name. Recommended kernel names are</p>
 <ul>
-<li><a href="https://squidfunk.github.io/mkdocs-material/reference/footnotes/#usage">footnotes</a></li>
-<li><a href="https://squidfunk.github.io/mkdocs-material/reference/tooltips/#usage">tooltips</a></li>
+<li>'async': Default kernel that is installed that provides a the default 'asyncio' backend.</li>
+<li>'async-trio': A trio backend. Note: trio must be installed separately.</li>
 </ul>
-<h3 id="deploy-manually">Deploy manually<a class="headerlink" href="#deploy-manually" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>mkdocs<span class="w"> </span>gh-deploy<span class="w"> </span>--force
+<p>Add a trio kernel spec.</p>
+<div class="highlight"><pre><span></span><code><span class="go">async-kernel -a async-trio</span>
 </code></pre></div>
-<h2 id="releasing-async-kernel">Releasing Async kernel<a class="headerlink" href="#releasing-async-kernel" title="Permanent link">&para;</a></h2>
-<p>TODO</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+</div>
+<div class="highlight"><pre><span></span><code>To modify how the kernel start see [Start a kernel](#start-a-kernel) for configuration options.
+</code></pre></div>
+<h3 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h3>
+<p>Additional configuration of the kernel spec is supported by passing the each parameter
+prefixed with '--' followed by the value.</p>
+<p>The parameters are first used with creating the kernel spec.</p>
+<h2 id="remove-a-kernel-spec">Remove a kernel spec<a class="headerlink" href="#remove-a-kernel-spec" title="Permanent link">&para;</a></h2>
+<p>You can remove any kernel spec that is listed. Call <code>async-kernel</code> with no arguments to see a list of the installed kernels.</p>
+<div class="highlight"><pre><span></span><code>async-kernel
+</code></pre></div>
+<p>If you added the custom kernel spec above, you can remove it with:</p>
+<div class="highlight"><pre><span></span><code>async-kernel<span class="w"> </span>-r<span class="w"> </span>async-trio-custom
+</code></pre></div>
+<h2 id="start-a-kernel">Start a kernel<a class="headerlink" href="#start-a-kernel" title="Permanent link">&para;</a></h2>
+<p>To start a kernel from the command prompt, use the argument <code>-f</code>.</p>
+<p>This will start the default kernel (async).</p>
+<div class="highlight"><pre><span></span><code>async-kernel<span class="w"> </span>-f<span class="w"> </span>.
+</code></pre></div>
+<p>Additional settings can be passed as arguments.</p>
+<div class="highlight"><pre><span></span><code>async-kernel<span class="w"> </span>-f<span class="w"> </span>.<span class="w"> </span>--kernel_name<span class="w"> </span>async-trio-custom<span class="w"> </span>--display_name<span class="w"> </span><span class="s1">&#39;My custom kernel&#39;</span><span class="w"> </span>--quiet<span class="w"> </span>False
+</code></pre></div>
+<p>The call above will start a new kernel with a 'trio' backend. The quiet setting is
+a parameter that gets set on kernel. Parameters of this type are converted using [eval]
+prior to setting.</p>
+<p>For further detail, see the api for the command line handler [main][async_kernel.<strong>main</strong>.main].</p>
 
 
 
@@ -1514,7 +1248,7 @@ Typing information is included automatically by <a href="https://mkdocstrings.gi
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../reference/utils/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Utils">
+          <a href="../notebooks/caller/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Caller">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1524,20 +1258,20 @@ Typing information is included automatically by <a href="https://mkdocstrings.gi
                 Previous
               </span>
               <div class="md-ellipsis">
-                Utils
+                Caller
               </div>
             </div>
           </a>
         
         
           
-          <a href="../changelog/" class="md-footer__link md-footer__link--next" aria-label="Next: Changelog">
+          <a href="../reference/" class="md-footer__link md-footer__link--next" aria-label="Next: Reference">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Changelog
+                Reference
               </div>
             </div>
             <div class="md-footer__button md-icon">

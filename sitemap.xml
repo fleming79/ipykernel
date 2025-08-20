@@ -2,38 +2,74 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://fleming79.github.io/async-kernel/</loc>
-         <lastmod>2025-08-15</lastmod>
-    </url>
-    <url>
-         <loc>https://fleming79.github.io/async-kernel/api/</loc>
-         <lastmod>2025-08-15</lastmod>
+         <lastmod>2025-08-20</lastmod>
     </url>
     <url>
          <loc>https://fleming79.github.io/async-kernel/caller/</loc>
-         <lastmod>2025-08-15</lastmod>
+         <lastmod>2025-08-20</lastmod>
     </url>
     <url>
          <loc>https://fleming79.github.io/async-kernel/changelog/</loc>
-         <lastmod>2025-08-15</lastmod>
+         <lastmod>2025-08-20</lastmod>
     </url>
     <url>
-         <loc>https://fleming79.github.io/async-kernel/command_line/</loc>
-         <lastmod>2025-08-15</lastmod>
+         <loc>https://fleming79.github.io/async-kernel/commands/</loc>
+         <lastmod>2025-08-20</lastmod>
     </url>
     <url>
          <loc>https://fleming79.github.io/async-kernel/contributing/</loc>
-         <lastmod>2025-08-15</lastmod>
-    </url>
-    <url>
-         <loc>https://fleming79.github.io/async-kernel/execute_mode/</loc>
-         <lastmod>2025-08-15</lastmod>
+         <lastmod>2025-08-20</lastmod>
     </url>
     <url>
          <loc>https://fleming79.github.io/async-kernel/license/</loc>
-         <lastmod>2025-08-15</lastmod>
+         <lastmod>2025-08-20</lastmod>
     </url>
     <url>
-         <loc>https://fleming79.github.io/async-kernel/simple_example/</loc>
-         <lastmod>2025-08-15</lastmod>
+         <loc>https://fleming79.github.io/async-kernel/about/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/notebooks/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/notebooks/caller/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/notebooks/run_mode/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/notebooks/simple_example/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/reference/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/reference/asyncshell/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/reference/caller/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/reference/kernel/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/reference/main/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/reference/typing/</loc>
+         <lastmod>2025-08-20</lastmod>
+    </url>
+    <url>
+         <loc>https://fleming79.github.io/async-kernel/reference/utils/</loc>
+         <lastmod>2025-08-20</lastmod>
     </url>
 </urlset>
