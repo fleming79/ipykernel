@@ -95,12 +95,12 @@ def get_parent(job: Job | None = None, /) -> Message[dict[str, Any]] | None:
 
 def get_metadata(job: Job | None = None, /) -> Mapping[str, Any]:
     "Gets [metadata]() for the current context."
-    return (job or get_job().get("msg") or {}).get("metadata") or {}
+    return (job or get_job()).get("msg", {}).get("metadata", {})
 
 
 def get_tags(job: Job | None = None, /) -> list[str]:
     "Gets the [tags]() for the current context."
-    return get_metadata().get("tags") or []
+    return get_metadata(job).get("tags", [])
 
 
 def get_execute_request_timeout(job: Job | None = None, /) -> float | None:

@@ -55,9 +55,13 @@ class RunMode(enum.StrEnum):
     """An Enum of the [kernel run modes][async_kernel.Kernel.handle_message_request] available for
     altering how message requests are run.
 
-    !!! note "Prefix '##'"
+    !!! hint "String match options"
 
-        Run mode is matched for both mode without the prefix ("##").
+        Each of these options will give a match.
+
+        - `<value>`
+        - `<##value>`
+        - '`RunMode.<value>`.
 
     !!! note "special usage"
 
@@ -66,22 +70,6 @@ class RunMode(enum.StrEnum):
     """
 
     "The prefix for each run mode."
-
-    queue = "queue"
-    "The message for the [handler][async_kernel.typing.MsgType] is run sequentially with other messages that are queued."
-    task = "task"
-    "The message for the [handler][async_kernel.typing.MsgType] are run concurrently in task (starting immediately)."
-    thread = "thread"
-    "Messages for the [handler][async_kernel.typing.MsgType] are run concurrently in a thread (starting immediately)."
-    direct = "direct"
-    """Run the handler directly as soon as it is received.
-    
-    !!! warning 
-    
-        **This mode blocks the message loop.** 
-        
-        Use this for short running messages that should be processed as soon as it is received.
-        """
 
     @override
     def __str__(self):
@@ -106,47 +94,80 @@ class RunMode(enum.StrEnum):
         except ValueError:
             return None
 
+    queue = "queue"
+    "The message for the [handler][async_kernel.typing.MsgType] is run sequentially with other messages that are queued."
+
+    task = "task"
+    "The message for the [handler][async_kernel.typing.MsgType] are run concurrently in task (starting immediately)."
+
+    thread = "thread"
+    "Messages for the [handler][async_kernel.typing.MsgType] are run concurrently in a thread (starting immediately)."
+
+    blocking = "blocking"
+    """Run the handler directly as soon as it is received.
+    
+    !!! warning 
+    
+        **This mode blocks the message loop.** 
+        
+        Use this for short running messages that should be processed as soon as it is received.
+        """
+
 
 class KernelConcurrencyMode(enum.StrEnum):
+    ""
+
     default = "default"
-    direct = "direct"
+    "The default concurrency mode"
+    blocking = "blocking"
+    "All handlers are run with the [blocking][async_kernel.typing.RunMode.blocking]."
 
 
 class MsgType(enum.StrEnum):
     """An enumeration of Message `msg_type` for [shell and control messages]( https://jupyter-client.readthedocs.io/en/stable/messaging.html#messages-on-the-shell-router-dealer-channel).
 
-
-
-    [Control channel](https://jupyter-client.readthedocs.io/en/stable/messaging.html#messages-on-the-control-router-dealer-channel) only
+    Some message types are on the [control channel](https://jupyter-client.readthedocs.io/en/stable/messaging.html#messages-on-the-control-router-dealer-channel) only.
     """
 
     kernel_info_request = "kernel_info_request"
     "[async_kernel.Kernel.kernel_info_request][]"
+
     comm_info_request = "comm_info_request"
     "[async_kernel.Kernel.comm_info_request][]"
+
     execute_request = "execute_request"
     "[async_kernel.Kernel.execute_request][]"
+
     complete_request = "complete_request"
     "[async_kernel.Kernel.complete_request][]"
+
     is_complete_request = "is_complete_request"
     "[async_kernel.Kernel.is_complete_request][]"
+
     inspect_request = "inspect_request"
     "[async_kernel.Kernel.inspect_request][]"
+
     history_request = "history_request"
     "[async_kernel.Kernel.history_request][]"
+
     comm_open = "comm_open"
     "[async_kernel.Kernel.comm_open][]"
+
     comm_msg = "comm_msg"
     "[async_kernel.Kernel.comm_msg][]"
+
     comm_close = "comm_close"
     "[async_kernel.Kernel.comm_close][]"
+
     # Control
     interrupt_request = "interrupt_request"
-    "[async_kernel.Kernel.interrupt_request][]"
+    "[async_kernel.Kernel.interrupt_request][] (control channel only)"
+
     shutdown_request = "shutdown_request"
-    "[async_kernel.Kernel.shutdown_request][]"
+    "[async_kernel.Kernel.shutdown_request][] (control channel only)"
+
     debug_request = "debug_request"
-    "[async_kernel.Kernel.debug_request][]"
+    "[async_kernel.Kernel.debug_request][] (control channel only)"
 
 
 class MetadataKeys(enum.StrEnum):
@@ -156,6 +177,14 @@ class MetadataKeys(enum.StrEnum):
     !!! Note
         Metadata can be edited in Jupyter lab "Advanced tools" and Tags can be added using "common tools" in the [right side bar](https://jupyterlab.readthedocs.io/en/stable/user/interface.html#left-and-right-sidebar).
     """
+
+    @override
+    def __eq__(self, value: object, /) -> bool:
+        return str(value) in (self.name, str(self))
+
+    @override
+    def __hash__(self) -> int:
+        return hash(self.name)
 
     tags = "tags"
     """The `tags` metadata key corresponds to is a list of strings. 
@@ -168,13 +197,35 @@ class MetadataKeys(enum.StrEnum):
     
     The value should be a floating point value of the timeout in seconds.
     """
+    suppress_error_message = "suppress-error-message"
+    """A message to print when the error has been suppressed using [async_kernel.typing.Tags.suppress_error][]. 
+    
+    ???+ note
+
+        The default message is '⚠'.
+    """
 
 
 class Tags(enum.StrEnum):
-    """Tags recognised by the kernel"""
+    """Tags recognised by the kernel.
+
+    ??? info
+        Tags are can be added per cell.
+
+        - Jupyter: via the [right side bar](https://jupyterlab.readthedocs.io/en/stable/user/interface.html#left-and-right-sidebar).
+        - VScode: via [Jupyter variables explorer](https://code.visualstudio.com/docs/python/jupyter-support-py#_variables-explorer-and-data-viewer)/
+    """
+
+    @override
+    def __eq__(self, value: object, /) -> bool:
+        return str(value) in (self.name, str(self))
+
+    @override
+    def __hash__(self) -> int:
+        return hash(self.name)
 
     suppress_error = "suppress-error"
-    """Suppress exceptions for the code code cell.
+    """Suppress exceptions that occur during execution of the code cell.
     
     !!! note "Warning"
     
@@ -204,10 +255,13 @@ class Message(TypedDict, Generic[T]):
 
     header: MsgHeader
     "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#message-header)"
+
     parent_header: MsgHeader
     "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#parent-header)"
+
     metadata: Mapping[MetadataKeys | str, Any]
     "[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#metadata)"
+
     content: T | Content
     """[ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#metadata)
     
@@ -232,6 +286,7 @@ class Job(TypedDict, Generic[T]):
     ""
     received_time: float
     "The time the message was received."
+
     run_mode: RunMode
     """The run mode."""
 
@@ -242,15 +297,15 @@ class ExecuteContent(TypedDict):
     code: str
     "The code to execute."
     silent: bool
-    "See [Ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute)."
+    ""
     store_history: bool
-    "See [Ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute)."
+    ""
     user_expressions: dict[str, str]
-    "See [Ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute)."
+    ""
     allow_stdin: bool
-    "See [Ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute)."
+    ""
     stop_on_error: bool
-    "See [Ref](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute)."
+    ""
 
 
 DebugMessage = dict[str, Any]

@@ -30,16 +30,16 @@ pytest -vv --cov
 
 ## Code Styling
 
-`Async kernel` uses ruff for code formatting.
-the pre-commit hook should take care of how it should look.
-To install `pre-commit`, run the following::
+`Async kernel` uses ruff for code formatting. The pre-commit hook should take care of how it should look.
+
+To install `pre-commit`, run the following:
 
 ```shell
 pip install pre-commit
 pre-commit install
 ```
 
-You can invoke the pre-commit hook by hand at any time with::
+You can invoke the pre-commit hook by hand at any time with:
 
 ```shell
 pre-commit run

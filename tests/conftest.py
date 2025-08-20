@@ -13,6 +13,7 @@ from jupyter_client.asynchronous.client import AsyncKernelClient
 import async_kernel.utils
 from async_kernel.kernel import Kernel
 from async_kernel.kernelspec import KernelName, make_argv
+from async_kernel.typing import ExecuteContent, Job, Message, MsgHeader, MsgType, SocketID
 from tests import utils
 
 if TYPE_CHECKING:
@@ -105,3 +106,14 @@ async def subprocess_kernels_client(anyio_backend, tmp_path_factory, kernel_name
             process.kill()
 
     assert not connection_file.exists(), "cleanup_connection_file not called by atexit ..."
+
+
+@pytest.fixture
+def job() -> Job[ExecuteContent]:
+    "An execute dummy job"
+    content = ExecuteContent(
+        code="", silent=True, store_history=True, user_expressions={}, allow_stdin=False, stop_on_error=True
+    )
+    header = MsgHeader(msg_id="", session="", username="", date="", msg_type=MsgType.execute_request, version="1")
+    msg = Message(header=header, parent_header=header, metadata={}, buffers=[], content=content)
+    return Job(msg=msg, socket_id=SocketID.shell, ident=[b""], socket=None, received_time=0.0, run_mode=None)  # pyright: ignore[ reportArgumentType]

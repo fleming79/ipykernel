@@ -29,19 +29,18 @@ theme:
     - content.action.edit
     - content.action.view
     - toc.follow # https://squidfunk.github.io/mkdocs-material/setup/setting-up-navigation/?h=table#anchor-following
-    - toc.integrate # https://squidfunk.github.io/mkdocs-material/setup/setting-up-navigation/?h=table#navigation-integration
+    # - toc.integrate # https://squidfunk.github.io/mkdocs-material/setup/setting-up-navigation/?h=table#navigation-integration
     - navigation.top # https://squidfunk.github.io/mkdocs-material/setup/setting-up-navigation/?h=naviga#back-to-top-button
     - header.autohide # https://squidfunk.github.io/mkdocs-material/setup/setting-up-the-header/#automatic-hiding
     - navigation.footer # https://squidfunk.github.io/mkdocs-material/setup/setting-up-the-footer/#navigation
     - search.suggest # https://squidfunk.github.io/mkdocs-material/setup/setting-up-site-search/?h=search#search-suggestions
     - search.highlight # https://squidfunk.github.io/mkdocs-material/setup/setting-up-site-search/?h=search#search-highlighting
     - navigation.instant # https://squidfunk.github.io/mkdocs-material/setup/setting-up-navigation/?h=naviga#instant-loading
+    - navigation.indexes # https://squidfunk.github.io/mkdocs-material/setup/setting-up-navigation/#section-index-pages
 
   icon:
     annotation: material/information-outline
-  font:
-    text: Noto Sans Cham
-    code: Noto Sans Mono
+  font: false
   palette:
     - media: "(prefers-color-scheme)"
       toggle:
@@ -101,7 +100,7 @@ plugins:
             filters: public
             heading_level: 2
             inherited_members: true
-            line_length: 120
+            line_length: 90
             merge_init_into_class: true
             parameter_headings: true
             # preload_modules: [mkdocstrings]
@@ -152,27 +151,21 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Usage:
-      - usage.md
       - Notebooks:
-          - Overview: notebooks/overview.md
-          - Simple example: notebooks/simple_example.ipynb
-          - Execute mode: notebooks/run_mode.ipynb
-          - Caller notebook: notebooks/caller.ipynb
+          - notebooks/index.md
+          - notebooks/simple_example.ipynb
+          - notebooks/run_mode.ipynb
+          - notebooks/caller.ipynb
       - Commands: commands.md
   - Reference:
-      - reference/overview.md
-      - Caller & Future:
-          - reference/caller.md
-      - Command prompt:
-          - reference/main.md
-      - Kernel:
-          - reference/kernel.md
-      - Async shell:
-          - reference/asyncshell.md
-      - Types:
-          - reference/typing.md
-      - Utils:
-          - reference/utils.md
+      - reference/index.md
+      - reference/caller.md
+      - reference/main.md
+      - reference/kernel.md
+      - reference/asyncshell.md
+      - reference/typing.md
+      - reference/utils.md
+
   - About:
       - Contributing: contributing.md
       - Changelog: changelog.md

@@ -257,8 +257,8 @@ class Caller:
         *,
         thread: threading.Thread | None = None,
         log: logging.LoggerAdapter | None = None,
-        create=False,
-        protected=False,
+        create: bool = False,
+        protected: bool = False,
     ) -> Self:
         """Create the `Caller` instance for the current thread or retrieve an existing instance
             by passing the thread.
@@ -638,7 +638,7 @@ class Caller:
         *,
         max_concurrent: NoValue | int = NoValue,  # pyright: ignore[reportInvalidTypeForm]
     ) -> AsyncGenerator[Future[T], Any]:
-        """An iterator to get Futures as they complete.
+        """An iterator to get [Futures][async_kernel.caller.Future] as they complete.
 
         Args:
             items: Either a container with existing futures or generator of Futures.
@@ -646,7 +646,8 @@ class Caller:
                 This is useful when `items` is a generator utilising Caller.to_thread.
                 By default this will limit to `Caller.MAX_IDLE_POOL_INSTANCES`.
 
-        !!! Tip:
+        !!! tip
+
             1. Pass a generator should you wish to limit the number future jobs when calling to_thread/to_task etc.
             2. Pass a set/list/tuple to ensure all get monitored at once.
         """

@@ -9,7 +9,7 @@ import logging
 import pathlib
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import anyio
 import pytest
@@ -18,7 +18,8 @@ import zmq
 import async_kernel.utils
 from async_kernel.caller import Caller
 from async_kernel.comm import Comm
-from async_kernel.typing import ExecuteContent, Job, Message, MsgHeader, MsgType, RunMode, SocketID, Tags
+from async_kernel.compiler import murmur2_x86
+from async_kernel.typing import ExecuteContent, Job, MsgType, RunMode, SocketID, Tags
 from tests import utils
 
 if TYPE_CHECKING:
@@ -219,13 +220,10 @@ async def test_message_order(client):
 
 async def test_execute_request_error_tag_ignore_error(client):
     metadata = {"tags": [Tags.suppress_error]}
-    msg_id, content = await utils.execute(
-        client, "This error should be suppressed...", metadata=metadata, clear_pub=False
-    )
-    await utils.check_pub_message(client, msg_id, execution_state="busy")
-    await utils.check_pub_message(client, msg_id, msg_type="execute_input")
-    await utils.check_pub_message(client, msg_id, execution_state="idle")
-    assert content["status"] == "ok"
+    await utils.execute(client, "stop - suppress me", metadata=metadata, clear_pub=False)
+    stdout, _ = await utils.assemble_output(client)
+    assert "⚠" in stdout
+    await utils.clear_iopub(client, timeout=0.1)
 
 
 @pytest.mark.parametrize("run_mode", RunMode)
@@ -233,14 +231,11 @@ async def test_execute_request_error_tag_ignore_error(client):
     "code",
     [
         "some invalid code",
-        "\n".join(
-            [
-                "from async_kernel.caller import FutureCancelledError",
-                "async def fail():",
-                "    raise FutureCancelledError",
-                "await fail()",
-            ]
-        ),
+        """
+        from async_kernel.caller import FutureCancelledError,
+        async def fail():,
+            raise FutureCancelledError,
+        await fail()""",
     ],
 )
 async def test_execute_request_error(client, code: str, run_mode: RunMode):
@@ -525,16 +520,31 @@ async def test_invalid_message(client, channel):
         ("", False, SocketID.control, RunMode.task),
         ("threads", False, SocketID.shell, RunMode.queue),
         ("Task", False, SocketID.shell, RunMode.queue),
-        ("RunMode.direct", False, SocketID.shell, RunMode.direct),
+        ("RunMode.blocking", False, SocketID.shell, RunMode.blocking),
     ],
 )
-async def test_get_run_mode(kernel: Kernel, code: str, silent: bool, socket_id, expected: RunMode):
-    content = ExecuteContent(
-        code=code, silent=silent, store_history=True, user_expressions={}, allow_stdin=False, stop_on_error=True
-    )
-    header = MsgHeader(msg_id="", session="", username="", date="", msg_type=MsgType.execute_request, version="1")
-    msg = Message(header=header, parent_header=header, metadata={}, buffers=[], content=content)
-    socket = cast("zmq.Socket[Any]", None)  # pyright: ignore[reportInvalidCast]
-    job = Job(msg=msg, socket_id=socket_id, ident=[b""], socket=socket, received_time=0.0, run_mode=None)  # pyright: ignore[reportArgumentType]
+async def test_get_run_mode(
+    kernel: Kernel, code: str, silent: bool, socket_id, expected: RunMode, job: Job[ExecuteContent]
+):
+    job["msg"]["content"]["code"] = code
+    job["msg"]["content"]["silent"] = silent
     mode = kernel.get_run_mode(socket_id, MsgType.execute_request, job=job)
     assert mode is expected
+
+
+async def test_get_run_mode_tag(client):
+    metadata = {"tags": [RunMode.thread]}
+    _, content = await utils.execute(
+        client,
+        "from async_kernel import utils;run_mode=utils.get_job()['run_mode']",
+        metadata=metadata,
+        user_expressions={"run_mode": "run_mode"},
+    )
+    assert content["status"] == "ok"
+    assert "thread" in content["user_expressions"]["run_mode"]["data"]["text/plain"]
+
+
+async def test_all_concurrency_run_modes(kernel):
+    data = kernel.all_concurrency_run_modes()
+    # Regen the hash as required
+    assert murmur2_x86(str(data), 1) == 417361055

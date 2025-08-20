@@ -20,11 +20,10 @@ from jupyter_core.paths import jupyter_runtime_dir
 from traitlets import Dict, Instance, Type, default, observe
 from typing_extensions import override
 
-import async_kernel
 from async_kernel import utils
 from async_kernel.caller import Caller
 from async_kernel.compiler import XCachingCompiler
-from async_kernel.typing import Content, Tags
+from async_kernel.typing import Content, MetadataKeys, Tags
 
 if TYPE_CHECKING:
     from async_kernel.kernel import Kernel
@@ -253,7 +252,9 @@ class AsyncInteractiveShell(InteractiveShell):
 
     @override
     def _showtraceback(self, etype, evalue, stb) -> None:
-        if Tags.suppress_error in async_kernel.utils.get_tags():
+        if Tags.suppress_error in utils.get_tags():
+            if msg := utils.get_metadata().get(MetadataKeys.suppress_error_message, "⚠"):
+                print(msg)
             return
         if utils.get_execute_request_timeout() is not None and etype is self.kernel.CancelledError:
             etype, evalue, stb = TimeoutError, "Cell execute timeout", []

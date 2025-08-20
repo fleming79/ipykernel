@@ -11,6 +11,7 @@ import errno
 import functools
 import getpass
 import logging
+import math
 import os
 import pathlib
 import signal
@@ -226,21 +227,30 @@ class Kernel(ConnectionFileMixin):
     _sockets: Dict[SocketID, zmq.Socket] = Dict()
     _execution_count = Int(0)
     anyio_backend = UseEnum(Backend)
+    ""
     concurrency_mode = UseEnum(KernelConcurrencyMode)
+    """The mode to use when getting the run mode for running the handler of a message request.
+    
+    See also:
+        - [async_kernel.Kernel.handle_message_request][]
+    """
     help_links = Tuple()
+    ""
     quiet = CBool(True, help="Only send stdout/stderr to output stream")
+    ""
     shell = Instance(AsyncInteractiveShell)
+    ""
     session = Instance(Session)
+    ""
     log = Instance(logging.LoggerAdapter)
+    ""
     debugger = Instance(Debugger, ())
+    ""
     comm_manager: Instance[CommManager] = Instance("async_kernel.comm.CommManager")
+    ""
     transport: CaselessStrEnum[str] = CaselessStrEnum(
         ["tcp", "ipc"] if sys.platform == "linux" else ["tcp"], default_value="tcp", config=True
     )
-    message_handlers: Dict[Literal[SocketID.shell, SocketID.control], dict[MsgType, tuple[HandlerType, RunMode]]] = (
-        Dict(read_only=True)
-    )
-    "The message handlers for message requests (see also [async_kernel.Kernel.get_handler_and_run_mode][])."
     cell_execute_timeout = Float(None, allow_none=True)
     "A default timeout to apply to use for non-silent [execute requests][async_kernel.Kernel.execute_request]."
 
@@ -599,7 +609,7 @@ class Kernel(ConnectionFileMixin):
             handler = self.get_handler(socket_id, msg_type)
         except (ValueError, TypeError):
             return
-        run_mode = self.get_run_mode(socket_id, msg_type, self.concurrency_mode, job=job)
+        run_mode = self.get_run_mode(socket_id, msg_type, job=job)
         self.log.debug("%s  %s run mode %s handler: %s", socket_id, msg_type, run_mode, handler)
         job["run_mode"] = run_mode
         runner = _wrap_handler(self.run_handler, handler)
@@ -610,26 +620,43 @@ class Kernel(ConnectionFileMixin):
                 Caller.to_thread(runner, job)
             case RunMode.task:
                 Caller().call_soon(runner, job)
-            case RunMode.direct:
+            case RunMode.blocking:
                 await runner(job)
 
     def get_run_mode(
         self,
         socket_id: SocketID,
         msg_type: MsgType,
-        concurrency_mode: KernelConcurrencyMode = KernelConcurrencyMode.default,
         *,
+        concurrency_mode: KernelConcurrencyMode | NoValue = NoValue,  # pyright: ignore[reportInvalidTypeForm]
         job: Job | None = None,
     ) -> RunMode:
+        """Determine the run mode for a given channel, message type and concurrency mode.
+
+        The run mode determines how the kernel will execute the message.
+
+        Args:
+            socket_id: The socket ID the message was received on.
+            msg_type: The type of the message.
+            concurrency_mode: The concurrency mode of the kernel. Defaults to [kernel.concurrency_mode][async_kernel.Kernel.concurrency_mode]
+            job: The job associated with the message, if any.
+
+        Returns:
+            The run mode for the message.
+
+        Raises:
+            ValueError: If a shutdown or debug request is received on the shell socket.
+        """
+
+        concurrency_mode = self.concurrency_mode if concurrency_mode is NoValue else concurrency_mode
         # TODO: Are any of these options worth including?
         # if mode_from_metadata := job["msg"]["metadata"].get("run_mode"):
         #     return RunMode( mode_from_metadata)
         # if mode_from_header := job["msg"]["header"].get("run_mode"):
         #     return RunMode( mode_from_header)
         match (concurrency_mode, socket_id, msg_type):
-            case KernelConcurrencyMode.direct, _, _:
-                return RunMode.direct
-            # Default
+            case KernelConcurrencyMode.blocking, _, _:
+                return RunMode.blocking
             case _, SocketID.control, MsgType.execute_request:
                 return RunMode.task
             case _, _, MsgType.execute_request:
@@ -645,14 +672,34 @@ class Kernel(ConnectionFileMixin):
             case _, SocketID.shell, MsgType.shutdown_request | MsgType.debug_request:
                 msg = f"{msg_type=} not allowed on shell!"
                 raise ValueError(msg)
-            case _, SocketID.control, MsgType.debug_request:
-                return RunMode.task
             case _, _, MsgType.inspect_request | MsgType.complete_request | MsgType.is_complete_request:
                 return RunMode.thread
             case _, _, MsgType.history_request:
                 return RunMode.thread
+            case _, _, MsgType.kernel_info_request | MsgType.comm_info_request | MsgType.comm_open | MsgType.comm_close:
+                return RunMode.blocking
             case _:
-                return RunMode.direct
+                return RunMode.task
+
+    def all_concurrency_run_modes(
+        self,
+    ) -> dict[
+        Literal["SocketID", "KernelConcurrencyMode", "MsgType", "RunMode"],
+        tuple[SocketID, KernelConcurrencyMode, MsgType, RunMode | None],
+    ]:
+        """Generates a dictionary containing all combinations of SocketID, KernelConcurrencyMode, and MsgType,
+        along with their corresponding RunMode (if available)."""
+        data: list[Any] = []
+        for socket_id in [SocketID.shell, SocketID.control]:
+            for concurrency_mode in KernelConcurrencyMode:
+                for msg_type in MsgType:
+                    try:
+                        mode = self.get_run_mode(socket_id, msg_type, concurrency_mode=concurrency_mode)
+                    except ValueError:
+                        mode = None
+                    data.append((socket_id, concurrency_mode, msg_type, mode))
+        data_ = zip(*data, strict=True)
+        return dict(zip(["SocketID", "KernelConcurrencyMode", "MsgType", "RunMode"], data_, strict=True))
 
     def get_handler(self, socket_id: SocketID, msg_type: MsgType) -> HandlerType:
         if not callable(f := getattr(self, msg_type, None)):
@@ -801,8 +848,12 @@ class Kernel(ConnectionFileMixin):
         if err:
             content |= error_to_content(err)
             if (not silent) and c.get("stop_on_error"):
-                self._stop_on_error_time = time.monotonic()
-                self.log.info("An error occurred in a non-silent execution request")
+                try:
+                    self._stop_on_error_time = math.inf
+                    self.log.info("An error occurred in a non-silent execution request")
+                    await anyio.sleep(0)
+                finally:
+                    self._stop_on_error_time = time.monotonic()
         return content
 
     async def complete_request(self, job: Job[Content]) -> Content:
