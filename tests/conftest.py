@@ -32,7 +32,6 @@ if sys.platform.startswith("win"):
 @pytest.hookimpl
 def pytest_configure(config):
     os.environ["PYTEST_TIMEOUT"] = str(1e6) if async_kernel.utils.LAUNCHED_BY_DEBUGPY else str(utils.TIMEOUT)
-    os.environ["MPLBACKEND"] = utils.MATPLOTLIB_INLINE_BACKEND
 
 
 @pytest.fixture(scope="module")
@@ -52,6 +51,7 @@ async def kernel(anyio_backend, transport: str, tmp_path_factory):
     os.environ["IPYTHONDIR"] = str(tmp_path_factory.mktemp("ipython_config"))
     kernel = Kernel()
     kernel.connection_file = str(connection_file.resolve())
+    os.environ["MPLBACKEND"] = utils.MATPLOTLIB_INLINE_BACKEND  # Set this implicitly
     kernel.transport = transport
     async with kernel.start_in_context():
         yield kernel

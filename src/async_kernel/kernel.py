@@ -605,8 +605,9 @@ class Kernel(ConnectionFileMixin):
         try:
             msg_type = MsgType(job["msg"]["header"]["msg_type"])
             socket_id = job["socket_id"]
-            handler = self.get_handler(socket_id, msg_type)
+            handler = self.get_handler(msg_type)
         except (ValueError, TypeError):
+            self.log.debug("Invalid job %s", job)
             return
         run_mode = self.get_run_mode(msg_type, socket_id=socket_id, job=job)
         self.log.debug("%s  %s run mode %s handler: %s", socket_id, msg_type, run_mode, handler)
@@ -702,9 +703,9 @@ class Kernel(ConnectionFileMixin):
         data_ = zip(*data, strict=True)
         return dict(zip(["SocketID", "KernelConcurrencyMode", "MsgType", "RunMode"], data_, strict=True))
 
-    def get_handler(self, socket_id: SocketID, msg_type: MsgType) -> HandlerType:
+    def get_handler(self, msg_type: MsgType) -> HandlerType:
         if not callable(f := getattr(self, msg_type, None)):
-            msg = "A handler was not found for "
+            msg = f"A handler was not found for {msg_type=}"
             raise TypeError(msg)
         return f  # pyright: ignore[reportReturnType]
 
@@ -778,11 +779,11 @@ class Kernel(ConnectionFileMixin):
         """prefixed topic for IOPub messages"""
         return (f"kernel.{topic}").encode()
 
-    async def kernel_info_request(self, job: Job[Content]) -> Content:
+    async def kernel_info_request(self, job: Job[Content], /) -> Content:
         """Handle a ke[rnel info request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#kernel-info)."""
         return self.kernel_info
 
-    async def comm_info_request(self, job: Job[Content]) -> Content:
+    async def comm_info_request(self, job: Job[Content], /) -> Content:
         """Handle a [comm info request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#comm-info)."""
         c = job["msg"]["content"]
         target_name = c.get("target_name", None)
@@ -793,7 +794,7 @@ class Kernel(ConnectionFileMixin):
         }
         return {"comms": comms}
 
-    async def execute_request(self, job: Job[ExecuteContent]) -> Content:
+    async def execute_request(self, job: Job[ExecuteContent], /) -> Content:
         """Handle a [execute request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute)."""
         c = job["msg"]["content"]
         if (
@@ -857,7 +858,7 @@ class Kernel(ConnectionFileMixin):
                     self._stop_on_error_time = time.monotonic()
         return content
 
-    async def complete_request(self, job: Job[Content]) -> Content:
+    async def complete_request(self, job: Job[Content], /) -> Content:
         """Handle a [completion request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#completion)."""
         c = job["msg"]["content"]
         code: str = c["code"]
@@ -883,7 +884,7 @@ class Kernel(ConnectionFileMixin):
             "metadata": {"_jupyter_types_experimental": comps},
         }
 
-    async def is_complete_request(self, job: Job[Content]) -> Content:
+    async def is_complete_request(self, job: Job[Content], /) -> Content:
         """Handle a [is_complete request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#code-completeness)."""
         status, indent_spaces = self.shell.input_transformer_manager.check_complete(job["msg"]["content"]["code"])
         content = {"status": status}
@@ -891,7 +892,7 @@ class Kernel(ConnectionFileMixin):
             content["indent"] = " " * indent_spaces
         return content
 
-    async def inspect_request(self, job: Job[Content]) -> Content:
+    async def inspect_request(self, job: Job[Content], /) -> Content:
         """Handle a [inspect request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#introspection)."""
         c = job["msg"]["content"]
         detail_level = int(c.get("detail_level", 0))
@@ -910,7 +911,7 @@ class Kernel(ConnectionFileMixin):
             content["found"] = False
         return content
 
-    async def history_request(self, job: Job[Content]) -> Content:
+    async def history_request(self, job: Job[Content], /) -> Content:
         """Handle a [history request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#history)."""
         c = job["msg"]["content"]
         history_manager = self.shell.history_manager
@@ -929,19 +930,19 @@ class Kernel(ConnectionFileMixin):
             hist = []
         return {"history": list(hist)}
 
-    async def comm_open(self, job: Job[Content]) -> None:
+    async def comm_open(self, job: Job[Content], /) -> None:
         """Handle a [comm open request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#opening-a-comm)."""
         self.comm_manager.comm_open(stream=job["socket"], ident=job["ident"], msg=job["msg"])  # pyright: ignore[reportArgumentType]
 
-    async def comm_msg(self, job: Job[Content]) -> None:
+    async def comm_msg(self, job: Job[Content], /) -> None:
         """Handle a [comm msg request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#comm-messages)."""
         self.comm_manager.comm_msg(stream=job["socket"], ident=job["ident"], msg=job["msg"])  # pyright: ignore[reportArgumentType]
 
-    async def comm_close(self, job: Job[Content]) -> None:
+    async def comm_close(self, job: Job[Content], /) -> None:
         """Handle a [comm close request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#tearing-down-comms)."""
         self.comm_manager.comm_close(stream=job["socket"], ident=job["ident"], msg=job["msg"])  # pyright: ignore[reportArgumentType]
 
-    async def interrupt_request(self, job: Job[Content]) -> Content:
+    async def interrupt_request(self, job: Job[Content], /) -> Content:
         """Handle a [interrupt request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#kernel-interrupt) (control only)."""
         self._interrupt_requested = True
         if sys.platform == "win32":
@@ -953,13 +954,13 @@ class Kernel(ConnectionFileMixin):
             interrupter()
         return {}
 
-    async def shutdown_request(self, job: Job[Content]) -> Content:
+    async def shutdown_request(self, job: Job[Content], /) -> Content:
         """Handle a [shutdown request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#kernel-shutdown) (control only)."""
         await self.debugger.disconnect()
         Caller().call_no_context(self.stop)
         return {"status": "ok", "restart": job["msg"]["content"].get("restart", False)}
 
-    async def debug_request(self, job: Job[Content]) -> Content:
+    async def debug_request(self, job: Job[Content], /) -> Content:
         """Handle a [debug request](https://jupyter-client.readthedocs.io/en/stable/messaging.html#debug-request) (control only)."""
         return await self.debugger.process_request(job["msg"]["content"])
 

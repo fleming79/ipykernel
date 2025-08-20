@@ -18,5 +18,5 @@
     "tag:yaml.org,2002:python/object/apply:pymdownx.slugs.slugify mapping"
   ],
   "spellright.language": ["en"],
-  "spellright.documentTypes": ["markdown", "latex", "plaintext", "python"]
+  "spellright.documentTypes": ["markdown", "latex", "plaintext"]
 }

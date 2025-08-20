@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import pathlib
 import threading
@@ -349,14 +350,16 @@ async def test_interrupt_request_blocking_exec_request(subprocess_kernels_client
 
 
 async def test_interrupt_request_blocking_task(subprocess_kernels_client):
-    code = f"""
-    {RunMode.task}
-    time.sleep(100)
+    code = """
+    import time
+    from async_kernel import Caller
+    await Caller().call_soon(time.sleep, 100)
     """
     client = subprocess_kernels_client
     msg_id = client.execute(code, reply=False)
     await utils.check_pub_message(client, msg_id, execution_state="busy")
     await utils.check_pub_message(client, msg_id, msg_type="execute_input")
+    await anyio.sleep(0.2)
     for _ in range(2):  # Blocking calls in tasks need to be interrupted twice
         await utils.send_control_message(client, MsgType.interrupt_request)
     reply = await utils.get_reply(client, msg_id)
@@ -507,6 +510,18 @@ async def test_invalid_message(client, channel):
         response = await f(client, "test_invalid_message")  # pyright: ignore[reportArgumentType]
     assert response is None
     await utils.clear_iopub(client)
+
+
+async def test_kernel_get_handler(kernel: Kernel):
+    with pytest.raises(TypeError):
+        kernel.get_handler("invalid mode")  # pyright: ignore[reportArgumentType]
+    for msg_type in MsgType:
+        handler = kernel.get_handler(msg_type)
+        assert inspect.iscoroutinefunction(handler)
+        sig = inspect.signature(handler)
+        assert len(sig.parameters) == 1
+        param = sig.parameters["job"]
+        assert param.kind == param.POSITIONAL_ONLY
 
 
 @pytest.mark.parametrize(
